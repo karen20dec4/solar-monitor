@@ -72,6 +72,11 @@ def u32(regs, hi):
     return (regs[hi] << 16) | regs[hi + 1]
 
 
+def s32(regs, hi):
+    value = u32(regs, hi)
+    return value - 4294967296 if value > 2147483647 else value
+
+
 def parse(regs):
     status = regs[0]
     pv1_p = u32(regs, 3) * 0.1
@@ -81,11 +86,13 @@ def parse(regs):
     grid_charge = u32(regs, 13) * 0.1
 
     v_bat = regs[17] * 0.01
-    # Curent baterie MASURAT (reg 90, semnat in complement fata de 2: + incarcare / - descarcare),
-    # scalare 0.1 A. Validat ziua: r90*0.1 * Vbat == putere reala in baterie.
-    i_raw = regs[90]
-    i_bat = (i_raw - 65536 if i_raw > 32767 else i_raw) * 0.1
-    bat_p = i_bat * v_bat                  # putere baterie REALA (masurata), nu derivata
+    # Reg 77/78 = Bat_Watt (signed int32, 0.1W): pozitiv descarcare, negativ incarcare.
+    # In dashboard pastram conventia veche: pozitiv = incarcare, negativ = descarcare.
+    bat_w = s32(regs, 77) * 0.1
+    charge_current = regs[83] * 0.1
+    discharge_current = regs[84] * 0.1
+    i_bat = charge_current - discharge_current
+    bat_p = -bat_w
     charge_p    = max(bat_p, 0.0)
     discharge_p = max(-bat_p, 0.0)
 
@@ -161,6 +168,8 @@ def parse(regs):
         "inverter_temp":           regs[25] * 0.1,
         "load_percent":            regs[27],
         "battery_current":         i_bat,
+        "battery_charge_current":  charge_current,
+        "battery_discharge_current": discharge_current,
         "battery_power":           bat_p,
         "battery_charge_power":    charge_p,
         "battery_discharge_power": discharge_p,
