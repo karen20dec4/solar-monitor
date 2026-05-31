@@ -58,6 +58,7 @@ TEMP_HIGH         = envf("TEMP_HIGH", "65")
 TEMP_HIGH_CLR     = envf("TEMP_HIGH_CLR", "60")
 OUT_LOST_V        = envf("OUT_LOST_V", "180")
 OUT_LOST_V_CLR    = envf("OUT_LOST_V_CLR", "200")
+GRID_PRESENT_V    = envf("GRID_PRESENT_V", "100")
 
 MEASUREMENT = "inverter"
 
@@ -82,27 +83,36 @@ def parse(regs):
     charge_p    = max(bat_p, 0.0)
     discharge_p = max(-bat_p, 0.0)
 
+    grid_voltage = regs[20] * 0.1
+    grid_available = grid_voltage >= GRID_PRESENT_V
+    grid_charge_for_balance = grid_charge if grid_available else 0.0
+
     # Bilant fara consumul casei din retea:
     #   PV + descarcare_baterie + retea->baterie - consum_casa - incarcare_baterie
     # Daca e pozitiv, diferenta este consum propriu/pierdere invertor.
-    # Daca e negativ, diferenta lipsa vine din retea catre casa (bypass/line).
-    balance = pv_p + discharge_p + grid_charge - out_p - charge_p
+    # Daca e negativ si reteaua exista, diferenta lipsa vine din retea catre casa (bypass/line).
+    # Daca reteaua e 0V, deficitul ramas este descarcare baterie inferata (reg90 poate ramane 0).
+    balance = pv_p + discharge_p + grid_charge_for_balance - out_p - charge_p
     loss = max(balance, 0.0)
-    grid_import = max(-balance, 0.0)
+    deficit = max(-balance, 0.0)
+    grid_import = deficit if grid_available else 0.0
+    battery_inferred_discharge = 0.0 if grid_available else deficit
+    battery_support = discharge_p + battery_inferred_discharge
+    battery_display = bat_p - battery_inferred_discharge
 
     # Sursa consumului casei (cod numeric pt. dashboard, colorat):
     #   1 = PV (verde) / 2 = Baterie (galben) / 3 = Retea (rosu)
     DEAD = 50.0
     if grid_import > DEAD:
         house_source = 3.0          # deficit acoperit din retea (bypass/line)
-    elif grid_charge > DEAD:
+    elif grid_available and grid_charge > DEAD:
         house_source = 3.0          # invertor pe retea (incarcare AC)
-    elif bat_p < -DEAD:
+    elif battery_support > DEAD:
         house_source = 2.0          # bateria se descarca -> alimenteaza casa
     elif pv_p > DEAD:
         house_source = 1.0          # PV produce si acopera consumul
     elif out_p > DEAD:
-        house_source = 3.0          # consum prezent, fara PV/baterie -> retea (bypass)
+        house_source = 3.0 if grid_available else 2.0
     else:
         house_source = 1.0          # ~fara consum (repaus)
 
@@ -119,7 +129,8 @@ def parse(regs):
         "battery_voltage":         v_bat,
         "battery_soc":             regs[18],
         "bus_voltage":             regs[19] * 0.1,
-        "grid_voltage":            regs[20] * 0.1,
+        "grid_voltage":            grid_voltage,
+        "grid_available":          1.0 if grid_available else 0.0,
         "grid_freq":               regs[21] * 0.01,
         "output_voltage":          regs[22] * 0.1,
         "output_freq":             regs[23] * 0.01,
@@ -129,7 +140,11 @@ def parse(regs):
         "battery_power":           bat_p,
         "battery_charge_power":    charge_p,
         "battery_discharge_power": discharge_p,
+        "battery_inferred_discharge_power": battery_inferred_discharge,
+        "battery_support_power":   battery_support,
+        "battery_display_power":   battery_display,
         "inverter_loss":           loss,
+        "power_deficit":           deficit,
         "grid_import_power":       grid_import,
         "house_source":            house_source,
     }
