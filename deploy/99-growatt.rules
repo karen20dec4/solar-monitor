@@ -1,0 +1,4 @@
+# Symlink stabil pentru portul serial al invertorului Growatt SPF.
+# Chip Exar XR21B1411 (VID:PID 04e2:1411), serial Q3370413461.
+# Indiferent ce index /dev/ttyUSBx primeste, va exista mereu /dev/growatt.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="04e2", ATTRS{idProduct}=="1411", ATTRS{serial}=="Q3370413461", SYMLINK+="growatt", MODE="0660"

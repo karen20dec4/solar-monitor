@@ -1,0 +1,110 @@
+# ============================================================
+#  Solar Monitor - stack lean: InfluxDB 2 + Collector + Grafana
+#  100% local, read-only fata de invertor.
+# ============================================================
+
+services:
+  influxdb:
+    image: influxdb:2.7
+    container_name: solar-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_ADMIN_USER}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_ADMIN_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET_HISTORY}
+      DOCKER_INFLUXDB_INIT_RETENTION: ${INFLUXDB_RETENTION_HISTORY}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
+      # var. extra folosite de scriptul de init pentru bucket-ul `live`
+      INFLUXDB_BUCKET_LIVE: ${INFLUXDB_BUCKET_LIVE}
+      INFLUXDB_RETENTION_LIVE: ${INFLUXDB_RETENTION_LIVE}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+      - ./influxdb/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  collector:
+    build: ./collector
+    container_name: solar-collector
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    depends_on:
+      influxdb:
+        condition: service_healthy
+      ntfy:
+        condition: service_started
+    devices:
+      # symlink udev stabil -> portul serial al invertorului
+      - "${INVERTER_DEVICE}:/dev/ttyUSB0"
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET_LIVE: ${INFLUXDB_BUCKET_LIVE}
+      INFLUX_BUCKET_HISTORY: ${INFLUXDB_BUCKET_HISTORY}
+      MODBUS_PORT: /dev/ttyUSB0
+      MODBUS_BAUD: ${MODBUS_BAUD}
+      MODBUS_SLAVE: ${MODBUS_SLAVE}
+      POLL_INTERVAL_LIVE: ${POLL_INTERVAL_LIVE}
+      HISTORY_INTERVAL: ${HISTORY_INTERVAL}
+      REG_COUNT: ${REG_COUNT}
+      DEBUG_RAW: ${DEBUG_RAW}
+      NTFY_URL: ${NTFY_URL}
+      ALERT_THRESHOLD_W: ${ALERT_THRESHOLD_W}
+      ALERT_CLEAR_W: ${ALERT_CLEAR_W}
+      ALERT_COOLDOWN_S: ${ALERT_COOLDOWN_S}
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: solar-grafana
+    restart: unless-stopped
+    depends_on:
+      - influxdb
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PANELS_DISABLE_SANITIZE_HTML: "true"
+      # var. injectate in provisioning (datasource)
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET_LIVE: ${INFLUXDB_BUCKET_LIVE}
+      INFLUX_BUCKET_HISTORY: ${INFLUXDB_BUCKET_HISTORY}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: solar-ntfy
+    restart: unless-stopped
+    command: serve
+    environment:
+      TZ: Europe/Bucharest
+      NTFY_BASE_URL: http://192.168.1.199:8088
+      NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
+      NTFY_CACHE_DURATION: "48h"
+    ports:
+      - "8088:80"
+    volumes:
+      - ntfy-cache:/var/cache/ntfy
+
+volumes:
+  influxdb-data:
+  influxdb-config:
+  grafana-data:
+  ntfy-cache:
