@@ -59,6 +59,7 @@ TEMP_HIGH_CLR     = envf("TEMP_HIGH_CLR", "60")
 OUT_LOST_V        = envf("OUT_LOST_V", "180")
 OUT_LOST_V_CLR    = envf("OUT_LOST_V_CLR", "200")
 GRID_PRESENT_V    = envf("GRID_PRESENT_V", "100")
+BATTERY_FIRST_MIN_V = envf("BATTERY_FIRST_MIN_V", str(BAT_LOW_V))
 
 MEASUREMENT = "inverter"
 
@@ -95,8 +96,13 @@ def parse(regs):
     balance = pv_p + discharge_p + grid_charge_for_balance - out_p - charge_p
     loss = max(balance, 0.0)
     deficit = max(-balance, 0.0)
-    grid_import = deficit if grid_available else 0.0
-    battery_inferred_discharge = 0.0 if grid_available else deficit
+
+    # In modul BAT.FIRST/Only SOL, prezenta tensiunii AC nu inseamna ca reteaua alimenteaza casa.
+    # Cat bateria este peste pragul de transfer la retea, deficitul ramas este atribuit bateriei.
+    battery_first_active = v_bat > BATTERY_FIRST_MIN_V
+    infer_battery_discharge = (not grid_available) or battery_first_active
+    grid_import = 0.0 if infer_battery_discharge else deficit
+    battery_inferred_discharge = deficit if infer_battery_discharge else 0.0
     battery_support = discharge_p + battery_inferred_discharge
     battery_display = bat_p - battery_inferred_discharge
 
