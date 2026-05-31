@@ -63,12 +63,16 @@ BATTERY_FIRST_MIN_V = envf("BATTERY_FIRST_MIN_V", str(BAT_LOW_V))
 
 MEASUREMENT = "inverter"
 
+STATUS_BYPASS = {8, 9, 10, 11}
+STATUS_DISCHARGE = {2, 12}
+
 
 def u32(regs, hi):
     return (regs[hi] << 16) | regs[hi + 1]
 
 
 def parse(regs):
+    status = regs[0]
     pv1_p = u32(regs, 3) * 0.1
     pv2_p = u32(regs, 5) * 0.1
     pv_p  = pv1_p + pv2_p
@@ -97,10 +101,15 @@ def parse(regs):
     loss = max(balance, 0.0)
     deficit = max(-balance, 0.0)
 
-    # In modul BAT.FIRST/Only SOL, prezenta tensiunii AC nu inseamna ca reteaua alimenteaza casa.
-    # Cat bateria este peste pragul de transfer la retea, deficitul ramas este atribuit bateriei.
+    bypass_active = status in STATUS_BYPASS
+    discharge_active = status in STATUS_DISCHARGE
+
+    # Reg 0 spune modul real de lucru: codurile 8-11 sunt Bypass, 2/12 sunt Discharge.
+    # In BAT.FIRST/Only SOL, prezenta tensiunii AC nu inseamna ca reteaua alimenteaza casa.
     battery_first_active = v_bat > BATTERY_FIRST_MIN_V
-    infer_battery_discharge = (not grid_available) or battery_first_active
+    infer_battery_discharge = (not bypass_active) and (
+        (not grid_available) or discharge_active or battery_first_active
+    )
     grid_import = 0.0 if infer_battery_discharge else deficit
     battery_inferred_discharge = deficit if infer_battery_discharge else 0.0
     battery_support = discharge_p + battery_inferred_discharge
@@ -123,7 +132,9 @@ def parse(regs):
         house_source = 1.0          # ~fara consum (repaus)
 
     data = {
-        "status":                  regs[0],
+        "status":                  status,
+        "bypass_active":           1.0 if bypass_active else 0.0,
+        "discharge_active":        1.0 if discharge_active else 0.0,
         "pv1_voltage":             regs[1] * 0.1,
         "pv2_voltage":             regs[2] * 0.1,
         "pv1_power":               pv1_p,
