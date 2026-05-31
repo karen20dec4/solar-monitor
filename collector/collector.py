@@ -60,6 +60,7 @@ OUT_LOST_V        = envf("OUT_LOST_V", "180")
 OUT_LOST_V_CLR    = envf("OUT_LOST_V_CLR", "200")
 GRID_PRESENT_V    = envf("GRID_PRESENT_V", "100")
 BATTERY_FIRST_MIN_V = envf("BATTERY_FIRST_MIN_V", str(BAT_LOW_V))
+INVERTER_LOSS_ESTIMATE_W = envf("INVERTER_LOSS_ESTIMATE_W", "90")
 
 MEASUREMENT = "inverter"
 
@@ -98,7 +99,7 @@ def parse(regs):
     # Daca e negativ si reteaua exista, diferenta lipsa vine din retea catre casa (bypass/line).
     # Daca reteaua e 0V, deficitul ramas este descarcare baterie inferata (reg90 poate ramane 0).
     balance = pv_p + discharge_p + grid_charge_for_balance - out_p - charge_p
-    loss = max(balance, 0.0)
+    measured_loss = max(balance, 0.0)
     deficit = max(-balance, 0.0)
 
     bypass_active = status in STATUS_BYPASS
@@ -111,7 +112,13 @@ def parse(regs):
         (not grid_available) or discharge_active or battery_first_active
     )
     grid_import = 0.0 if infer_battery_discharge else deficit
-    battery_inferred_discharge = deficit if infer_battery_discharge else 0.0
+
+    loss_estimated = 0.0
+    if infer_battery_discharge and deficit > 0.0 and discharge_p == 0.0:
+        loss_estimated = INVERTER_LOSS_ESTIMATE_W
+    loss = max(measured_loss, loss_estimated)
+
+    battery_inferred_discharge = (deficit + loss_estimated) if infer_battery_discharge else 0.0
     battery_support = discharge_p + battery_inferred_discharge
     battery_display = bat_p - battery_inferred_discharge
 
@@ -161,6 +168,7 @@ def parse(regs):
         "battery_support_power":   battery_support,
         "battery_display_power":   battery_display,
         "inverter_loss":           loss,
+        "inverter_loss_estimated":  1.0 if loss_estimated > 0.0 else 0.0,
         "power_deficit":           deficit,
         "grid_import_power":       grid_import,
         "house_source":            house_source,
