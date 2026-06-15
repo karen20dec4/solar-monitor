@@ -1,7 +1,16 @@
 package com.rolling7.solar
 
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Paint
+import android.media.RingtoneManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.LinearEasing
@@ -30,12 +39,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -54,11 +68,13 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -95,11 +111,42 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun App() {
+    val context = LocalContext.current
     var data by remember { mutableStateOf<SolarData?>(null) }
     var online by remember { mutableStateOf(false) }
     var selectedHistory by remember { mutableStateOf<HistoryMetric?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
+    var alarmSettings by remember { mutableStateOf(AlarmSettingsStore.read(context)) }
+    var enableAfterNotificationPermission by remember { mutableStateOf(false) }
+
+    fun saveAlarmSettings(next: AlarmSettings, applyService: Boolean = true) {
+        alarmSettings = next
+        AlarmSettingsStore.save(context, next)
+        if (applyService) {
+            AlarmSettingsStore.applyServiceState(context, next)
+        }
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && enableAfterNotificationPermission) {
+            saveAlarmSettings(alarmSettings.copy(enabled = true))
+        }
+        enableAfterNotificationPermission = false
+    }
+
+    val ringtoneLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = pickedRingtoneUri(result.data)
+        saveAlarmSettings(alarmSettings.copy(ringtoneUri = uri?.toString()), applyService = false)
+    }
 
     LaunchedEffect(Unit) {
+        if (alarmSettings.enabled) {
+            AlarmSettingsStore.applyServiceState(context, alarmSettings)
+        }
         while (true) {
             val d = withContext(Dispatchers.IO) { SolarRepository.fetch() }
             if (d != null) {
@@ -128,7 +175,7 @@ fun App() {
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Header(data = data, online = online)
+                Header(data = data, online = online, onSettingsClick = { showSettings = true })
                 MainStatusPanel(data = data)
                 FlowDiagram(data = data)
                 MetricsGrid(data = data, onHistoryClick = { selectedHistory = it })
@@ -144,11 +191,38 @@ fun App() {
                 HistorySheet(metric = metric)
             }
         }
+
+        if (showSettings) {
+            ModalBottomSheet(
+                onDismissRequest = { showSettings = false },
+                containerColor = CPanel,
+                contentColor = CText
+            ) {
+                SettingsSheet(
+                    settings = alarmSettings,
+                    ringtoneTitle = AlarmSettingsStore.ringtoneTitle(context, alarmSettings),
+                    version = appVersion(context),
+                    onEnabledChange = { enabled ->
+                        if (enabled && !hasNotificationPermission(context)) {
+                            enableAfterNotificationPermission = true
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            saveAlarmSettings(alarmSettings.copy(enabled = enabled))
+                        }
+                    },
+                    onThresholdChange = { saveAlarmSettings(alarmSettings.copy(thresholdW = it), applyService = false) },
+                    onCooldownChange = { saveAlarmSettings(alarmSettings.copy(cooldownS = it), applyService = false) },
+                    onVibrateChange = { saveAlarmSettings(alarmSettings.copy(vibrate = it), applyService = false) },
+                    onPickRingtone = { ringtoneLauncher.launch(ringtonePickerIntent(alarmSettings)) },
+                    onTestAlarm = { AlarmSettingsStore.testAlarm(context) }
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun Header(data: SolarData?, online: Boolean) {
+private fun Header(data: SolarData?, online: Boolean, onSettingsClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -170,14 +244,27 @@ private fun Header(data: SolarData?, online: Boolean) {
                 overflow = TextOverflow.Ellipsis
             )
         }
-        StatusPill(
-            label = when {
-                data == null -> "conectare"
-                online -> "live"
-                else -> "offline"
-            },
-            color = if (online) CPv else if (data == null) CMuted else CGrid
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatusPill(
+                label = when {
+                    data == null -> "conectare"
+                    online -> "live"
+                    else -> "offline"
+                },
+                color = if (online) CPv else if (data == null) CMuted else CGrid
+            )
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(CPanel)
+                    .border(1.dp, CLine, CircleShape)
+                    .clickable(onClick = onSettingsClick),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("⚙", color = CText, fontSize = 18.sp)
+            }
+        }
     }
 }
 
@@ -595,6 +682,120 @@ private data class TimeTick(val timeMs: Long, val label: String)
 private val LocalZone: ZoneId = ZoneId.of("Europe/Bucharest")
 private val HourFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH")
 private val TimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+@Composable
+private fun SettingsSheet(
+    settings: AlarmSettings,
+    ringtoneTitle: String,
+    version: String,
+    onEnabledChange: (Boolean) -> Unit,
+    onThresholdChange: (Int) -> Unit,
+    onCooldownChange: (Int) -> Unit,
+    onVibrateChange: (Boolean) -> Unit,
+    onPickRingtone: () -> Unit,
+    onTestAlarm: () -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(start = 18.dp, end = 18.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text("Setari", color = CText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Text("Alarma locala ruleaza pe telefon prin foreground service.", color = CMuted, fontSize = 12.sp)
+
+        HorizontalDivider(color = CLine)
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Alarma consum mare", color = CText, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (settings.enabled) "Activa - service permanent" else "Oprita",
+                    color = if (settings.enabled) CPv else CMuted,
+                    fontSize = 12.sp
+                )
+            }
+            Switch(checked = settings.enabled, onCheckedChange = onEnabledChange)
+        }
+
+        SettingSlider(
+            title = "Prag alarma",
+            value = settings.thresholdW,
+            valueLabel = "${settings.thresholdW} W",
+            range = 3000f..6500f,
+            step = 100,
+            onChange = onThresholdChange
+        )
+        Text("Rearmare la ${settings.clearThresholdW} W.", color = CMuted, fontSize = 12.sp)
+
+        SettingSlider(
+            title = "Cooldown",
+            value = settings.cooldownS,
+            valueLabel = "${settings.cooldownS}s",
+            range = 60f..600f,
+            step = 30,
+            onChange = onCooldownChange
+        )
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Vibratie", color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text("Porneste o vibratie scurta cand alarma suna.", color = CMuted, fontSize = 12.sp)
+            }
+            Switch(checked = settings.vibrate, onCheckedChange = onVibrateChange)
+        }
+
+        HorizontalDivider(color = CLine)
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Sunet alarma", color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(ringtoneTitle, color = CMuted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = onPickRingtone, modifier = Modifier.weight(1f)) {
+                    Text("Alege sunet")
+                }
+                Button(onClick = onTestAlarm, modifier = Modifier.weight(1f)) {
+                    Text("Testeaza")
+                }
+            }
+        }
+
+        HorizontalDivider(color = CLine)
+
+        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("Aplicatie", color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text("Versiune $version", color = CMuted, fontSize = 12.sp)
+            Text("Endpoint: vyra.go.ro:31443", color = CMuted, fontSize = 12.sp)
+            Text("Polling alarma: 2s prin API, nu direct invertor.", color = CMuted, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun SettingSlider(
+    title: String,
+    value: Int,
+    valueLabel: String,
+    range: ClosedFloatingPointRange<Float>,
+    step: Int,
+    onChange: (Int) -> Unit
+) {
+    Column {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(title, color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(valueLabel, color = CPv, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { raw ->
+                val rounded = (raw / step).roundToInt() * step
+                onChange(rounded.coerceIn(range.start.roundToInt(), range.endInclusive.roundToInt()))
+            },
+            valueRange = range
+        )
+    }
+}
 
 @Composable
 private fun HistorySheet(metric: HistoryMetric) {
@@ -1091,3 +1292,36 @@ private fun batteryColor(voltage: Double): Color = when {
     voltage < 51.0 -> CBat
     else -> CPv
 }
+
+private fun hasNotificationPermission(context: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+private fun ringtonePickerIntent(settings: AlarmSettings): Intent =
+    Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+        putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Alege sunet alarma")
+        putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, AlarmSettingsStore.ringtoneUri(settings))
+    }
+
+private fun pickedRingtoneUri(intent: Intent?): Uri? =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        intent?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java)
+    } else {
+        @Suppress("DEPRECATION")
+        intent?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+    }
+
+private fun appVersion(context: Context): String =
+    try {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else {
+            @Suppress("DEPRECATION")
+            info.versionCode.toLong()
+        }
+        "${info.versionName} ($code)"
+    } catch (e: Exception) {
+        "necunoscuta"
+    }

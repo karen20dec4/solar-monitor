@@ -232,3 +232,11 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
 - Line chart-urile au axa Y etichetata in stanga si axa X cu timp: `1h` = 10 minute, `6h` = 60 minute, `24h` = 3 ore.
 - Graficul `Baterie` are scala fixa 48-58V si linii etichetate 48/50/52/54/56/58V plus praguri 48V/57V.
 - Versiune Android: versionCode 6 / versionName 1.5.
+
+### 13.9 App Android - alarma locala foreground service (2026-06-15)
+- Settings bottom sheet deschis din gear in header.
+- Setari locale in SharedPreferences: alarma on/off, prag W default 5000, cooldown default 300s, vibratie, ringtone URI.
+- Foreground service `SolarAlarmService` citeste `/solar/latest` la 2s prin API si declanseaza local cand `output_power >= threshold` doua citiri consecutive.
+- Histerezis: rearmare la prag-200W. Sunetul se opreste automat dupa 30s sau cand consumul scade sub clear.
+- Ringtone picker Android foloseste sunete de tip alarm; buton `Testeaza` porneste alarma local.
+- Nu modifica server/API si nu creste polling-ul Modbus. Versiune Android: versionCode 7 / versionName 1.6.
