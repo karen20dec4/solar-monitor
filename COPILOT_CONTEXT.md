@@ -35,10 +35,10 @@ Tot în **Docker Compose**, `restart: unless-stopped`, pornește la boot. 4 cont
 `solar-collector`, `solar-influxdb`, `solar-grafana`, `solar-ntfy`.
 
 ## 4. Fișiere & deploy
-- **Sursă (Windows):** `H:\_Growatt\solar-monitor\`
+- **Sursă (Windows):** `H:\_SOLAR-MONITOR\`
 - **Server:** `/opt/solar-monitor/`
 - **Flux de lucru:** editezi local → `scp` pe server → `cd /opt/solar-monitor && docker compose up -d [--build] [serviciu]`.
-- Execuție: prin **SSH** (`ssh root@192.168.1.199`, cheie deja instalată). Shell-ul local e **PowerShell** (cwd `H:\_Growatt`); pentru scp folosește căi relative (`solar-monitor/...`). Pentru query-uri Flux cu ghilimele, folosește tool-ul **Bash** (sau escape).
+- Execuție: prin **SSH** (`ssh root@192.168.1.199`, cheie deja instalată). Shell-ul local e **PowerShell** (cwd `H:\_SOLAR-MONITOR`); pentru scp folosește căi relative (`solar-monitor/...`). Pentru query-uri Flux cu ghilimele, folosește tool-ul **Bash** (sau escape).
 
 Structură:
 ```
@@ -246,3 +246,37 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
 - Pragul si clear-ul sunt afisate in kW in textul notificarii.
 - Iconul static al notificarii a fost schimbat din icon info Android intr-un icon solar monochrome.
 - Versiune Android: versionCode 8 / versionName 1.7.
+
+### 13.11 Pregatire server nou pentru inlocuire (2026-06-16)
+- Server nou: **HP 290 G4 / Debian 13**, hostname `hpG4`, IP temporar `192.168.1.150`.
+- Scop: va inlocui serverul vechi din beci, pastrand IP-ul final **`192.168.1.199`** ca aplicatia/routerele sa nu trebuiasca modificate.
+- Curatenie facuta pe `.150`:
+  - dezinstalat/sters OpenClaw;
+  - oprit/dezactivat/sters Ollama si modelele locale;
+  - eliminata completarea OpenClaw din `/root/.bashrc`;
+  - dezactivat `linger` pentru root;
+  - dezactivate servicii inutile pentru rolul de server: Bluetooth, CUPS, Avahi, ModemManager, Blueman.
+- Instalate/verificate pe `.150`:
+  - Docker `26.1.5+dfsg1` + Docker Compose `2.26.1`;
+  - OpenJDK 21;
+  - `/opt/solar-monitor` copiat de pe `.199`;
+  - `/opt/android-sdk` copiat de pe `.199`;
+  - `/opt/gradle-8.9` copiat de pe `.199`;
+  - `/opt/pics-logs-copilot` copiat de pe `.199`;
+  - **nu** s-a copiat `/opt/containerd` (runtime intern Docker; noul server foloseste propriul Docker).
+- Android pe `.150`:
+  - `/etc/profile.d/android-sdk.sh` seteaza `ANDROID_HOME=/opt/android-sdk`, `ANDROID_SDK_ROOT=/opt/android-sdk`, `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64`;
+  - build verificat OK: `./gradlew :app:assembleDebug`;
+  - build release semnat verificat OK: `./gradlew :app:assembleRelease`.
+- Invertor/udev:
+  - regula `/etc/udev/rules.d/99-growatt.rules` instalata;
+  - `/dev/growatt` va aparea doar dupa conectarea fizica a invertorului USB la noul server.
+- Docker pe `.150`:
+  - imaginile pentru `influxdb`, `grafana`, `ntfy`, `caddy`, `api`, `collector` au fost trase/construite;
+  - nu s-au pornit containere;
+  - nu s-au creat volume Docker, ca sa putem restaura curat istoricul la cutover.
+- Runbook pentru ziua mutarii: **`schimbare-server.md`**.
+  - Critic: istoricul InfluxDB/Grafana/ntfy/Caddy este in volume Docker, nu in `/opt`.
+  - In ziua mutarii se opreste stack-ul vechi, se copiaza volumele `solar-monitor_*`, apoi se porneste stack-ul pe serverul nou dupa conectarea invertorului.
+
+
