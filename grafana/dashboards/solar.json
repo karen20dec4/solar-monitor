@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 21,
+  "version": 24,
   "editable": true,
   "refresh": "5s",
   "time": {
@@ -36,12 +36,32 @@
     },
     {
       "type": "text",
+      "title": "🔀 Flux energetic (live)",
+      "id": 20,
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "mode": "html",
+        "content": "<div id=\"flow-widget\" class=\"flow-widget\">\n  <style>\n    #flow-widget { width:100%; height:100%; min-height:240px; display:flex; align-items:center; justify-content:center; overflow:hidden; font-family: Inter, Roboto, Helvetica, Arial, sans-serif; }\n    #flow-widget svg { width:100%; height:100%; }\n    #flow-widget .label { font-size:19px; fill:#aeb8c4; }\n    #flow-widget .val { font-size:30px; font-weight:600; }\n    #flow-widget .flow { stroke-width:6; fill:none; stroke-linecap:round; opacity:0.16; }\n    #flow-widget .flow.active { opacity:1; stroke-dasharray:14 10; animation: fdash 1s linear infinite; }\n    #flow-widget .flow.active.rev { animation: fdashrev 1s linear infinite; }\n    @keyframes fdash { to { stroke-dashoffset:-24; } }\n    @keyframes fdashrev { to { stroke-dashoffset:24; } }\n  </style>\n  <svg viewBox=\"0 0 600 290\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\">\n    <path id=\"f-pv\"   class=\"flow\" d=\"M300 86 L300 183\" stroke=\"#73BF69\"></path>\n    <path id=\"f-bat\"  class=\"flow\" d=\"M168 225 L250 225\" stroke=\"#FADE2A\"></path>\n    <path id=\"f-grid\" class=\"flow\" d=\"M432 225 L350 225\" stroke=\"#F2495C\"></path>\n    <g><rect x=\"230\" y=\"14\" width=\"140\" height=\"70\" rx=\"10\" fill=\"#16210f\" stroke=\"#73BF69\" stroke-width=\"2\"></rect>\n      <text x=\"300\" y=\"41\" text-anchor=\"middle\" class=\"label\">&#9728;&#65039; PV</text>\n      <text x=\"300\" y=\"72\" text-anchor=\"middle\" class=\"val\" id=\"v-pv\" fill=\"#73BF69\">-- W</text></g>\n    <g><rect x=\"230\" y=\"186\" width=\"140\" height=\"78\" rx=\"10\" fill=\"#141b25\" stroke=\"#5794F2\" stroke-width=\"2\"></rect>\n      <text x=\"300\" y=\"215\" text-anchor=\"middle\" class=\"label\">&#127968; Cas&#259;</text>\n      <text x=\"300\" y=\"247\" text-anchor=\"middle\" class=\"val\" id=\"v-house\" fill=\"#e6edf5\">-- W</text></g>\n    <g><rect x=\"30\" y=\"186\" width=\"138\" height=\"78\" rx=\"10\" fill=\"#21210d\" stroke=\"#FADE2A\" stroke-width=\"2\"></rect>\n      <text x=\"99\" y=\"215\" text-anchor=\"middle\" class=\"label\" id=\"l-bat\">&#128267; Baterie</text>\n      <text x=\"99\" y=\"247\" text-anchor=\"middle\" class=\"val\" id=\"v-bat\" fill=\"#FADE2A\">-- W</text></g>\n    <g><rect x=\"432\" y=\"186\" width=\"138\" height=\"78\" rx=\"10\" fill=\"#23110f\" stroke=\"#F2495C\" stroke-width=\"2\"></rect>\n      <text x=\"501\" y=\"215\" text-anchor=\"middle\" class=\"label\">&#9889; Re&#539;ea</text>\n      <text x=\"501\" y=\"247\" text-anchor=\"middle\" class=\"val\" id=\"v-grid\" fill=\"#F2495C\">-- W</text></g>\n  </svg>\n</div>\n<script>\n(function() {\n  var root = document.getElementById('flow-widget');\n  if (!root) return;\n  var query = 'from(bucket: \"live\") |> range(start:-10s) |> filter(fn:(r)=> r._measurement==\"inverter\" and (r._field==\"pv_power\" or r._field==\"output_power\" or r._field==\"battery_display_power\" or r._field==\"battery_charge_power\" or r._field==\"battery_support_power\" or r._field==\"grid_import_power\" or r._field==\"grid_charge_power\")) |> last()';\n  function setNode(id, w) { var el = root.querySelector(id); if (el) el.textContent = Math.round(w) + ' W'; }\n  function setFlow(id, active, rev) { var el = root.querySelector(id); if (!el) return; el.setAttribute('class', 'flow' + (active ? ' active' : '') + (active && rev ? ' rev' : '')); }\n  async function read() {\n    try {\n      var res = await fetch('/api/ds/query', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ queries: [{ refId: 'A', datasource: { type: 'influxdb', uid: 'influxdb' }, query: query, intervalMs: 1000, maxDataPoints: 10 }], from: 'now-10s', to: 'now' }) });\n      var json = await res.json();\n      var frames = (json.results && json.results.A && json.results.A.frames) || [];\n      var d = {};\n      for (var i = 0; i < frames.length; i++) { var fr = frames[i]; var fs = (fr.schema && fr.schema.fields) || []; var nf = fs.find(function(f) { return f.type === 'number'; }); var vs = (fr.data && fr.data.values && fr.data.values[1]) || []; var v = vs[vs.length - 1]; if (nf) d[nf.name] = Number(v); }\n      var dead = 50;\n      var pv = d.pv_power || 0, house = d.output_power || 0;\n      var batDisp = d.battery_display_power || 0, batChg = d.battery_charge_power || 0, batSup = d.battery_support_power || 0;\n      var gridImp = d.grid_import_power || 0, gridChg = d.grid_charge_power || 0;\n      setNode('#v-pv', pv);\n      setNode('#v-house', house);\n      setNode('#v-bat', Math.abs(batDisp));\n      setNode('#v-grid', gridImp + gridChg);\n      var charging = (batChg > dead) || (batDisp > dead);\n      var discharging = (batSup > dead) || (batDisp < -dead);\n      var labBat = root.querySelector('#l-bat');\n      if (labBat) labBat.textContent = charging ? '🔋 Incarca' : (discharging ? '🔋 Descarca' : '🔋 Baterie');\n      setFlow('#f-pv', pv > dead, false);\n      setFlow('#f-bat', charging || discharging, charging);\n      setFlow('#f-grid', (gridImp + gridChg) > dead, false);\n    } catch (e) {}\n  }\n  if (window.__flowTimer) clearInterval(window.__flowTimer);\n  read();\n  window.__flowTimer = setInterval(read, 1000);\n})();\n</script>"
+      },
+      "targets": []
+    },
+    {
+      "type": "text",
       "title": "🔋 Baterie",
       "id": 2,
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
+        "h": 10,
+        "w": 12,
+        "x": 12,
         "y": 1
       },
       "fieldConfig": {
@@ -60,9 +80,9 @@
       "id": 3,
       "gridPos": {
         "h": 4,
-        "w": 8,
-        "x": 8,
-        "y": 1
+        "w": 6,
+        "x": 0,
+        "y": 11
       },
       "fieldConfig": {
         "defaults": {},
@@ -80,9 +100,9 @@
       "id": 4,
       "gridPos": {
         "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 1
+        "w": 6,
+        "x": 6,
+        "y": 11
       },
       "datasource": {
         "type": "influxdb",
@@ -133,9 +153,9 @@
       "id": 11,
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 8,
-        "y": 5
+        "w": 6,
+        "x": 12,
+        "y": 11
       },
       "datasource": {
         "type": "influxdb",
@@ -190,13 +210,13 @@
     },
     {
       "type": "stat",
-      "title": "Tensiune retea",
-      "id": 6,
+      "title": "Consum retea",
+      "id": 12,
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 20,
-        "y": 5
+        "w": 6,
+        "x": 18,
+        "y": 11
       },
       "datasource": {
         "type": "influxdb",
@@ -204,14 +224,18 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "volt",
-          "decimals": 1,
+          "unit": "suffix:W",
+          "decimals": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
               }
             ]
           }
@@ -226,7 +250,7 @@
           "fields": "",
           "values": false
         },
-        "colorMode": "none",
+        "colorMode": "value",
         "graphMode": "area",
         "textMode": "value"
       },
@@ -237,7 +261,7 @@
             "type": "influxdb",
             "uid": "influxdb"
           },
-          "query": "from(bucket: \"live\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"inverter\" and r[\"_field\"] == \"grid_voltage\")\n  |> last()"
+          "query": "from(bucket: \"live\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"inverter\" and r[\"_field\"] == \"grid_import_power\")\n  |> last()"
         }
       ]
     },
@@ -247,9 +271,9 @@
       "id": 7,
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 16,
-        "y": 5
+        "w": 12,
+        "x": 0,
+        "y": 15
       },
       "datasource": {
         "type": "influxdb",
@@ -304,13 +328,13 @@
     },
     {
       "type": "stat",
-      "title": "Consum retea",
-      "id": 12,
+      "title": "Tensiune retea",
+      "id": 6,
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 12,
         "x": 12,
-        "y": 5
+        "y": 15
       },
       "datasource": {
         "type": "influxdb",
@@ -318,18 +342,80 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "suffix:W",
-          "decimals": 0,
+          "unit": "volt",
+          "decimals": 1,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
-              },
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "query": "from(bucket: \"live\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"inverter\" and r[\"_field\"] == \"grid_voltage\")\n  |> last()"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "⚡ Energie",
+      "id": 104,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "☀️ Produs azi",
+      "id": 30,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: kWh",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
               {
-                "color": "red",
-                "value": 1
+                "color": "green",
+                "value": null
               }
             ]
           }
@@ -345,7 +431,7 @@
           "values": false
         },
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "textMode": "value"
       },
       "targets": [
@@ -355,7 +441,166 @@
             "type": "influxdb",
             "uid": "influxdb"
           },
-          "query": "from(bucket: \"live\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"inverter\" and r[\"_field\"] == \"grid_import_power\")\n  |> last()"
+          "query": "from(bucket: \"live\")\n  |> range(start: -10m)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"inverter\" and r[\"_field\"] == \"energy_pv_today\")\n  |> last()"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "🏠 Consumat azi",
+      "id": 31,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 20
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: kWh",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "query": "from(bucket: \"live\")\n  |> range(start: -10m)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"inverter\" and r[\"_field\"] == \"energy_load_today\")\n  |> last()"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Σ Produs total",
+      "id": 32,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 20
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: kWh",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "query": "from(bucket: \"live\")\n  |> range(start: -10m)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"inverter\" and r[\"_field\"] == \"energy_pv_total\")\n  |> last()"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Σ Consumat total",
+      "id": 33,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 20
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: kWh",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "query": "from(bucket: \"live\")\n  |> range(start: -10m)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"inverter\" and r[\"_field\"] == \"energy_load_total\")\n  |> last()"
         }
       ]
     },
@@ -366,7 +611,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 24
       },
       "id": 101,
       "collapsed": false,
@@ -380,7 +625,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 10
+        "y": 25
       },
       "datasource": {
         "type": "influxdb",
@@ -490,7 +735,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 34
       },
       "id": 102,
       "collapsed": false,
@@ -504,7 +749,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 20
+        "y": 35
       },
       "datasource": {
         "type": "influxdb",
@@ -563,7 +808,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 20
+        "y": 35
       },
       "datasource": {
         "type": "influxdb",

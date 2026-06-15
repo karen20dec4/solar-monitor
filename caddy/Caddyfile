@@ -1,0 +1,23 @@
+# Reverse proxy HTTPS pentru acces remote la Grafana.
+# Lant: https://vyra.go.ro:31443 -> ZTE 31443 -> .210:443 -> TP-Link 443 -> caddy:443 -> grafana:3000
+#
+# Nu putem folosi Let's Encrypt (portul public e non-standard 31443, ACME are nevoie de 80/443
+# publice standard). Deci folosim "tls internal" = certificat self-signed semnat de CA-ul intern
+# Caddy. Browserul va da un avertisment prima data; il accepti (sau instalezi root CA pe telefon
+# ca sa dispara - vezi /data/caddy/pki/authorities/local/root.crt in volumul caddy-data).
+{
+	# fara redirect automat 80->443 (portul 80 nu e expus oricum)
+	auto_https disable_redirects
+}
+
+vyra.go.ro {
+	tls internal
+	# API JSON pentru aplicatia mobila: /solar/* -> microserviciu (strip prefix /solar).
+	handle_path /solar/* {
+		reverse_proxy api:8000
+	}
+	# restul traficului -> Grafana
+	handle {
+		reverse_proxy grafana:3000
+	}
+}

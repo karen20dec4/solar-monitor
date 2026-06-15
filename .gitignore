@@ -4,3 +4,17 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 
+# Android signing secrets - NICIODATA in git
+key-Rolling7
+keystore.properties
+*.jks
+*.keystore
+
+# Android build artefacts
+*.apk
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+

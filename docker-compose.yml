@@ -78,6 +78,11 @@ services:
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_PANELS_DISABLE_SANITIZE_HTML: "true"
+      # acces remote prin Caddy (HTTPS): https://vyra.go.ro:31443 -> caddy:443 -> grafana:3000
+      # ROOT_URL = adresa pe care o vede telefonul, ca login/redirect sa mearga corect.
+      GF_SERVER_ROOT_URL: "https://vyra.go.ro:31443/"
+      # fara request-uri externe (gravatar) - coerent cu "fara cloud".
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
       # var. injectate in provisioning (datasource)
       INFLUX_TOKEN: ${INFLUXDB_TOKEN}
       INFLUX_ORG: ${INFLUXDB_ORG}
@@ -103,8 +108,39 @@ services:
     volumes:
       - ntfy-cache:/var/cache/ntfy
 
+  # Micro-API JSON (READ-ONLY) pentru aplicatia mobila. Citeste din InfluxDB.
+  # Nu expune port pe host; Caddy il acceseaza intern la api:8000 (ruta /solar/*).
+  api:
+    build: ./api
+    container_name: solar-api
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET_LIVE: ${INFLUXDB_BUCKET_LIVE}
+
+  # Reverse proxy HTTPS pentru acces remote securizat la Grafana (TLS self-signed).
+  caddy:
+    image: caddy:2
+    container_name: solar-caddy
+    restart: unless-stopped
+    depends_on:
+      - grafana
+    ports:
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
 volumes:
   influxdb-data:
   influxdb-config:
   grafana-data:
   ntfy-cache:
+  caddy-data:
+  caddy-config:

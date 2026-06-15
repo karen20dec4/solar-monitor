@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Aplicatia se conecteaza la https://vyra.go.ro:31443 unde Caddy serveste un certificat
+  self-signed (CA intern Caddy). Adaugam acel root CA ca trust-anchor DOAR pentru vyra.go.ro,
+  ca sa nu slabim securitatea pentru restul internetului.
+-->
+<network-security-config>
+    <domain-config>
+        <domain includeSubdomains="false">vyra.go.ro</domain>
+        <trust-anchors>
+            <certificates src="@raw/vyra_root_ca" />
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

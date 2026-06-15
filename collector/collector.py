@@ -166,7 +166,13 @@ def parse(regs):
         "output_voltage":          regs[22] * 0.1,
         "output_freq":             regs[23] * 0.01,
         "inverter_temp":           regs[25] * 0.1,
-        "load_percent":            regs[27],
+        "load_percent":            regs[27] * 0.1,
+        # Energie (kWh, x0.1) - registre validate prin corelatie cu integralul puterii (2026-06-15):
+        # r48/49 = Epv azi, r50/51 = Epv total, r85/86 = consum azi, r87/88 = consum total.
+        "energy_pv_today":         u32(regs, 48) * 0.1,
+        "energy_pv_total":         u32(regs, 50) * 0.1,
+        "energy_load_today":       u32(regs, 85) * 0.1,
+        "energy_load_total":       u32(regs, 87) * 0.1,
         "battery_current":         i_bat,
         "battery_charge_current":  charge_current,
         "battery_discharge_current": discharge_current,

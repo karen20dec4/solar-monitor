@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- soare stilizat in centrul zonei sigure -->
+    <group android:scaleX="1.0" android:scaleY="1.0" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#73BF69" android:pathData="M54,40 A14,14 0 1 0 54.01,40 Z" />
+        <path android:strokeColor="#73BF69" android:strokeWidth="4" android:strokeLineCap="round"
+            android:pathData="M54,22 L54,30 M54,78 L54,86 M22,54 L30,54 M78,54 L86,54 M33,33 L38,38 M70,70 L75,75 M75,33 L70,38 M38,70 L33,75" />
+    </group>
+</vector>
