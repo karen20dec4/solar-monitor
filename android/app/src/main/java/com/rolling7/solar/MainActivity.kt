@@ -1,5 +1,6 @@
 package com.rolling7.solar
 
+import android.graphics.Paint
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -51,6 +52,8 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -59,8 +62,15 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 private val CPv = Color(0xFF69C46F)
@@ -469,11 +479,19 @@ private fun MetricsGrid(data: SolarData?, onHistoryClick: (HistoryMetric) -> Uni
         defaultRange = "1h",
         ranges = listOf("1h", "6h", "24h")
     )
+    val pvHistory = HistoryMetric(
+        title = "PV intrari",
+        field = "pv_power",
+        unit = "W",
+        color = CPv,
+        defaultRange = "24h",
+        ranges = listOf("1h", "6h", "24h")
+    )
 
     val items = listOf(
         Metric("Produs azi", String.format("%.1f kWh", data?.energyPvToday ?: 0.0), "total ${(data?.energyPvTotal ?: 0.0).roundToInt()} kWh", CPv, pvEnergyHistory),
         Metric("Consum azi", String.format("%.1f kWh", data?.energyLoadToday ?: 0.0), "total ${(data?.energyLoadTotal ?: 0.0).roundToInt()} kWh", CHouse, loadEnergyHistory),
-        Metric("PV intrari", watts(data?.pv ?: 0.0), "PV1 ${watts(data?.pv1 ?: 0.0)}  |  PV2 ${watts(data?.pv2 ?: 0.0)}", CPv),
+        Metric("PV intrari", watts(data?.pv ?: 0.0), "PV1 ${watts(data?.pv1 ?: 0.0)}  |  PV2 ${watts(data?.pv2 ?: 0.0)}", CPv, pvHistory),
         Metric("Baterie", String.format("%.2f V", data?.batteryVoltage ?: 0.0), signedWatts(data?.batteryDisplay ?: 0.0), batteryColor(data?.batteryVoltage ?: 0.0), batteryHistory),
         Metric("Casa", watts(data?.house ?: 0.0), "incarcare ${(data?.loadPercent ?: 0.0).roundToInt()}%", CHouse, houseHistory),
         Metric("Retea", String.format("%.1f V", data?.gridVoltage ?: 0.0), "import ${watts((data?.gridImport ?: 0.0) + (data?.gridCharge ?: 0.0))}", CGrid),
@@ -564,6 +582,19 @@ private data class HistoryMetric(
 private enum class ChartStyle { Line, Bar }
 
 private data class ChartThreshold(val value: Double, val color: Color)
+
+private data class LineAxis(
+    val min: Double,
+    val max: Double,
+    val gridValues: List<Double>,
+    val title: String
+)
+
+private data class TimeTick(val timeMs: Long, val label: String)
+
+private val LocalZone: ZoneId = ZoneId.of("Europe/Bucharest")
+private val HourFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH")
+private val TimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
 @Composable
 private fun HistorySheet(metric: HistoryMetric) {
@@ -686,17 +717,13 @@ private fun HistoryChart(series: HistorySeries, metric: HistoryMetric) {
     }
 
     val values = series.points.map { it.value }
-    val thresholdValues = metric.thresholds.map { it.value }
-    val allValues = values + thresholdValues
-    val rawMin = allValues.minOrNull() ?: 0.0
-    val rawMax = allValues.maxOrNull() ?: 1.0
-    val spread = max(rawMax - rawMin, 1.0)
-    val chartMin = rawMin - spread * 0.08
-    val chartMax = rawMax + spread * 0.08
+    val axis = lineAxis(metric, values)
+    val timeTicks = timeTicks(series)
+    val pointTimes = series.points.map { parsePointMillis(it.time) }
 
     Column {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatHistoryValue(chartMax, metric.unit), color = CMuted, fontSize = 11.sp)
+            Text(axis.title, color = CMuted, fontSize = 11.sp)
             Text("${series.points.size} puncte", color = CMuted, fontSize = 11.sp)
         }
         Spacer(Modifier.height(6.dp))
@@ -709,30 +736,90 @@ private fun HistoryChart(series: HistorySeries, metric: HistoryMetric) {
                 .border(1.dp, CLine, RoundedCornerShape(14.dp))
                 .padding(10.dp)
         ) {
-            val width = size.width
-            val height = size.height
-            fun yFor(value: Double): Float {
-                val normalized = ((value - chartMin) / (chartMax - chartMin)).toFloat()
-                return height - normalized.coerceIn(0f, 1f) * height
+            val leftPad = 38f * density
+            val rightPad = 7f * density
+            val topPad = 8f * density
+            val bottomPad = 24f * density
+            val plotLeft = leftPad
+            val plotRight = size.width - rightPad
+            val plotTop = topPad
+            val plotBottom = size.height - bottomPad
+            val plotWidth = (plotRight - plotLeft).coerceAtLeast(1f)
+            val plotHeight = (plotBottom - plotTop).coerceAtLeast(1f)
+            val firstMs = pointTimes.firstOrNull()
+            val lastMs = pointTimes.lastOrNull()
+
+            val yPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = CMuted.toArgb()
+                textSize = 10f * density
+                textAlign = Paint.Align.LEFT
+            }
+            val xPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = CMuted.toArgb()
+                textSize = 10f * density
+                textAlign = Paint.Align.CENTER
             }
 
-            for (i in 0..3) {
-                val y = height * i / 3f
+            fun yFor(value: Double): Float {
+                val normalized = ((value - axis.min) / (axis.max - axis.min)).toFloat()
+                return plotBottom - normalized.coerceIn(0f, 1f) * plotHeight
+            }
+
+            fun xFor(index: Int): Float {
+                val time = pointTimes.getOrNull(index)
+                if (time != null && firstMs != null && lastMs != null && lastMs > firstMs) {
+                    val normalized = ((time - firstMs).toDouble() / (lastMs - firstMs).toDouble()).toFloat()
+                    return plotLeft + normalized.coerceIn(0f, 1f) * plotWidth
+                }
+                return if (series.points.size <= 1) {
+                    plotLeft + plotWidth / 2f
+                } else {
+                    plotLeft + plotWidth * index / series.points.lastIndex.toFloat()
+                }
+            }
+
+            axis.gridValues.forEach { value ->
+                val y = yFor(value)
                 drawLine(
                     color = CLine.copy(alpha = 0.55f),
-                    start = Offset(0f, y),
-                    end = Offset(width, y),
+                    start = Offset(plotLeft, y),
+                    end = Offset(plotRight, y),
                     strokeWidth = 1.2f
+                )
+                drawContext.canvas.nativeCanvas.drawText(
+                    formatAxisValue(value, metric.unit),
+                    2f * density,
+                    y - 4f,
+                    yPaint
                 )
             }
 
+            if (firstMs != null && lastMs != null && lastMs > firstMs) {
+                timeTicks.forEach { tick ->
+                    val normalized = ((tick.timeMs - firstMs).toDouble() / (lastMs - firstMs).toDouble()).toFloat()
+                    val x = plotLeft + normalized.coerceIn(0f, 1f) * plotWidth
+                    drawLine(
+                        color = CLine.copy(alpha = 0.24f),
+                        start = Offset(x, plotTop),
+                        end = Offset(x, plotBottom),
+                        strokeWidth = 1f
+                    )
+                    drawContext.canvas.nativeCanvas.drawText(
+                        tick.label,
+                        x,
+                        size.height - 5f * density,
+                        xPaint
+                    )
+                }
+            }
+
             metric.thresholds.forEach { threshold ->
-                if (threshold.value in chartMin..chartMax) {
+                if (threshold.value in axis.min..axis.max) {
                     val y = yFor(threshold.value)
                     drawLine(
                         color = threshold.color.copy(alpha = 0.70f),
-                        start = Offset(0f, y),
-                        end = Offset(width, y),
+                        start = Offset(plotLeft, y),
+                        end = Offset(plotRight, y),
                         strokeWidth = 2.5f,
                         pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
                     )
@@ -740,11 +827,11 @@ private fun HistoryChart(series: HistorySeries, metric: HistoryMetric) {
             }
 
             if (series.points.size == 1) {
-                drawCircle(metric.color, radius = 5f, center = Offset(width / 2f, yFor(values.first())))
+                drawCircle(metric.color, radius = 5f, center = Offset(plotLeft + plotWidth / 2f, yFor(values.first())))
             } else {
                 val path = Path()
                 series.points.forEachIndexed { index, point ->
-                    val x = width * index / (series.points.lastIndex).toFloat()
+                    val x = xFor(index)
                     val y = yFor(point.value)
                     if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 }
@@ -757,12 +844,10 @@ private fun HistoryChart(series: HistorySeries, metric: HistoryMetric) {
                 drawCircle(
                     color = metric.color,
                     radius = 5f,
-                    center = Offset(width, yFor(last.value))
+                    center = Offset(xFor(series.points.lastIndex), yFor(last.value))
                 )
             }
         }
-        Spacer(Modifier.height(6.dp))
-        Text(formatHistoryValue(chartMin, metric.unit), color = CMuted, fontSize = 11.sp)
     }
 }
 
@@ -834,7 +919,7 @@ private fun HistoryStatsGrid(stats: HistoryStats, metric: HistoryMetric) {
         return
     }
 
-    val maxLabel = if (metric.field == "output_power") "Varf" else "Max"
+    val maxLabel = if (metric.unit == "W") "Varf" else "Max"
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatTile(Modifier.weight(1f), "Ultim", formatHistoryValue(stats.last, metric.unit), metric.color)
@@ -863,6 +948,90 @@ private fun StatTile(modifier: Modifier, label: String, value: String, color: Co
 
 private fun watts(value: Double): String = "${value.roundToInt()} W"
 
+private fun lineAxis(metric: HistoryMetric, values: List<Double>): LineAxis {
+    if (metric.field == "battery_voltage") {
+        return LineAxis(
+            min = 48.0,
+            max = 58.0,
+            gridValues = listOf(58.0, 56.0, 54.0, 52.0, 50.0, 48.0),
+            title = "48-58 V"
+        )
+    }
+
+    val maxValue = max(values.maxOrNull() ?: 1.0, 1.0)
+    val step = niceStep(maxValue / 4.0)
+    val top = max(step * 4.0, ceil(maxValue / step) * step)
+    val grid = (4 downTo 0).map { top * it / 4.0 }
+    return LineAxis(
+        min = 0.0,
+        max = top,
+        gridValues = grid,
+        title = "0-${formatAxisValue(top, metric.unit)}"
+    )
+}
+
+private fun niceStep(roughStep: Double): Double {
+    if (roughStep <= 0.0) return 1.0
+    val magnitude = 10.0.pow(floor(log10(roughStep)))
+    val normalized = roughStep / magnitude
+    val nice = when {
+        normalized <= 1.0 -> 1.0
+        normalized <= 2.0 -> 2.0
+        normalized <= 5.0 -> 5.0
+        else -> 10.0
+    }
+    return nice * magnitude
+}
+
+private fun parsePointMillis(value: String): Long? =
+    try {
+        OffsetDateTime.parse(value).toInstant().toEpochMilli()
+    } catch (e: Exception) {
+        null
+    }
+
+private fun timeTicks(series: HistorySeries): List<TimeTick> {
+    val first = series.points.firstOrNull()?.time?.let(::parsePointMillis) ?: return emptyList()
+    val last = series.points.lastOrNull()?.time?.let(::parsePointMillis) ?: return emptyList()
+    if (last <= first) return emptyList()
+
+    val stepMinutes = when (series.range) {
+        "1h" -> 10L
+        "6h" -> 60L
+        "24h" -> 180L
+        else -> 60L
+    }
+    val formatter = if (series.range == "24h") HourFormatter else TimeFormatter
+    var tick = floorToStep(OffsetDateTime.ofInstant(java.time.Instant.ofEpochMilli(first), LocalZone), stepMinutes)
+    if (tick.toInstant().toEpochMilli() < first) {
+        tick = tick.plusMinutes(stepMinutes)
+    }
+
+    val out = mutableListOf<TimeTick>()
+    while (tick.toInstant().toEpochMilli() <= last && out.size < 16) {
+        out += TimeTick(tick.toInstant().toEpochMilli(), tick.format(formatter))
+        tick = tick.plusMinutes(stepMinutes)
+    }
+    return out
+}
+
+private fun floorToStep(time: OffsetDateTime, stepMinutes: Long): OffsetDateTime {
+    val dayMinute = time.hour * 60 + time.minute
+    val floored = dayMinute - (dayMinute % stepMinutes.toInt())
+    return time
+        .withHour(floored / 60)
+        .withMinute(floored % 60)
+        .withSecond(0)
+        .withNano(0)
+}
+
+private fun formatAxisValue(value: Double, unit: String): String = when (unit) {
+    "V" -> "${value.roundToInt()}V"
+    "W" -> "${value.roundToInt()}W"
+    "kWh" -> String.format("%.1fkWh", value)
+    else -> String.format("%.1f%s", value, unit)
+}
+
 private fun formatHistoryValue(value: Double, unit: String): String = when (unit) {
     "V" -> String.format("%.2f V", value)
     "W" -> "${value.roundToInt()} W"
@@ -873,6 +1042,7 @@ private fun formatHistoryValue(value: Double, unit: String): String = when (unit
 private fun historySubtitle(metric: HistoryMetric): String = when (metric.field) {
     "battery_voltage" -> "Tensiune baterie cu praguri 48V / 57V"
     "output_power" -> "Consum casa si varf maxim"
+    "pv_power" -> "Productie PV si varf maxim"
     "energy_pv_today" -> "Productie zilnica pe ultimele zile"
     "energy_load_today" -> "Consum zilnic pe ultimele zile"
     else -> "Istoric"

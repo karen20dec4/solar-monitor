@@ -46,6 +46,14 @@ HISTORY_FIELDS = {
             "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
         },
     },
+    "pv_power": {
+        "label": "PV intrari", "unit": "W", "chart": "line",
+        "ranges": {
+            "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
+            "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
+            "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
+        },
+    },
     "energy_pv_today": {
         "label": "Produs", "unit": "kWh", "chart": "bar",
         "ranges": {

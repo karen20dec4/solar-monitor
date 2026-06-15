@@ -226,3 +226,9 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
 - Cardurile `Produs azi` si `Consum azi` sunt clickabile in app.
 - Bottom sheet-ul pentru energie foloseste bar chart vertical si statistici: total, medie/zi, max zi, ultima zi.
 - Versiune Android: versionCode 5 / versionName 1.4.
+
+### 13.8 App Android - axe grafice si PV history (2026-06-15)
+- Cardul `PV intrari` este clickabil si foloseste `/solar/history?field=pv_power` cu `1h / 6h / 24h`.
+- Line chart-urile au axa Y etichetata in stanga si axa X cu timp: `1h` = 10 minute, `6h` = 60 minute, `24h` = 3 ore.
+- Graficul `Baterie` are scala fixa 48-58V si linii etichetate 48/50/52/54/56/58V plus praguri 48V/57V.
+- Versiune Android: versionCode 6 / versionName 1.5.
