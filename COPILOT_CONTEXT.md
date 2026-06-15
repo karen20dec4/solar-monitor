@@ -240,3 +240,9 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
 - Histerezis: rearmare la prag-200W. Sunetul se opreste automat dupa 30s sau cand consumul scade sub clear.
 - Ringtone picker Android foloseste sunete de tip alarm; buton `Testeaza` porneste alarma local.
 - Nu modifica server/API si nu creste polling-ul Modbus. Versiune Android: versionCode 7 / versionName 1.6.
+
+### 13.10 App Android - notificare alarma compacta (2026-06-15)
+- Notificarea permanenta a foreground service-ului afiseaza consumul casei in titlu, ex. `Casa 1.2 kW`.
+- Pragul si clear-ul sunt afisate in kW in textul notificarii.
+- Iconul static al notificarii a fost schimbat din icon info Android intr-un icon solar monochrome.
+- Versiune Android: versionCode 8 / versionName 1.7.

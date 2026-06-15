@@ -22,7 +22,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 class SolarAlarmService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -123,11 +122,11 @@ class SolarAlarmService : Service() {
 
     private fun triggerAlarm(settings: AlarmSettings, houseW: Double?, test: Boolean) {
         val title = if (test) "Test alarma consum" else "Consum mare casa"
-        val valueText = houseW?.roundToInt()?.let { "$it W" } ?: "test"
+        val valueText = houseW?.let { formatKw(it) } ?: "test"
         val body = if (test) {
             "Sunetul de alarma functioneaza."
         } else {
-            "Consum $valueText peste pragul ${settings.thresholdW} W."
+            "Consum $valueText peste pragul ${formatKw(settings.thresholdW.toDouble())}."
         }
 
         notify(ALERT_ID, alertNotification(title, body))
@@ -153,12 +152,14 @@ class SolarAlarmService : Service() {
     }
 
     private fun monitorNotification(settings: AlarmSettings, data: SolarData?): Notification {
-        val current = data?.house?.roundToInt()?.let { "$it W" } ?: "astept date"
-        val clear = settings.clearThresholdW
+        val currentTitle = data?.house?.let { "Casa ${formatKw(it)}" } ?: "Casa - astept date"
+        val threshold = formatKw(settings.thresholdW.toDouble())
+        val clear = formatKw(settings.clearThresholdW.toDouble())
         return NotificationCompat.Builder(this, CHANNEL_MONITOR)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("Solar Monitor - alarma activa")
-            .setContentText("Consum $current / prag ${settings.thresholdW} W / clear $clear W")
+            .setSmallIcon(R.drawable.ic_stat_solar)
+            .setContentTitle(currentTitle)
+            .setContentText("Alarma activa • prag $threshold • clear $clear")
+            .setSubText(data?.house?.let { formatKw(it) })
             .setContentIntent(openAppIntent())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -169,7 +170,7 @@ class SolarAlarmService : Service() {
 
     private fun alertNotification(title: String, body: String): Notification =
         NotificationCompat.Builder(this, CHANNEL_ALERTS)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setSmallIcon(R.drawable.ic_stat_solar)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -260,6 +261,9 @@ class SolarAlarmService : Service() {
             }
         )
     }
+
+    private fun formatKw(valueW: Double): String =
+        String.format("%.1f kW", valueW / 1000.0)
 
     private fun stopEverything() {
         stopAlarmSound()
