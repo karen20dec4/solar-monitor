@@ -205,3 +205,16 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
 - Panou nou **"🔀 Flux energetic"** (text/HTML/SVG live, în stilul gauge-ului de baterie existent) — afișat
   **primul, vedetă**; bateria al doilea; restul dedesubt; rând nou "⚡ Energie".
 
+
+### 13.6 App Android - istoric pe carduri (2026-06-15)
+- API nou `/solar/history` (READ-ONLY, doar InfluxDB):
+  - `field=battery_voltage|output_power`
+  - `range=1h|6h|24h`
+  - `1h` = bucket `live`, agregare `30s`; `6h` = bucket `live`, agregare `2m`; `24h` = bucket `history`, agregare `5m`.
+  - raspuns: `points[{t,v}]` + `stats{min,max,avg,last}`.
+- App Android:
+  - cardurile `Baterie` si `Casa` sunt clickabile.
+  - bottom sheet cu grafic Canvas, statistici si selector `1h / 6h / 24h`.
+  - Baterie deschide implicit `24h` si traseaza praguri 48V / 57V.
+  - Casa deschide implicit `1h` si afiseaza varful maxim de consum.
+  - Polling-ul live ramane la 2s in app; nu creste frecventa Modbus.

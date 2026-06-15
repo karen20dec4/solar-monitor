@@ -1,7 +1,9 @@
 package com.rolling7.solar
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.URLEncoder
 import java.net.URL
 
 /** Valorile live primite de la /solar/latest. */
@@ -18,9 +20,28 @@ data class SolarData(
     val status: Double, val houseSource: Double, val timestamp: String?
 )
 
+data class HistoryPoint(val time: String, val value: Double)
+
+data class HistoryStats(
+    val min: Double,
+    val max: Double,
+    val avg: Double,
+    val last: Double
+)
+
+data class HistorySeries(
+    val field: String,
+    val label: String,
+    val unit: String,
+    val range: String,
+    val points: List<HistoryPoint>,
+    val stats: HistoryStats?
+)
+
 object SolarRepository {
     // Endpoint JSON expus prin Caddy (HTTPS self-signed, CA inclus in app).
     private const val URL_LATEST = "https://vyra.go.ro:31443/solar/latest"
+    private const val URL_HISTORY = "https://vyra.go.ro:31443/solar/history"
 
     /** Apel de retea sincron - apelat pe Dispatchers.IO. Returneaza null la eroare. */
     fun fetch(): SolarData? {
@@ -56,4 +77,52 @@ object SolarRepository {
             conn?.disconnect()
         }
     }
+
+    /** Istoric agregat din InfluxDB prin API; nu citeste direct invertorul. */
+    fun fetchHistory(field: String, range: String): HistorySeries? {
+        var conn: HttpURLConnection? = null
+        return try {
+            val query = "field=${enc(field)}&range=${enc(range)}"
+            conn = (URL("$URL_HISTORY?$query").openConnection() as HttpURLConnection).apply {
+                connectTimeout = 5000
+                readTimeout = 8000
+                requestMethod = "GET"
+            }
+            if (conn.responseCode != 200) return null
+            val text = conn.inputStream.bufferedReader().use { it.readText() }
+            val j = JSONObject(text)
+            val pointsJson = j.optJSONArray("points") ?: JSONArray()
+            val points = buildList {
+                for (i in 0 until pointsJson.length()) {
+                    val p = pointsJson.optJSONObject(i) ?: continue
+                    add(HistoryPoint(p.optString("t"), p.optDouble("v", 0.0)))
+                }
+            }
+            val statsJson = j.optJSONObject("stats")
+            val stats = if (statsJson == null) {
+                null
+            } else {
+                HistoryStats(
+                    min = statsJson.optDouble("min", 0.0),
+                    max = statsJson.optDouble("max", 0.0),
+                    avg = statsJson.optDouble("avg", 0.0),
+                    last = statsJson.optDouble("last", 0.0)
+                )
+            }
+            HistorySeries(
+                field = j.optString("field", field),
+                label = j.optString("label", field),
+                unit = j.optString("unit", ""),
+                range = j.optString("range", range),
+                points = points,
+                stats = stats
+            )
+        } catch (e: Exception) {
+            null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
 }

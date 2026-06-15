@@ -12,6 +12,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -28,8 +29,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -45,7 +48,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -55,6 +60,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 private val CPv = Color(0xFF69C46F)
@@ -76,10 +82,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun App() {
     var data by remember { mutableStateOf<SolarData?>(null) }
     var online by remember { mutableStateOf(false) }
+    var selectedHistory by remember { mutableStateOf<HistoryMetric?>(null) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -113,7 +121,17 @@ fun App() {
                 Header(data = data, online = online)
                 MainStatusPanel(data = data)
                 FlowDiagram(data = data)
-                MetricsGrid(data = data)
+                MetricsGrid(data = data, onHistoryClick = { selectedHistory = it })
+            }
+        }
+
+        selectedHistory?.let { metric ->
+            ModalBottomSheet(
+                onDismissRequest = { selectedHistory = null },
+                containerColor = CPanel,
+                contentColor = CText
+            ) {
+                HistorySheet(metric = metric)
             }
         }
     }
@@ -412,13 +430,32 @@ private fun ArrowLine(
 }
 
 @Composable
-private fun MetricsGrid(data: SolarData?) {
+private fun MetricsGrid(data: SolarData?, onHistoryClick: (HistoryMetric) -> Unit) {
+    val batteryHistory = HistoryMetric(
+        title = "Baterie",
+        field = "battery_voltage",
+        unit = "V",
+        color = CBat,
+        defaultRange = "24h",
+        thresholds = listOf(
+            ChartThreshold(48.0, CGrid),
+            ChartThreshold(57.0, CGrid)
+        )
+    )
+    val houseHistory = HistoryMetric(
+        title = "Consum casa",
+        field = "output_power",
+        unit = "W",
+        color = CHouse,
+        defaultRange = "1h"
+    )
+
     val items = listOf(
         Metric("Produs azi", String.format("%.1f kWh", data?.energyPvToday ?: 0.0), "total ${(data?.energyPvTotal ?: 0.0).roundToInt()} kWh", CPv),
         Metric("Consum azi", String.format("%.1f kWh", data?.energyLoadToday ?: 0.0), "total ${(data?.energyLoadTotal ?: 0.0).roundToInt()} kWh", CHouse),
         Metric("PV intrari", watts(data?.pv ?: 0.0), "PV1 ${watts(data?.pv1 ?: 0.0)}  |  PV2 ${watts(data?.pv2 ?: 0.0)}", CPv),
-        Metric("Baterie", String.format("%.2f V", data?.batteryVoltage ?: 0.0), signedWatts(data?.batteryDisplay ?: 0.0), batteryColor(data?.batteryVoltage ?: 0.0)),
-        Metric("Casa", watts(data?.house ?: 0.0), "incarcare ${(data?.loadPercent ?: 0.0).roundToInt()}%", CHouse),
+        Metric("Baterie", String.format("%.2f V", data?.batteryVoltage ?: 0.0), signedWatts(data?.batteryDisplay ?: 0.0), batteryColor(data?.batteryVoltage ?: 0.0), batteryHistory),
+        Metric("Casa", watts(data?.house ?: 0.0), "incarcare ${(data?.loadPercent ?: 0.0).roundToInt()}%", CHouse, houseHistory),
         Metric("Retea", String.format("%.1f V", data?.gridVoltage ?: 0.0), "import ${watts((data?.gridImport ?: 0.0) + (data?.gridCharge ?: 0.0))}", CGrid),
         Metric("Temperatura", String.format("%.1f C", data?.inverterTemp ?: 0.0), "invertor", CHouse),
         Metric("Pierderi", watts(data?.inverterLoss ?: 0.0), "consum propriu", CMuted)
@@ -431,7 +468,7 @@ private fun MetricsGrid(data: SolarData?) {
                 items.chunked(2).forEach { rowItems ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         rowItems.forEach { item ->
-                            MetricCard(Modifier.weight(1f), item)
+                            MetricCard(Modifier.weight(1f), item, onHistoryClick)
                         }
                         if (rowItems.size == 1) {
                             Spacer(Modifier.weight(1f))
@@ -440,7 +477,7 @@ private fun MetricsGrid(data: SolarData?) {
                 }
             } else {
                 items.forEach { item ->
-                    MetricCard(Modifier.fillMaxWidth(), item)
+                    MetricCard(Modifier.fillMaxWidth(), item, onHistoryClick)
                 }
             }
         }
@@ -448,15 +485,36 @@ private fun MetricsGrid(data: SolarData?) {
 }
 
 @Composable
-private fun MetricCard(modifier: Modifier, metric: Metric) {
+private fun MetricCard(
+    modifier: Modifier,
+    metric: Metric,
+    onHistoryClick: (HistoryMetric) -> Unit
+) {
+    val clickModifier = metric.history?.let { history ->
+        Modifier.clickable { onHistoryClick(history) }
+    } ?: Modifier
+
     Column(
         modifier
             .clip(RoundedCornerShape(14.dp))
             .background(CPanel)
             .border(1.dp, metric.color.copy(alpha = 0.30f), RoundedCornerShape(14.dp))
+            .then(clickModifier)
             .padding(14.dp)
     ) {
-        Text(metric.label, color = CMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                metric.label,
+                color = CMuted,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            if (metric.history != null) {
+                Text("istoric", color = metric.color, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
         Spacer(Modifier.height(6.dp))
         Text(metric.value, color = metric.color, fontSize = 23.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         Spacer(Modifier.height(3.dp))
@@ -468,10 +526,244 @@ private data class Metric(
     val label: String,
     val value: String,
     val sub: String,
-    val color: Color
+    val color: Color,
+    val history: HistoryMetric? = null
 )
 
+private data class HistoryMetric(
+    val title: String,
+    val field: String,
+    val unit: String,
+    val color: Color,
+    val defaultRange: String,
+    val thresholds: List<ChartThreshold> = emptyList()
+)
+
+private data class ChartThreshold(val value: Double, val color: Color)
+
+@Composable
+private fun HistorySheet(metric: HistoryMetric) {
+    var selectedRange by remember(metric.field) { mutableStateOf(metric.defaultRange) }
+    var series by remember(metric.field) { mutableStateOf<HistorySeries?>(null) }
+    var loading by remember(metric.field) { mutableStateOf(false) }
+    var error by remember(metric.field) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(metric.field, selectedRange) {
+        loading = true
+        error = null
+        series = null
+        val result = withContext(Dispatchers.IO) {
+            SolarRepository.fetchHistory(metric.field, selectedRange)
+        }
+        if (result == null) {
+            error = "Nu pot incarca istoricul"
+        } else {
+            series = result
+        }
+        loading = false
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(start = 18.dp, end = 18.dp, bottom = 28.dp)
+    ) {
+        Text(metric.title, color = CText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (metric.field == "battery_voltage") "Tensiune baterie cu praguri 48V / 57V" else "Consum casa si varf maxim",
+            color = CMuted,
+            fontSize = 12.sp
+        )
+        Spacer(Modifier.height(14.dp))
+        RangeSelector(selectedRange = selectedRange, color = metric.color) { selectedRange = it }
+        Spacer(Modifier.height(16.dp))
+
+        when {
+            loading -> {
+                Text("Se incarca...", color = CMuted, fontSize = 14.sp)
+                Spacer(Modifier.height(24.dp))
+            }
+            error != null -> {
+                Text(error ?: "", color = CGrid, fontSize = 14.sp)
+                Spacer(Modifier.height(24.dp))
+            }
+            series == null || series?.points?.isEmpty() == true -> {
+                Text("Fara date pentru intervalul ales", color = CMuted, fontSize = 14.sp)
+                Spacer(Modifier.height(24.dp))
+            }
+            else -> {
+                val loaded = series
+                if (loaded != null) {
+                    HistoryChart(series = loaded, metric = metric)
+                    Spacer(Modifier.height(14.dp))
+                    loaded.stats?.let { stats ->
+                        HistoryStatsGrid(stats = stats, metric = metric)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RangeSelector(selectedRange: String, color: Color, onRangeClick: (String) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("1h", "6h", "24h").forEach { range ->
+            RangeChip(
+                modifier = Modifier.weight(1f),
+                label = range,
+                selected = range == selectedRange,
+                color = color,
+                onClick = { onRangeClick(range) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun RangeChip(
+    modifier: Modifier,
+    label: String,
+    selected: Boolean,
+    color: Color,
+    onClick: () -> Unit
+) {
+    val bg = if (selected) color.copy(alpha = 0.18f) else CPanelSoft
+    val border = if (selected) color.copy(alpha = 0.70f) else CLine
+    Box(
+        modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .border(1.dp, border, RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = if (selected) color else CMuted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun HistoryChart(series: HistorySeries, metric: HistoryMetric) {
+    val values = series.points.map { it.value }
+    val thresholdValues = metric.thresholds.map { it.value }
+    val allValues = values + thresholdValues
+    val rawMin = allValues.minOrNull() ?: 0.0
+    val rawMax = allValues.maxOrNull() ?: 1.0
+    val spread = max(rawMax - rawMin, 1.0)
+    val chartMin = rawMin - spread * 0.08
+    val chartMax = rawMax + spread * 0.08
+
+    Column {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(formatHistoryValue(chartMax, metric.unit), color = CMuted, fontSize = 11.sp)
+            Text("${series.points.size} puncte", color = CMuted, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(6.dp))
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(190.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(CBg)
+                .border(1.dp, CLine, RoundedCornerShape(14.dp))
+                .padding(10.dp)
+        ) {
+            val width = size.width
+            val height = size.height
+            fun yFor(value: Double): Float {
+                val normalized = ((value - chartMin) / (chartMax - chartMin)).toFloat()
+                return height - normalized.coerceIn(0f, 1f) * height
+            }
+
+            for (i in 0..3) {
+                val y = height * i / 3f
+                drawLine(
+                    color = CLine.copy(alpha = 0.55f),
+                    start = Offset(0f, y),
+                    end = Offset(width, y),
+                    strokeWidth = 1.2f
+                )
+            }
+
+            metric.thresholds.forEach { threshold ->
+                if (threshold.value in chartMin..chartMax) {
+                    val y = yFor(threshold.value)
+                    drawLine(
+                        color = threshold.color.copy(alpha = 0.70f),
+                        start = Offset(0f, y),
+                        end = Offset(width, y),
+                        strokeWidth = 2.5f,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
+                    )
+                }
+            }
+
+            if (series.points.size == 1) {
+                drawCircle(metric.color, radius = 5f, center = Offset(width / 2f, yFor(values.first())))
+            } else {
+                val path = Path()
+                series.points.forEachIndexed { index, point ->
+                    val x = width * index / (series.points.lastIndex).toFloat()
+                    val y = yFor(point.value)
+                    if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                drawPath(
+                    path = path,
+                    color = metric.color,
+                    style = Stroke(width = 4f, cap = StrokeCap.Round)
+                )
+                val last = series.points.last()
+                drawCircle(
+                    color = metric.color,
+                    radius = 5f,
+                    center = Offset(width, yFor(last.value))
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(formatHistoryValue(chartMin, metric.unit), color = CMuted, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun HistoryStatsGrid(stats: HistoryStats, metric: HistoryMetric) {
+    val maxLabel = if (metric.field == "output_power") "Varf" else "Max"
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatTile(Modifier.weight(1f), "Ultim", formatHistoryValue(stats.last, metric.unit), metric.color)
+            StatTile(Modifier.weight(1f), "Min", formatHistoryValue(stats.min, metric.unit), metric.color)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatTile(Modifier.weight(1f), "Medie", formatHistoryValue(stats.avg, metric.unit), metric.color)
+            StatTile(Modifier.weight(1f), maxLabel, formatHistoryValue(stats.max, metric.unit), metric.color)
+        }
+    }
+}
+
+@Composable
+private fun StatTile(modifier: Modifier, label: String, value: String, color: Color) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(CPanelSoft)
+            .padding(12.dp)
+    ) {
+        Text(label, color = CMuted, fontSize = 12.sp)
+        Spacer(Modifier.height(4.dp))
+        Text(value, color = color, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+    }
+}
+
 private fun watts(value: Double): String = "${value.roundToInt()} W"
+
+private fun formatHistoryValue(value: Double, unit: String): String = when (unit) {
+    "V" -> String.format("%.2f V", value)
+    "W" -> "${value.roundToInt()} W"
+    else -> String.format("%.1f %s", value, unit)
+}
 
 private fun signedWatts(value: Double): String {
     val rounded = value.roundToInt()
