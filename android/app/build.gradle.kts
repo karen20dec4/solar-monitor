@@ -1,4 +1,5 @@
 import java.io.FileInputStream
+import java.io.File
 import java.util.Properties
 
 plugins {
@@ -21,14 +22,20 @@ android {
         applicationId = "com.rolling7.solar"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     signingConfigs {
         create("release") {
-            if (keystoreProps.getProperty("storeFile") != null) {
-                storeFile = file(keystoreProps.getProperty("storeFile"))
+            val configuredStoreFile = keystoreProps.getProperty("storeFile")
+            if (configuredStoreFile != null) {
+                val configuredFile = file(configuredStoreFile)
+                storeFile = if (configuredFile.exists()) {
+                    configuredFile
+                } else {
+                    rootProject.file("../${File(configuredStoreFile).name}")
+                }
                 storePassword = keystoreProps.getProperty("storePassword")
                 keyAlias = keystoreProps.getProperty("keyAlias")
                 keyPassword = keystoreProps.getProperty("keyPassword")

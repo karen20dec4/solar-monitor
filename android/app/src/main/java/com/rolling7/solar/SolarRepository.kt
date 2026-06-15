@@ -9,13 +9,13 @@ data class SolarData(
     val pv: Double, val pv1: Double, val pv2: Double,
     val house: Double, val loadPercent: Double,
     val batteryVoltage: Double, val batterySoc: Double,
-    val batteryDisplay: Double, val batteryCharge: Double,
+    val batteryPower: Double, val batteryDisplay: Double, val batteryCharge: Double,
     val batteryDischarge: Double, val batterySupport: Double,
     val gridImport: Double, val gridCharge: Double, val gridVoltage: Double,
     val inverterTemp: Double, val inverterLoss: Double,
     val energyPvToday: Double, val energyPvTotal: Double,
     val energyLoadToday: Double, val energyLoadTotal: Double,
-    val status: Double, val timestamp: String?
+    val status: Double, val houseSource: Double, val timestamp: String?
 )
 
 object SolarRepository {
@@ -39,6 +39,7 @@ object SolarRepository {
                 pv = d("pv_power"), pv1 = d("pv1_power"), pv2 = d("pv2_power"),
                 house = d("output_power"), loadPercent = d("load_percent"),
                 batteryVoltage = d("battery_voltage"), batterySoc = d("battery_soc"),
+                batteryPower = d("battery_power"),
                 batteryDisplay = d("battery_display_power"), batteryCharge = d("battery_charge_power"),
                 batteryDischarge = d("battery_discharge_power"), batterySupport = d("battery_support_power"),
                 gridImport = d("grid_import_power"), gridCharge = d("grid_charge_power"),
@@ -46,8 +47,8 @@ object SolarRepository {
                 inverterTemp = d("inverter_temp"), inverterLoss = d("inverter_loss"),
                 energyPvToday = d("energy_pv_today"), energyPvTotal = d("energy_pv_total"),
                 energyLoadToday = d("energy_load_today"), energyLoadTotal = d("energy_load_total"),
-                status = d("status"),
-                timestamp = if (j.isNull("timestamp")) null else j.optString("timestamp", null)
+                status = d("status"), houseSource = d("house_source"),
+                timestamp = if (j.isNull("timestamp")) null else j.optString("timestamp").ifBlank { null }
             )
         } catch (e: Exception) {
             null
