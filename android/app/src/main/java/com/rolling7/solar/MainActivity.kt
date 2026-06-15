@@ -431,12 +431,31 @@ private fun ArrowLine(
 
 @Composable
 private fun MetricsGrid(data: SolarData?, onHistoryClick: (HistoryMetric) -> Unit) {
+    val pvEnergyHistory = HistoryMetric(
+        title = "Produs",
+        field = "energy_pv_today",
+        unit = "kWh",
+        color = CPv,
+        defaultRange = "7d",
+        ranges = listOf("7d", "30d"),
+        chartStyle = ChartStyle.Bar
+    )
+    val loadEnergyHistory = HistoryMetric(
+        title = "Consum",
+        field = "energy_load_today",
+        unit = "kWh",
+        color = CHouse,
+        defaultRange = "7d",
+        ranges = listOf("7d", "30d"),
+        chartStyle = ChartStyle.Bar
+    )
     val batteryHistory = HistoryMetric(
         title = "Baterie",
         field = "battery_voltage",
         unit = "V",
         color = CBat,
         defaultRange = "24h",
+        ranges = listOf("1h", "6h", "24h"),
         thresholds = listOf(
             ChartThreshold(48.0, CGrid),
             ChartThreshold(57.0, CGrid)
@@ -447,12 +466,13 @@ private fun MetricsGrid(data: SolarData?, onHistoryClick: (HistoryMetric) -> Uni
         field = "output_power",
         unit = "W",
         color = CHouse,
-        defaultRange = "1h"
+        defaultRange = "1h",
+        ranges = listOf("1h", "6h", "24h")
     )
 
     val items = listOf(
-        Metric("Produs azi", String.format("%.1f kWh", data?.energyPvToday ?: 0.0), "total ${(data?.energyPvTotal ?: 0.0).roundToInt()} kWh", CPv),
-        Metric("Consum azi", String.format("%.1f kWh", data?.energyLoadToday ?: 0.0), "total ${(data?.energyLoadTotal ?: 0.0).roundToInt()} kWh", CHouse),
+        Metric("Produs azi", String.format("%.1f kWh", data?.energyPvToday ?: 0.0), "total ${(data?.energyPvTotal ?: 0.0).roundToInt()} kWh", CPv, pvEnergyHistory),
+        Metric("Consum azi", String.format("%.1f kWh", data?.energyLoadToday ?: 0.0), "total ${(data?.energyLoadTotal ?: 0.0).roundToInt()} kWh", CHouse, loadEnergyHistory),
         Metric("PV intrari", watts(data?.pv ?: 0.0), "PV1 ${watts(data?.pv1 ?: 0.0)}  |  PV2 ${watts(data?.pv2 ?: 0.0)}", CPv),
         Metric("Baterie", String.format("%.2f V", data?.batteryVoltage ?: 0.0), signedWatts(data?.batteryDisplay ?: 0.0), batteryColor(data?.batteryVoltage ?: 0.0), batteryHistory),
         Metric("Casa", watts(data?.house ?: 0.0), "incarcare ${(data?.loadPercent ?: 0.0).roundToInt()}%", CHouse, houseHistory),
@@ -536,8 +556,12 @@ private data class HistoryMetric(
     val unit: String,
     val color: Color,
     val defaultRange: String,
+    val ranges: List<String>,
+    val chartStyle: ChartStyle = ChartStyle.Line,
     val thresholds: List<ChartThreshold> = emptyList()
 )
+
+private enum class ChartStyle { Line, Bar }
 
 private data class ChartThreshold(val value: Double, val color: Color)
 
@@ -572,12 +596,16 @@ private fun HistorySheet(metric: HistoryMetric) {
         Text(metric.title, color = CText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(4.dp))
         Text(
-            if (metric.field == "battery_voltage") "Tensiune baterie cu praguri 48V / 57V" else "Consum casa si varf maxim",
+            historySubtitle(metric),
             color = CMuted,
             fontSize = 12.sp
         )
         Spacer(Modifier.height(14.dp))
-        RangeSelector(selectedRange = selectedRange, color = metric.color) { selectedRange = it }
+        RangeSelector(
+            ranges = metric.ranges,
+            selectedRange = selectedRange,
+            color = metric.color
+        ) { selectedRange = it }
         Spacer(Modifier.height(16.dp))
 
         when {
@@ -608,9 +636,14 @@ private fun HistorySheet(metric: HistoryMetric) {
 }
 
 @Composable
-private fun RangeSelector(selectedRange: String, color: Color, onRangeClick: (String) -> Unit) {
+private fun RangeSelector(
+    ranges: List<String>,
+    selectedRange: String,
+    color: Color,
+    onRangeClick: (String) -> Unit
+) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("1h", "6h", "24h").forEach { range ->
+        ranges.forEach { range ->
             RangeChip(
                 modifier = Modifier.weight(1f),
                 label = range,
@@ -647,6 +680,11 @@ private fun RangeChip(
 
 @Composable
 private fun HistoryChart(series: HistorySeries, metric: HistoryMetric) {
+    if (metric.chartStyle == ChartStyle.Bar) {
+        BarHistoryChart(series = series, metric = metric)
+        return
+    }
+
     val values = series.points.map { it.value }
     val thresholdValues = metric.thresholds.map { it.value }
     val allValues = values + thresholdValues
@@ -729,7 +767,73 @@ private fun HistoryChart(series: HistorySeries, metric: HistoryMetric) {
 }
 
 @Composable
+private fun BarHistoryChart(series: HistorySeries, metric: HistoryMetric) {
+    val values = series.points.map { it.value.coerceAtLeast(0.0) }
+    val maxValue = max(values.maxOrNull() ?: 1.0, 1.0)
+
+    Column {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(formatHistoryValue(maxValue, metric.unit), color = CMuted, fontSize = 11.sp)
+            Text("${series.points.size} zile", color = CMuted, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(6.dp))
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(190.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(CBg)
+                .border(1.dp, CLine, RoundedCornerShape(14.dp))
+                .padding(10.dp)
+        ) {
+            val width = size.width
+            val height = size.height
+            for (i in 0..3) {
+                val y = height * i / 3f
+                drawLine(
+                    color = CLine.copy(alpha = 0.55f),
+                    start = Offset(0f, y),
+                    end = Offset(width, y),
+                    strokeWidth = 1.2f
+                )
+            }
+            if (values.isNotEmpty()) {
+                val slot = width / values.size
+                val barWidth = (slot * 0.62f).coerceAtLeast(3f)
+                values.forEachIndexed { index, value ->
+                    val x = slot * index + slot / 2f
+                    val y = height - ((value / maxValue).toFloat().coerceIn(0f, 1f) * height)
+                    drawLine(
+                        color = metric.color,
+                        start = Offset(x, height),
+                        end = Offset(x, y),
+                        strokeWidth = barWidth,
+                        cap = StrokeCap.Butt
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text("0 ${metric.unit}", color = CMuted, fontSize = 11.sp)
+    }
+}
+
+@Composable
 private fun HistoryStatsGrid(stats: HistoryStats, metric: HistoryMetric) {
+    if (metric.chartStyle == ChartStyle.Bar) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatTile(Modifier.weight(1f), "Total", formatHistoryValue(stats.sum, metric.unit), metric.color)
+                StatTile(Modifier.weight(1f), "Medie/zi", formatHistoryValue(stats.avg, metric.unit), metric.color)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatTile(Modifier.weight(1f), "Max zi", formatHistoryValue(stats.max, metric.unit), metric.color)
+                StatTile(Modifier.weight(1f), "Ultima zi", formatHistoryValue(stats.last, metric.unit), metric.color)
+            }
+        }
+        return
+    }
+
     val maxLabel = if (metric.field == "output_power") "Varf" else "Max"
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -762,7 +866,16 @@ private fun watts(value: Double): String = "${value.roundToInt()} W"
 private fun formatHistoryValue(value: Double, unit: String): String = when (unit) {
     "V" -> String.format("%.2f V", value)
     "W" -> "${value.roundToInt()} W"
+    "kWh" -> String.format("%.1f kWh", value)
     else -> String.format("%.1f %s", value, unit)
+}
+
+private fun historySubtitle(metric: HistoryMetric): String = when (metric.field) {
+    "battery_voltage" -> "Tensiune baterie cu praguri 48V / 57V"
+    "output_power" -> "Consum casa si varf maxim"
+    "energy_pv_today" -> "Productie zilnica pe ultimele zile"
+    "energy_load_today" -> "Consum zilnic pe ultimele zile"
+    else -> "Istoric"
 }
 
 private fun signedWatts(value: Double): String {

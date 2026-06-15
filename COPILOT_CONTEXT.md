@@ -218,3 +218,11 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
   - Baterie deschide implicit `24h` si traseaza praguri 48V / 57V.
   - Casa deschide implicit `1h` si afiseaza varful maxim de consum.
   - Polling-ul live ramane la 2s in app; nu creste frecventa Modbus.
+
+### 13.7 App Android - istoric energie zilnica (2026-06-15)
+- `/solar/history` suporta acum si `energy_pv_today` / `energy_load_today`.
+- Intervalele pentru energie sunt `7d` si `30d`.
+- API foloseste bucket-ul `history`, agregare zilnica `max` peste campurile `*_today`, cu timezone `Europe/Bucharest`.
+- Cardurile `Produs azi` si `Consum azi` sunt clickabile in app.
+- Bottom sheet-ul pentru energie foloseste bar chart vertical si statistici: total, medie/zi, max zi, ultima zi.
+- Versiune Android: versionCode 5 / versionName 1.4.

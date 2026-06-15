@@ -30,14 +30,36 @@ FIELDS = [
 ]
 
 HISTORY_FIELDS = {
-    "battery_voltage": {"label": "Tensiune baterie", "unit": "V"},
-    "output_power": {"label": "Consum casa", "unit": "W"},
-}
-
-HISTORY_RANGES = {
-    "1h": {"start": "-1h", "window": "30s", "bucket": "live"},
-    "6h": {"start": "-6h", "window": "2m", "bucket": "live"},
-    "24h": {"start": "-24h", "window": "5m", "bucket": "history"},
+    "battery_voltage": {
+        "label": "Tensiune baterie", "unit": "V", "chart": "line",
+        "ranges": {
+            "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
+            "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
+            "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
+        },
+    },
+    "output_power": {
+        "label": "Consum casa", "unit": "W", "chart": "line",
+        "ranges": {
+            "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
+            "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
+            "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
+        },
+    },
+    "energy_pv_today": {
+        "label": "Produs", "unit": "kWh", "chart": "bar",
+        "ranges": {
+            "7d": {"start": "-7d", "window": "1d", "bucket": "history", "fn": "max"},
+            "30d": {"start": "-30d", "window": "1d", "bucket": "history", "fn": "max"},
+        },
+    },
+    "energy_load_today": {
+        "label": "Consum", "unit": "kWh", "chart": "bar",
+        "ranges": {
+            "7d": {"start": "-7d", "window": "1d", "bucket": "history", "fn": "max"},
+            "30d": {"start": "-30d", "window": "1d", "bucket": "history", "fn": "max"},
+        },
+    },
 }
 
 app = Flask(__name__)
@@ -74,15 +96,18 @@ def history():
 
     if field not in HISTORY_FIELDS:
         return jsonify({"error": "field nepermis", "allowed": sorted(HISTORY_FIELDS.keys())}), 400
-    if range_key not in HISTORY_RANGES:
-        return jsonify({"error": "range nepermis", "allowed": sorted(HISTORY_RANGES.keys())}), 400
+    field_cfg = HISTORY_FIELDS[field]
+    if range_key not in field_cfg["ranges"]:
+        return jsonify({"error": "range nepermis", "allowed": sorted(field_cfg["ranges"].keys())}), 400
 
-    range_cfg = HISTORY_RANGES[range_key]
+    range_cfg = field_cfg["ranges"][range_key]
     bucket = BUCKET_HISTORY if range_cfg["bucket"] == "history" else BUCKET_LIVE
     q = (
+        'import "timezone"\n'
+        'option location = timezone.location(name: "Europe/Bucharest")\n'
         f'from(bucket: "{bucket}") |> range(start: {range_cfg["start"]}) '
         f'|> filter(fn: (r) => r._measurement == "inverter" and r._field == "{field}") '
-        f'|> aggregateWindow(every: {range_cfg["window"]}, fn: mean, createEmpty: false) '
+        f'|> aggregateWindow(every: {range_cfg["window"]}, fn: {range_cfg["fn"]}, createEmpty: false) '
         '|> keep(columns: ["_time", "_value"])'
     )
 
@@ -104,14 +129,15 @@ def history():
             "min": min(values),
             "max": max(values),
             "avg": sum(values) / len(values),
+            "sum": sum(values),
             "last": values[-1],
         }
 
-    meta = HISTORY_FIELDS[field]
     return jsonify({
         "field": field,
-        "label": meta["label"],
-        "unit": meta["unit"],
+        "label": field_cfg["label"],
+        "unit": field_cfg["unit"],
+        "chart": field_cfg["chart"],
         "range": range_key,
         "window": range_cfg["window"],
         "points": points,

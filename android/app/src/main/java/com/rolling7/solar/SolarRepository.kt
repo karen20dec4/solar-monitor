@@ -26,6 +26,7 @@ data class HistoryStats(
     val min: Double,
     val max: Double,
     val avg: Double,
+    val sum: Double,
     val last: Double
 )
 
@@ -33,6 +34,7 @@ data class HistorySeries(
     val field: String,
     val label: String,
     val unit: String,
+    val chart: String,
     val range: String,
     val points: List<HistoryPoint>,
     val stats: HistoryStats?
@@ -106,6 +108,7 @@ object SolarRepository {
                     min = statsJson.optDouble("min", 0.0),
                     max = statsJson.optDouble("max", 0.0),
                     avg = statsJson.optDouble("avg", 0.0),
+                    sum = statsJson.optDouble("sum", 0.0),
                     last = statsJson.optDouble("last", 0.0)
                 )
             }
@@ -113,6 +116,7 @@ object SolarRepository {
                 field = j.optString("field", field),
                 label = j.optString("label", field),
                 unit = j.optString("unit", ""),
+                chart = j.optString("chart", "line"),
                 range = j.optString("range", range),
                 points = points,
                 stats = stats
