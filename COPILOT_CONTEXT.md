@@ -300,4 +300,25 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
   - imaginile pentru `influxdb`, `grafana`, `ntfy`, `caddy`, `api`, `collector` au fost trase/construite;
   - containerele `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy` sunt pornite pe HP.
 - Runbook-ul **`schimbare-server.md`** rămâne documentație istorică și checklist de fallback. Mutarea principală este completă.
+### 13.12 Release Android portabil (2026-06-17)
+- Script tracked în repo: **`scripts/build-android-release.sh`**.
+- Comandă recomandată pe HP/Linux:
+  ```bash
+  cd /opt/solar-monitor
+  scripts/build-android-release.sh
+  ```
+- Scriptul:
+  - citește `versionCode` / `versionName` din `android/app/build.gradle.kts`;
+  - folosește implicit `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64`, `ANDROID_HOME=/opt/android-sdk`, `GRADLE_CMD=/opt/gradle-8.9/bin/gradle` dacă există;
+  - rulează build release semnat;
+  - copiază APK-ul în root ca `SolarMonitor-v<versionName>.apk`;
+  - afișează `aapt dump badging`, dimensiune și SHA256.
+- Instrucțiune Codex tracked în repo: **`.codex/skills/solar-monitor-release/SKILL.md`**.
+  - Pe HP se poate instala pentru sesiunile locale cu:
+    ```bash
+    mkdir -p ~/.codex/skills
+    cp -a /opt/solar-monitor/.codex/skills/solar-monitor-release ~/.codex/skills/
+    ```
+- Regula de versionare: se incrementează `versionCode` / `versionName` doar când s-a modificat codul/resursele Android. Pentru rebuild al aceleiași versiuni nu se incrementează.
+- APK-urile rămân ignorate de git; release-ul nu cere rebuild API. Pentru API/server/deploy rămâne regula: `docker compose up -d --build api`.
 
