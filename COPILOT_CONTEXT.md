@@ -17,28 +17,32 @@
 | Invertor | **Growatt SPF 6000 ES Plus** (off-grid/hybrid), în beci. Protecție la consum > ~6.6 kW. |
 | Baterie | **DIY 14S Li-ion** (NMC), etichetă „LIION 14S MIN 48V MAX 57V", BMS generic, module MB6VAD. ~50V nominal, 48–57V. |
 | Panouri | 16 × Canadian Solar 465Wp N-Type TOPCon (~7.44 kWp). |
-| Server | **Dell Optiplex 7010 SFF**, i7-3770, 16GB RAM, SSD 240GB, **Linux Mint 21.3** (bază Ubuntu jammy), în beci. IP **192.168.1.199**. |
-| Legătură | Cablu USB-A↔USB-B. Invertor USB = chip **Exar XR21B1411** (VID:PID `04e2:1411`, serial `Q3370413461`) → `/dev/ttyUSB0`. |
+| Server | **HP 290 G4**, **Debian 13**, hostname `hpG4`, în beci pe cablu Ethernet. IP final **192.168.1.199**. |
+| Stocare extra | HDD Seagate ~1TB, ext4, montat permanent în `/data` pentru backup-uri, fișiere mari și proiecte noi. |
+| Legătură | Cablu USB-A↔USB-B. Invertor USB = chip **Exar XR21B1411** (VID:PID `04e2:1411`, serial `Q3370413461`) → `/dev/growatt` → `/dev/ttyUSB0`. |
 | Modbus | RTU, **9600 8N1, slave ID 1**, function code **04** (input registers). |
 
-⚠️ Hardware: serverul nou HP a fost mutat în beci și este conectat prin Ethernet. Wi-Fi-ul vechi nu mai este necesar pentru rolul principal.
+⚠️ Serverul vechi Dell Optiplex 7010 este oprit și păstrat doar ca fallback. Nu porni Dell-ul în același timp cu HP-ul pe IP-ul `192.168.1.199`.
 
 ## 3. Arhitectură software (stack „lean", fără MQTT)
 ```
 Invertor --USB(/dev/growatt)--> Collector Python (minimalmodbus, READ-ONLY, 1s)
    |-> InfluxDB bucket `live`    (1s,  retenție 48h)
    |-> InfluxDB bucket `history` (60s, retenție 31 zile)
-   |-> ntfy (push pe telefon)  cand se declanseaza o alerta
-   `-> Grafana (dashboard `solar-main`, setat ca Home)
+   |-> API Flask `/solar/latest` + `/solar/history` (READ-ONLY, pentru Android)
+   |-> ntfy (push pe telefon) cand se declanseaza o alerta
+   |-> Grafana (dashboard `solar-main`, setat ca Home)
+   `-> Caddy (HTTPS remote pe `https://vyra.go.ro:31443`)
 ```
-Tot în **Docker Compose**, `restart: unless-stopped`, pornește la boot. 4 containere:
-`solar-collector`, `solar-influxdb`, `solar-grafana`, `solar-ntfy`.
+Tot în **Docker Compose**, `restart: unless-stopped`, pornește la boot. 6 containere:
+`solar-collector`, `solar-influxdb`, `solar-grafana`, `solar-ntfy`, `solar-api`, `solar-caddy`.
 
 ## 4. Fișiere & deploy
 - **Sursă (Windows):** `H:\_SOLAR-MONITOR\`
-- **Server:** `/opt/solar-monitor/`
-- **Flux de lucru:** editezi local → `scp` pe server → `cd /opt/solar-monitor && docker compose up -d [--build] [serviciu]`.
-- Execuție: prin **SSH** (`ssh root@192.168.1.199`, cheie deja instalată). Shell-ul local e **PowerShell** (cwd `H:\_SOLAR-MONITOR`); pentru scp folosește căi relative (`solar-monitor/...`). Pentru query-uri Flux cu ghilimele, folosește tool-ul **Bash** (sau escape).
+- **Server producție:** `/opt/solar-monitor/` pe HP `192.168.1.199`.
+- **Flux de lucru:** editezi local → `git commit` + `git push` → pe server `git pull` → rebuild doar serviciile afectate.
+- **Regulă importantă:** după orice modificare la API/server/deploy, pe server rulează: `cd /opt/solar-monitor && docker compose up -d --build api`. Pentru modificări doar în documentație nu e necesar rebuild.
+- Execuție: prin **SSH** (`ssh root@192.168.1.199` local sau `ssh -p 31422 root@vyra.go.ro` remote, cheie deja instalată). Shell-ul local e **PowerShell** (cwd `H:\_SOLAR-MONITOR`). Pentru query-uri Flux cu ghilimele, folosește tool-ul **Bash** (sau escape).
 
 Structură:
 ```
@@ -46,14 +50,18 @@ solar-monitor/
   .env                      # TOATE setările (praguri, token, retenții)
   docker-compose.yml
   README.md
+  api/        app.py, Dockerfile, requirements.txt
   collector/  collector.py, Dockerfile, requirements.txt
+  caddy/      Caddyfile, root CA
   grafana/    provisioning/{datasources,dashboards}/, dashboards/solar.json
   influxdb/   init/10-create-live-bucket.sh
   deploy/     99-growatt.rules, create-grafana-user.sh, set-home-dashboard.sh
+  android/    aplicația Kotlin/Jetpack Compose
 ```
 
 ## 5. Acces
-- **SSH:** `ssh root@192.168.1.199` (cheie)
+- **SSH LAN:** `ssh root@192.168.1.199` (cheie)
+- **SSH remote:** `ssh -p 31422 root@vyra.go.ro` (cheie)
 - **Grafana:** http://192.168.1.199:3000/d/solar-main — `florin` / *(parola setată de user)* sau `admin` / `Gr0w@tt-Grafana-2026-k3Lm`. Home dashboard = solar-main.
 - **InfluxDB:** http://192.168.1.199:8086 — `admin` / `muli*neta`. Org `casa`. Token în `.env` (`INFLUXDB_TOKEN`).
 - **ntfy:** http://192.168.1.199:8088, topic **`Alerta_6Kw`** (telefonul e abonat aici, cu sunet de alarmă pe canalul „Urgent").
@@ -108,6 +116,7 @@ Toate: **debounce 3s + cooldown 300s + histerezis**. ntfy prioritate `urgent`. T
 2. **Retenție InfluxDB:** flag-ul `influx bucket create --retention` acceptă DOAR durate Go (`48h`), NU `2d`. (Dar `DOCKER_INFLUXDB_INIT_RETENTION` acceptă `31d`.)
 3. **Collector env:** are `env_file: ./.env` → toate variabilele din `.env` ajung la el. Reglare praguri = editezi `.env` + `docker compose up -d collector`.
 4. **Tool Bash** uneori indisponibil (classifier Anthropic) → fallback pe **PowerShell**.
+5. **Server după `git pull`:** dacă s-a modificat API-ul sau deploy-ul, trebuie rebuild explicit: `cd /opt/solar-monitor && docker compose up -d --build api`.
 
 ## 9. Comenzi utile
 ```bash
@@ -150,13 +159,17 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 
 ---
 
-## 12. Stare curentă (la 2026-05-30)
-✅ Monitorizare live 1s + istoric 30 zile, validată cu LCD.
-✅ Alerte protecție (consum, baterie jos/sus, supraîncălzire, ieșire pierdută) + watchdog — testate.
-✅ Push ntfy pe telefon cu sunet (topic `Alerta_6Kw`).
-✅ 100% local, read-only, pornește la boot.
+## 12. Stare curentă (la 2026-06-17)
+✅ Server producție mutat pe HP 290 G4 / Debian 13, IP `192.168.1.199`, Ethernet, invertor pe `/dev/growatt`.
+✅ Stack Docker complet pornit pe HP: `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy`.
+✅ Monitorizare live 1s + istoric 60s/31 zile, verificate după cutover.
+✅ API Android: `/solar/latest` + `/solar/history`, acces prin `https://vyra.go.ro:31443`.
+✅ App Android nativă cu UI nou, carduri clickabile, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 8 / versionName 1.7**.
+✅ Alerte protecție în collector + ntfy; alarmă locală în Android pentru consum mare.
+✅ 100% local/self-hosted pentru datele invertorului, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
-⏳ Rămas: TODO #2 (dashboard power-flow + mobil).
+✅ HDD Seagate ~1TB montat permanent în `/data`; backup volume Docker de cutover păstrat în `/data/backups/solar-volume-backup-cutover`.
+⏳ Rămas opțional: power-flow mai avansat, backup automat, istoric lung/downsampling.
 
 ---
 
@@ -247,39 +260,44 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
 - Iconul static al notificarii a fost schimbat din icon info Android intr-un icon solar monochrome.
 - Versiune Android: versionCode 8 / versionName 1.7.
 
-### 13.11 Pregatire server nou pentru inlocuire (2026-06-16)
-- Server nou: **HP 290 G4 / Debian 13**, hostname `hpG4`, IP temporar `192.168.1.150`.
-- Scop: va inlocui serverul vechi din beci, pastrand IP-ul final **`192.168.1.199`** ca aplicatia/routerele sa nu trebuiasca modificate.
-- Mutare fizica finalizata: HP-ul este in beci pe cablu Ethernet, IP-ul final **`192.168.1.199`** este pe interfata `enp1s0`, invertorul USB Exar `04e2:1411` apare ca `/dev/growatt`, iar `collector` ruleaza pe serverul nou.
-- Colectare verificata dupa cutover: live scrie la 1s (30 puncte/30s pentru campurile critice), history scrie la 60s (puncte noi in bucket-ul `history`), `collector` ruleaza cu `RestartCount=0`.
-- Curatenie facuta pe `.150`:
-  - dezinstalat/sters OpenClaw;
-  - oprit/dezactivat/sters Ollama si modelele locale;
-  - eliminata completarea OpenClaw din `/root/.bashrc`;
+### 13.11 Cutover server HP finalizat (2026-06-16 / 2026-06-17)
+- Server producție actual: **HP 290 G4 / Debian 13**, hostname `hpG4`, IP final **`192.168.1.199`** pe Ethernet `enp1s0`.
+- IP-ul `192.168.1.150` a fost doar IP-ul temporar de pregătire; nu mai este adresa operațională a sistemului Solar Monitor.
+- Serverul vechi Dell Optiplex 7010 a fost oprit și păstrat ca fallback. Nu îl porni simultan cu HP-ul pe IP-ul `.199`.
+- HP-ul este în beci, conectat prin cablu Ethernet, cu invertorul USB Exar `04e2:1411` disponibil ca `/dev/growatt`.
+- Colectare verificată după cutover și după schimbarea cablului de alimentare: live scrie la 1s, history scrie la 60s, `collector` rulează fără restarturi.
+- Volumele Docker restaurate pe HP:
+  - `solar-monitor_influxdb-data`;
+  - `solar-monitor_influxdb-config`;
+  - `solar-monitor_grafana-data`;
+  - `solar-monitor_ntfy-cache`;
+  - `solar-monitor_caddy-data`;
+  - `solar-monitor_caddy-config`.
+- Backup-ul volumelor de cutover este păstrat în `/data/backups/solar-volume-backup-cutover`.
+- Discul Seagate de ~1 TB este formatat ext4 și montat permanent în `/data` pentru backup-uri, fișiere mari și proiecte noi.
+- Curățenie făcută pe HP:
+  - dezinstalat/șters OpenClaw;
+  - oprit/dezactivat/șters Ollama și modelele locale;
+  - eliminată completarea OpenClaw din `/root/.bashrc`;
   - dezactivat `linger` pentru root;
   - dezactivate servicii inutile pentru rolul de server: Bluetooth, CUPS, Avahi, ModemManager, Blueman.
-- Instalate/verificate pe `.150`:
+- Instalate/verificate pe HP:
   - Docker `26.1.5+dfsg1` + Docker Compose `2.26.1`;
   - OpenJDK 21;
-  - `/opt/solar-monitor` copiat de pe `.199`;
-  - `/opt/android-sdk` copiat de pe `.199`;
-  - `/opt/gradle-8.9` copiat de pe `.199`;
-  - `/opt/pics-logs-copilot` copiat de pe `.199`;
-  - **nu** s-a copiat `/opt/containerd` (runtime intern Docker; noul server foloseste propriul Docker).
-- Android pe `.150`:
-  - `/etc/profile.d/android-sdk.sh` seteaza `ANDROID_HOME=/opt/android-sdk`, `ANDROID_SDK_ROOT=/opt/android-sdk`, `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64`;
+  - `/opt/solar-monitor` din repo;
+  - `/opt/android-sdk`;
+  - `/opt/gradle-8.9`;
+  - `/opt/pics-logs-copilot`;
+  - **nu** s-a copiat `/opt/containerd` (runtime intern Docker; HP-ul folosește propriul Docker).
+- Android pe HP:
+  - `/etc/profile.d/android-sdk.sh` setează `ANDROID_HOME=/opt/android-sdk`, `ANDROID_SDK_ROOT=/opt/android-sdk`, `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64`;
   - build verificat OK: `./gradlew :app:assembleDebug`;
   - build release semnat verificat OK: `./gradlew :app:assembleRelease`.
 - Invertor/udev:
-  - regula `/etc/udev/rules.d/99-growatt.rules` instalata;
-  - `/dev/growatt` apare pe serverul nou dupa conectarea invertorului USB: Exar XR21B1411, VID:PID `04e2:1411`, serial `Q3370413461`.
-- Docker pe `.150`:
+  - regula `/etc/udev/rules.d/99-growatt.rules` instalată;
+  - `/dev/growatt` apare pe HP după conectarea invertorului USB: Exar XR21B1411, VID:PID `04e2:1411`, serial `Q3370413461`.
+- Docker pe HP:
   - imaginile pentru `influxdb`, `grafana`, `ntfy`, `caddy`, `api`, `collector` au fost trase/construite;
-  - containerele au fost pornite pe serverul nou in ziua mutarii;
-  - volumele Docker au fost restaurate pe serverul nou la cutover.
-  - Discul Seagate de ~1 TB este montat permanent in `/data` pentru backup-uri, fisiere mari si proiecte noi.
-- Runbook pentru ziua mutarii: **`schimbare-server.md`**.
-  - Critic: istoricul InfluxDB/Grafana/ntfy/Caddy este in volume Docker, nu in `/opt`.
-  - In ziua mutarii se opreste stack-ul vechi, se copiaza volumele `solar-monitor_*`, apoi se porneste stack-ul pe serverul nou dupa conectarea invertorului.
-
+  - containerele `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy` sunt pornite pe HP.
+- Runbook-ul **`schimbare-server.md`** rămâne documentație istorică și checklist de fallback. Mutarea principală este completă.
 
