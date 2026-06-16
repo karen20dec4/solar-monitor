@@ -21,7 +21,7 @@
 | Legătură | Cablu USB-A↔USB-B. Invertor USB = chip **Exar XR21B1411** (VID:PID `04e2:1411`, serial `Q3370413461`) → `/dev/ttyUSB0`. |
 | Modbus | RTU, **9600 8N1, slave ID 1**, function code **04** (input registers). |
 
-⚠️ Hardware de rezolvat: serverul stă pe capacul invertorului (problemă termică) — de mutat. Wi-Fi dongle ieftin (MT7601U) — eventual Ethernet.
+⚠️ Hardware: serverul nou HP a fost mutat în beci și este conectat prin Ethernet. Wi-Fi-ul vechi nu mai este necesar pentru rolul principal.
 
 ## 3. Arhitectură software (stack „lean", fără MQTT)
 ```
@@ -89,7 +89,7 @@ Consumul e rutat și pe câmpul sursei active: `house_pv` / `house_bat` / `house
 `inverter_loss = pv_power + battery_discharge_power + grid_charge_power − output_power − battery_charge_power` (clamp ≥0).
 - Ziua (încărcare): `= PV − consum − încărcare_baterie_reală` (exact formula cerută de Florin).
 - Noaptea (descărcare): `= descărcare_baterie − consum`.
-⚠️ **De validat semnul reg90 la descărcare (noaptea)** — vezi TODO #1b.
+✅ Semnul reg90 la descărcare este validat noaptea: curent/putere baterie negative la descărcare.
 
 ## 7. Alerte (în collector, praguri în `.env`)
 | Cheie | Declanșare | Revenire |
@@ -135,8 +135,8 @@ curl -d "mesaj" -H "Title: test" -H "Priority: urgent" -H "Tags: zap" http://loc
 ### ✅ #1 — REZOLVAT 2026-05-31 (PV mare): pierderea în conversie + putere baterie reală
 **Făcut:** registrul **90 = curent baterie ×0.1 A (semnat)** identificat prin corelație cu PV (r90 urca 554→572 când bateria urca 3082→3169W). `battery_power` comutat pe măsurătoarea reală (`reg90×0.1 × Vbat`). Adăugat câmp `inverter_loss` + câmp `battery_current`. Panou nou **„⚡ Consum invertor (pierderi)"** pe dashboard + linie în graficul live. Validat: pierdere stabilă **~90–110W** ziua. `REG_COUNT=91`, `DEBUG_RAW=0`.
 
-#### #1b — mic follow-up: validare semn reg90 la DESCĂRCARE (noaptea)
-Ziua (încărcare) reg90 e pozitiv și corect. Noaptea, când bateria se descarcă, verifică: `docker exec solar-influxdb influx query ...` pe `battery_current` / `battery_power` → trebuie să fie **negativ** (descărcare). Dacă reg90 e unsigned (rămâne 0 sau sare la valoare mare) și există un registru separat de descărcare, ajustează `parse()` (în loc de complement față de 2). Pierderea noaptea ar trebui = `descărcare − consum` (mică, ~zeci de W).
+#### ✅ #1b — REZOLVAT 2026-06-17: validare semn reg90 la DESCĂRCARE (noaptea)
+Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.1A`, `battery_power=-423W`, `battery_discharge_power=423W`, `output_power=301W`, `inverter_loss=122W`. Semnul registrului 90 este corect negativ la descărcare; nu trebuie schimbat `parse()`.
 
 ### #2 — Dashboard: power-flow + pagină mobilă (ales de user, neînceput)
 - Diagramă flux energetic (PV → baterie/casă/rețea).
@@ -156,7 +156,7 @@ Ziua (încărcare) reg90 e pozitiv și corect. Noaptea, când bateria se descarc
 ✅ Push ntfy pe telefon cu sunet (topic `Alerta_6Kw`).
 ✅ 100% local, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
-⏳ Rămas: TODO #1b (validare semn reg90 noaptea) și TODO #2 (dashboard power-flow + mobil).
+⏳ Rămas: TODO #2 (dashboard power-flow + mobil).
 
 ---
 
@@ -250,6 +250,8 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
 ### 13.11 Pregatire server nou pentru inlocuire (2026-06-16)
 - Server nou: **HP 290 G4 / Debian 13**, hostname `hpG4`, IP temporar `192.168.1.150`.
 - Scop: va inlocui serverul vechi din beci, pastrand IP-ul final **`192.168.1.199`** ca aplicatia/routerele sa nu trebuiasca modificate.
+- Mutare fizica finalizata: HP-ul este in beci pe cablu Ethernet, IP-ul final **`192.168.1.199`** este pe interfata `enp1s0`, invertorul USB Exar `04e2:1411` apare ca `/dev/growatt`, iar `collector` ruleaza pe serverul nou.
+- Colectare verificata dupa cutover: live scrie la 1s (30 puncte/30s pentru campurile critice), history scrie la 60s (puncte noi in bucket-ul `history`), `collector` ruleaza cu `RestartCount=0`.
 - Curatenie facuta pe `.150`:
   - dezinstalat/sters OpenClaw;
   - oprit/dezactivat/sters Ollama si modelele locale;
@@ -270,11 +272,12 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
   - build release semnat verificat OK: `./gradlew :app:assembleRelease`.
 - Invertor/udev:
   - regula `/etc/udev/rules.d/99-growatt.rules` instalata;
-  - `/dev/growatt` va aparea doar dupa conectarea fizica a invertorului USB la noul server.
+  - `/dev/growatt` apare pe serverul nou dupa conectarea invertorului USB: Exar XR21B1411, VID:PID `04e2:1411`, serial `Q3370413461`.
 - Docker pe `.150`:
   - imaginile pentru `influxdb`, `grafana`, `ntfy`, `caddy`, `api`, `collector` au fost trase/construite;
-  - nu s-au pornit containere;
-  - nu s-au creat volume Docker, ca sa putem restaura curat istoricul la cutover.
+  - containerele au fost pornite pe serverul nou in ziua mutarii;
+  - volumele Docker au fost restaurate pe serverul nou la cutover.
+  - Discul Seagate de ~1 TB este montat permanent in `/data` pentru backup-uri, fisiere mari si proiecte noi.
 - Runbook pentru ziua mutarii: **`schimbare-server.md`**.
   - Critic: istoricul InfluxDB/Grafana/ntfy/Caddy este in volume Docker, nu in `/opt`.
   - In ziua mutarii se opreste stack-ul vechi, se copiaza volumele `solar-monitor_*`, apoi se porneste stack-ul pe serverul nou dupa conectarea invertorului.

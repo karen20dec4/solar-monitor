@@ -21,3 +21,6 @@ android/app/build/
 android/app/release/
 android/local.properties
 
+# Local migration backups
+solar-volume-backup-cutover/
+

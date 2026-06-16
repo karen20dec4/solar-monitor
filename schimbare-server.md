@@ -9,6 +9,7 @@ Obiectiv: noul server inlocuieste complet serverul vechi fara modificari in apli
 - Server vechi: `root@192.168.1.199`, Linux Mint, stack-ul activ in `/opt/solar-monitor`.
 - Server nou: `root@192.168.1.150`, Debian 13, hostname `hpG4`.
 - Pe serverul nou:
+  - A fost mutat in beci si conectat prin cablu Ethernet.
   - OpenClaw/Ollama si modelele locale au fost sterse.
   - Docker + Docker Compose sunt instalate si active.
   - Android SDK este in `/opt/android-sdk`.
@@ -18,6 +19,16 @@ Obiectiv: noul server inlocuieste complet serverul vechi fara modificari in apli
   - Regula udev pentru invertor este instalata in `/etc/udev/rules.d/99-growatt.rules`.
   - Imaginile Docker pentru stack sunt pregatite.
   - Nu exista containere/volume Docker create pe noul server.
+
+## Stare mutare 2026-06-16
+
+- IP-ul final `192.168.1.199` este setat pe serverul nou `hpG4`, interfata Ethernet `enp1s0`.
+- Discul Seagate de ~1 TB este formatat `ext4`, montat permanent in `/data`.
+- Directoare pregatite pe HDD: `/data/backups`, `/data/projects/kotlin`, `/data/projects/php`, `/data/large-files`.
+- Volumele Docker au fost copiate/restaurate pe serverul nou; backup-ul arhivelor este pastrat in `/data/backups/solar-volume-backup-cutover`.
+- Invertorul USB Exar XR21B1411 apare pe HP ca `/dev/growatt -> ttyUSB0`.
+- Toate serviciile `influxdb`, `grafana`, `ntfy`, `api`, `caddy`, `collector` sunt pornite pe serverul nou.
+- Colectarea a fost verificata: live scrie la 1s, history scrie la 60s.
 
 ## Reguli critice
 
