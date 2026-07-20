@@ -133,8 +133,6 @@ services:
       - grafana
     ports:
       - "443:443"
-      # aplicatia de subtitrari (mp4-to-srt) prin acelasi Caddy/CA: vyra.go.ro:31480 -> 8443
-      - "8443:8443"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

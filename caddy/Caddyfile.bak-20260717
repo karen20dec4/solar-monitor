@@ -21,12 +21,3 @@ vyra.go.ro {
 		reverse_proxy grafana:3000
 	}
 }
-
-# Aplicatia de subtitrari (mp4-to-srt, proiect separat in /01-Proiecte/1.mp4-to-srt/webapp).
-# Lant: https://vyra.go.ro:31480 -> ZTE 31480 -> .210:8443 -> TP-Link 8443 -> caddy:8443 -> Beci:8090
-# Proxy catre portul publicat pe host (containerul mp4-to-srt e in alta retea Docker).
-# Aplicatia are Basic Auth propriu (APP_PASSWORD in webapp/.env) - obligatoriu setat.
-vyra.go.ro:8443 {
-	tls internal
-	reverse_proxy 192.168.1.199:8090
-}
