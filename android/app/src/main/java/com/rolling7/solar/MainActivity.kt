@@ -46,8 +46,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -57,10 +59,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
@@ -74,6 +78,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -109,6 +114,50 @@ private val CMuted = Color(0xFF94A3B8)
 private val CText = Color(0xFFE5EDF6)
 private const val DEAD = 50.0
 
+private data class DashboardChrome(
+    val background: Color,
+    val panel: Color,
+    val raised: Color,
+    val line: Color,
+    val text: Color,
+    val muted: Color,
+    val danger: Color,
+    val font: FontFamily
+)
+
+private fun dashboardChrome(retro: Boolean): DashboardChrome = if (retro) {
+    DashboardChrome(
+        background = RetroBackground,
+        panel = RetroPanel,
+        raised = RetroPanelRaised,
+        line = RetroLine,
+        text = RetroText,
+        muted = RetroMuted,
+        danger = RetroRed,
+        font = FontFamily.Monospace
+    )
+} else {
+    DashboardChrome(
+        background = CBg,
+        panel = CPanel,
+        raised = CPanelSoft,
+        line = CLine,
+        text = CText,
+        muted = CMuted,
+        danger = CGrid,
+        font = FontFamily.Default
+    )
+}
+
+private fun historyAccent(field: String, simpleColor: Color, retro: Boolean): Color {
+    if (!retro) return simpleColor
+    return when (field) {
+        "pv_power", "energy_pv_today" -> RetroSage
+        "battery_voltage", "output_power", "energy_load_today" -> RetroYellow
+        else -> RetroText
+    }
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -124,11 +173,15 @@ fun App() {
     var selectedHistory by remember { mutableStateOf<HistoryMetric?>(null) }
     var showHistoryMenu by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var retroTabName by rememberSaveable { mutableStateOf(RetroTab.DASHBOARD.name) }
+    var selectedEnergyField by rememberSaveable { mutableStateOf("output_power") }
     var alarmSettings by remember { mutableStateOf(AlarmSettingsStore.read(context)) }
     var dashboardStyle by remember { mutableStateOf(DashboardStyleStore.read(context)) }
     var enableAfterNotificationPermission by remember { mutableStateOf(false) }
     val alarmRinging by AlarmState.ringing.collectAsState()
     val alarmMessage by AlarmState.message.collectAsState()
+    val retro = dashboardStyle == DashboardStyle.RETRO
+    val chrome = dashboardChrome(retro)
 
     fun saveAlarmSettings(next: AlarmSettings, applyService: Boolean = true) {
         alarmSettings = next
@@ -141,6 +194,17 @@ fun App() {
     fun saveDashboardStyle(next: DashboardStyle) {
         dashboardStyle = next
         DashboardStyleStore.save(context, next)
+    }
+
+    fun changeDashboardStyle(next: DashboardStyle) {
+        if (next == dashboardStyle) return
+        if (next == DashboardStyle.RETRO) {
+            retroTabName = RetroTab.SETTINGS.name
+            showSettings = false
+        } else if (dashboardStyle == DashboardStyle.RETRO) {
+            showSettings = true
+        }
+        saveDashboardStyle(next)
     }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -174,19 +238,55 @@ fun App() {
 
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = CPv,
-            background = CBg,
-            surface = CPanel,
-            onSurface = CText
+            primary = if (retro) RetroSage else CPv,
+            secondary = if (retro) RetroYellow else CHouse,
+            error = chrome.danger,
+            background = chrome.background,
+            surface = chrome.panel,
+            surfaceVariant = chrome.raised,
+            onSurface = chrome.text,
+            onBackground = chrome.text
         )
     ) {
         when (dashboardStyle) {
             DashboardStyle.RETRO -> RetroDashboard(
                 data = data,
                 alarmThresholdW = alarmSettings.thresholdW,
-                onHistoryClick = { showHistoryMenu = true },
-                onHistoryFieldClick = { field -> selectedHistory = historyMetric(field) },
-                onSettingsClick = { showSettings = true }
+                selectedTab = RetroTab.valueOf(retroTabName),
+                onTabSelected = { tab -> retroTabName = tab.name },
+                onEnergyFieldClick = { field ->
+                    selectedEnergyField = field
+                    retroTabName = RetroTab.ENERGY.name
+                },
+                energyContent = {
+                    RetroEnergyPage(
+                        data = data,
+                        selectedMetric = historyMetric(selectedEnergyField),
+                        onMetricSelected = { metric -> selectedEnergyField = metric.field }
+                    )
+                },
+                settingsContent = {
+                    SettingsSheet(
+                        dashboardStyle = dashboardStyle,
+                        settings = alarmSettings,
+                        ringtoneTitle = AlarmSettingsStore.ringtoneTitle(context, alarmSettings),
+                        version = appVersion(context),
+                        onDashboardStyleChange = ::changeDashboardStyle,
+                        onEnabledChange = { enabled ->
+                            if (enabled && !hasNotificationPermission(context)) {
+                                enableAfterNotificationPermission = true
+                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                saveAlarmSettings(alarmSettings.copy(enabled = enabled))
+                            }
+                        },
+                        onThresholdChange = { saveAlarmSettings(alarmSettings.copy(thresholdW = it), applyService = false) },
+                        onCooldownChange = { saveAlarmSettings(alarmSettings.copy(cooldownS = it), applyService = false) },
+                        onVibrateChange = { saveAlarmSettings(alarmSettings.copy(vibrate = it), applyService = false) },
+                        onPickRingtone = { ringtoneLauncher.launch(ringtonePickerIntent(alarmSettings)) },
+                        onTestAlarm = { AlarmSettingsStore.testAlarm(context) }
+                    )
+                }
             )
             DashboardStyle.SIMPLE -> SimpleDashboard(
                 data = data,
@@ -196,14 +296,16 @@ fun App() {
             )
         }
 
-        if (showHistoryMenu) {
+        if (!retro && showHistoryMenu) {
             ModalBottomSheet(
                 onDismissRequest = { showHistoryMenu = false },
-                containerColor = CPanel,
-                contentColor = CText
+                containerColor = chrome.panel,
+                contentColor = chrome.text,
+                dragHandle = { DashboardSheetHandle(retro) }
             ) {
                 HistoryMenuSheet(
                     metrics = DashboardHistoryMetrics,
+                    retro = retro,
                     onMetricClick = { metric ->
                         showHistoryMenu = false
                         selectedHistory = metric
@@ -212,28 +314,32 @@ fun App() {
             }
         }
 
-        selectedHistory?.let { metric ->
-            ModalBottomSheet(
-                onDismissRequest = { selectedHistory = null },
-                containerColor = CPanel,
-                contentColor = CText
-            ) {
-                HistorySheet(metric = metric)
+        if (!retro) {
+            selectedHistory?.let { metric ->
+                ModalBottomSheet(
+                    onDismissRequest = { selectedHistory = null },
+                    containerColor = chrome.panel,
+                    contentColor = chrome.text,
+                    dragHandle = { DashboardSheetHandle(retro) }
+                ) {
+                    HistorySheet(metric = metric, retro = retro)
+                }
             }
         }
 
-        if (showSettings) {
+        if (!retro && showSettings) {
             ModalBottomSheet(
                 onDismissRequest = { showSettings = false },
-                containerColor = CPanel,
-                contentColor = CText
+                containerColor = chrome.panel,
+                contentColor = chrome.text,
+                dragHandle = { DashboardSheetHandle(retro) }
             ) {
                 SettingsSheet(
                     dashboardStyle = dashboardStyle,
                     settings = alarmSettings,
                     ringtoneTitle = AlarmSettingsStore.ringtoneTitle(context, alarmSettings),
                     version = appVersion(context),
-                    onDashboardStyleChange = ::saveDashboardStyle,
+                    onDashboardStyleChange = ::changeDashboardStyle,
                     onEnabledChange = { enabled ->
                         if (enabled && !hasNotificationPermission(context)) {
                             enableAfterNotificationPermission = true
@@ -262,6 +368,141 @@ fun App() {
                     AlarmState.onRingStop()
                 }
             )
+        }
+    }
+}
+
+@Composable
+private fun DashboardSheetHandle(retro: Boolean) {
+    Box(
+        Modifier
+            .padding(top = 10.dp, bottom = 6.dp)
+            .width(44.dp)
+            .height(4.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (retro) RetroOlive else CMuted.copy(alpha = 0.72f))
+    )
+}
+
+@Composable
+private fun RetroEnergyPage(
+    data: SolarData?,
+    selectedMetric: HistoryMetric,
+    onMetricSelected: (HistoryMetric) -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        RetroPageHeader(
+            title = "ENERGIE",
+            subtitle = "PRODUCTIE · CONSUM · ISTORIC",
+            statusColor = RetroSage
+        )
+        RetroDailyPanel(
+            data = data,
+            onHistoryFieldClick = { field -> onMetricSelected(historyMetric(field)) }
+        )
+        RetroEnergyMetricSelector(
+            selectedMetric = selectedMetric,
+            onMetricSelected = onMetricSelected
+        )
+        HistorySheet(metric = selectedMetric, retro = true, embedded = true)
+        Text(
+            "DATE CITITE PRIN API  ·  FARA COMENZI CATRE INVERTOR",
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            color = RetroOlive,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 8.sp,
+            letterSpacing = 0.6.sp,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun RetroEnergyMetricSelector(
+    selectedMetric: HistoryMetric,
+    onMetricSelected: (HistoryMetric) -> Unit
+) {
+    RetroPanelSurface {
+        Text(
+            "GRAFIC SELECTAT",
+            color = RetroMuted,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.2.sp
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            DashboardHistoryMetrics.take(3).forEach { metric ->
+                RetroMetricButton(
+                    modifier = Modifier.weight(1f),
+                    metric = metric,
+                    selected = metric.field == selectedMetric.field,
+                    onClick = { onMetricSelected(metric) }
+                )
+            }
+        }
+        Spacer(Modifier.height(7.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            DashboardHistoryMetrics.drop(3).forEach { metric ->
+                RetroMetricButton(
+                    modifier = Modifier.weight(1f),
+                    metric = metric,
+                    selected = metric.field == selectedMetric.field,
+                    onClick = { onMetricSelected(metric) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RetroMetricButton(
+    modifier: Modifier,
+    metric: HistoryMetric,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val accent = historyAccent(metric.field, metric.color, retro = true)
+    val label = when (metric.field) {
+        "output_power" -> "CASA"
+        "pv_power" -> "PANOURI"
+        "battery_voltage" -> "BATERIE"
+        "energy_pv_today" -> "PRODUS ZILNIC"
+        "energy_load_today" -> "CONSUM ZILNIC"
+        else -> metric.title.uppercase(Locale.getDefault())
+    }
+    Surface(
+        modifier = modifier
+            .height(46.dp)
+            .semantics {
+                contentDescription = "Grafic $label${if (selected) ", selectat" else ""}"
+            }
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(9.dp),
+        color = if (selected) RetroPanelRaised else RetroBackground.copy(alpha = 0.50f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) accent.copy(alpha = 0.72f) else RetroLine.copy(alpha = 0.65f)
+        ),
+        shadowElevation = if (selected) 5.dp else 2.dp
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                label,
+                color = if (selected) accent else RetroMuted,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 9.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1
+            )
+            RetroReliefEdges(Modifier.matchParentSize(), RoundedCornerShape(9.dp), subtle = true)
         }
     }
 }
@@ -771,8 +1012,9 @@ private fun DetailRow(
 }
 
 @Composable
-private fun DetailDivider() {
-    HorizontalDivider(Modifier.padding(start = 20.dp), color = CLine.copy(alpha = 0.55f))
+private fun DetailDivider(retro: Boolean = false) {
+    val chrome = dashboardChrome(retro)
+    HorizontalDivider(Modifier.padding(start = 20.dp), color = chrome.line.copy(alpha = 0.55f))
 }
 
 @Composable
@@ -789,33 +1031,58 @@ private fun TrendGlyph(modifier: Modifier, color: Color) {
 }
 
 @Composable
-private fun HistoryMenuSheet(metrics: List<HistoryMetric>, onMetricClick: (HistoryMetric) -> Unit) {
+private fun HistoryMenuSheet(
+    metrics: List<HistoryMetric>,
+    retro: Boolean,
+    onMetricClick: (HistoryMetric) -> Unit
+) {
+    val chrome = dashboardChrome(retro)
     Column(
         Modifier
             .fillMaxWidth()
             .padding(start = 18.dp, end = 18.dp, bottom = 28.dp)
     ) {
-        Text("Istoric", color = CText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-        Text("Alege valoarea pe care vrei sa o analizezi.", color = CMuted, fontSize = 12.sp)
+        Text(
+            if (retro) "ISTORIC" else "Istoric",
+            color = if (retro) RetroYellow else chrome.text,
+            fontFamily = chrome.font,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = if (retro) 1.sp else 0.sp
+        )
+        Text(
+            "Alege valoarea pe care vrei sa o analizezi.",
+            color = chrome.muted,
+            fontFamily = chrome.font,
+            fontSize = 12.sp
+        )
         Spacer(Modifier.height(12.dp))
         metrics.forEachIndexed { index, metric ->
+            val accent = historyAccent(metric.field, metric.color, retro)
             Row(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
+                    .background(if (retro) RetroPanelRaised.copy(alpha = 0.34f) else Color.Transparent)
                     .clickable { onMetricClick(metric) }
                     .padding(horizontal = 10.dp, vertical = 13.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(metric.color))
+                Box(Modifier.size(8.dp).clip(CircleShape).background(accent))
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(metric.title, color = CText, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text(historySubtitle(metric), color = CMuted, fontSize = 10.sp)
+                    Text(
+                        if (retro) metric.title.uppercase(Locale.getDefault()) else metric.title,
+                        color = chrome.text,
+                        fontFamily = chrome.font,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(historySubtitle(metric), color = chrome.muted, fontFamily = chrome.font, fontSize = 10.sp)
                 }
-                TrendGlyph(Modifier.size(18.dp), metric.color)
+                TrendGlyph(Modifier.size(18.dp), accent)
             }
-            if (index < metrics.lastIndex) DetailDivider()
+            if (index < metrics.lastIndex) DetailDivider(retro)
         }
     }
 }
@@ -914,18 +1181,41 @@ private fun SettingsSheet(
     onPickRingtone: () -> Unit,
     onTestAlarm: () -> Unit
 ) {
+    val retro = dashboardStyle == DashboardStyle.RETRO
+    val chrome = dashboardChrome(retro)
     Column(
         Modifier
+            .fillMaxSize()
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .padding(start = 18.dp, end = 18.dp, bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(
+                start = if (retro) 14.dp else 18.dp,
+                top = if (retro) 16.dp else 0.dp,
+                end = if (retro) 14.dp else 18.dp,
+                bottom = 28.dp
+            ),
+        verticalArrangement = Arrangement.spacedBy(if (retro) 14.dp else 16.dp)
     ) {
-        Text("Setari", color = CText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-        Text("Aspectul si comportamentul aplicatiei.", color = CMuted, fontSize = 12.sp)
+        if (retro) {
+            RetroPageHeader(
+                title = "SETARI",
+                subtitle = "TEMA · ALARMA · SUNET · APLICATIE",
+                statusColor = RetroYellow
+            )
+        } else {
+            Text(
+                "Setari",
+                color = chrome.text,
+                fontFamily = chrome.font,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text("Aspectul si comportamentul aplicatiei.", color = chrome.muted, fontFamily = chrome.font, fontSize = 12.sp)
+        }
 
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Tema dashboard", color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        SettingsGroup(retro) {
+            Text("Tema dashboard", color = chrome.text, fontFamily = chrome.font, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
             DashboardStyleSwitcher(
                 selected = dashboardStyle,
                 onSelected = onDashboardStyleChange
@@ -936,77 +1226,105 @@ private fun SettingsSheet(
                 } else {
                     "Simple: interfata moderna, aerisita si accente Material 3."
                 },
-                color = CMuted,
+                color = chrome.muted,
+                fontFamily = chrome.font,
                 fontSize = 11.sp
             )
         }
 
-        HorizontalDivider(color = CLine)
-
-        Text("Alarma locala ruleaza pe telefon prin foreground service.", color = CMuted, fontSize = 12.sp)
-
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Alarma consum mare", color = CText, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                Text(
-                    if (settings.enabled) "Activa - service permanent" else "Oprita",
-                    color = if (settings.enabled) CPv else CMuted,
-                    fontSize = 12.sp
+        SettingsGroup(retro) {
+            Text("Alarma locala ruleaza pe telefon prin foreground service.", color = chrome.muted, fontFamily = chrome.font, fontSize = 12.sp)
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Alarma consum mare", color = chrome.text, fontFamily = chrome.font, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (settings.enabled) "Activa - service permanent" else "Oprita",
+                        color = if (settings.enabled) (if (retro) RetroSage else CPv) else chrome.muted,
+                        fontFamily = chrome.font,
+                        fontSize = 12.sp
+                    )
+                }
+                Switch(
+                    checked = settings.enabled,
+                    onCheckedChange = onEnabledChange,
+                    colors = if (retro) retroSwitchColors() else SwitchDefaults.colors()
                 )
             }
-            Switch(checked = settings.enabled, onCheckedChange = onEnabledChange)
-        }
-
-        SettingSlider(
-            title = "Prag alarma",
-            value = settings.thresholdW,
-            valueLabel = "${settings.thresholdW} W",
-            range = 3000f..6500f,
-            step = 100,
-            onChange = onThresholdChange
-        )
-        Text("Rearmare la ${settings.clearThresholdW} W.", color = CMuted, fontSize = 12.sp)
-
-        SettingSlider(
-            title = "Cooldown",
-            value = settings.cooldownS,
-            valueLabel = "${settings.cooldownS}s",
-            range = 60f..600f,
-            step = 30,
-            onChange = onCooldownChange
-        )
-
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Vibratie", color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text("Porneste o vibratie scurta cand alarma suna.", color = CMuted, fontSize = 12.sp)
+            Spacer(Modifier.height(12.dp))
+            SettingSlider(
+                title = "Prag alarma",
+                value = settings.thresholdW,
+                valueLabel = "${settings.thresholdW} W",
+                range = 3000f..6500f,
+                step = 100,
+                retro = retro,
+                onChange = onThresholdChange
+            )
+            Text("Rearmare la ${settings.clearThresholdW} W.", color = chrome.muted, fontFamily = chrome.font, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            SettingSlider(
+                title = "Cooldown",
+                value = settings.cooldownS,
+                valueLabel = "${settings.cooldownS}s",
+                range = 60f..600f,
+                step = 30,
+                retro = retro,
+                onChange = onCooldownChange
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Vibratie", color = chrome.text, fontFamily = chrome.font, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Porneste o vibratie scurta cand alarma suna.", color = chrome.muted, fontFamily = chrome.font, fontSize = 12.sp)
+                }
+                Switch(
+                    checked = settings.vibrate,
+                    onCheckedChange = onVibrateChange,
+                    colors = if (retro) retroSwitchColors() else SwitchDefaults.colors()
+                )
             }
-            Switch(checked = settings.vibrate, onCheckedChange = onVibrateChange)
         }
 
-        HorizontalDivider(color = CLine)
-
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Sunet alarma", color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text(ringtoneTitle, color = CMuted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        SettingsGroup(retro) {
+            Text("Sunet alarma", color = chrome.text, fontFamily = chrome.font, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            Text(ringtoneTitle, color = chrome.muted, fontFamily = chrome.font, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = onPickRingtone, modifier = Modifier.weight(1f)) {
-                    Text("Alege sunet")
+                Button(
+                    onClick = onPickRingtone,
+                    modifier = Modifier.weight(1f).shadow(if (retro) 4.dp else 0.dp, RoundedCornerShape(12.dp)),
+                    colors = if (retro) ButtonDefaults.buttonColors(containerColor = RetroOlive, contentColor = RetroBackground) else ButtonDefaults.buttonColors()
+                ) {
+                    Text("Alege sunet", fontFamily = chrome.font)
                 }
-                Button(onClick = onTestAlarm, modifier = Modifier.weight(1f)) {
-                    Text("Testeaza")
+                Button(
+                    onClick = onTestAlarm,
+                    modifier = Modifier.weight(1f).shadow(if (retro) 4.dp else 0.dp, RoundedCornerShape(12.dp)),
+                    colors = if (retro) ButtonDefaults.buttonColors(containerColor = RetroSage, contentColor = RetroBackground) else ButtonDefaults.buttonColors()
+                ) {
+                    Text("Testeaza", fontFamily = chrome.font)
                 }
             }
         }
 
-        HorizontalDivider(color = CLine)
-
-        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text("Aplicatie", color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text("Versiune $version", color = CMuted, fontSize = 12.sp)
-            Text("Endpoint: vyra.go.ro:31443", color = CMuted, fontSize = 12.sp)
-            Text("Polling alarma: 2s prin API, nu direct invertor.", color = CMuted, fontSize = 12.sp)
+        SettingsGroup(retro) {
+            Text("Aplicatie", color = chrome.text, fontFamily = chrome.font, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Text("Versiune $version", color = chrome.muted, fontFamily = chrome.font, fontSize = 12.sp)
+            Text("Endpoint: vyra.go.ro:31443", color = chrome.muted, fontFamily = chrome.font, fontSize = 12.sp)
+            Text("Polling alarma: 2s prin API, nu direct invertor.", color = chrome.muted, fontFamily = chrome.font, fontSize = 12.sp)
         }
+    }
+}
+
+@Composable
+private fun SettingsGroup(retro: Boolean, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    if (retro) {
+        RetroPanelSurface(content = content)
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(5.dp), content = content)
     }
 }
 
@@ -1015,11 +1333,13 @@ private fun DashboardStyleSwitcher(
     selected: DashboardStyle,
     onSelected: (DashboardStyle) -> Unit
 ) {
+    val retro = selected == DashboardStyle.RETRO
+    val chrome = dashboardChrome(retro)
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(CPanelSoft)
+            .background(chrome.raised)
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -1039,11 +1359,12 @@ private fun DashboardStyleSwitcher(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(Modifier.size(7.dp).clip(CircleShape).background(if (isSelected) accent else CMuted))
+                Box(Modifier.size(7.dp).clip(CircleShape).background(if (isSelected) accent else chrome.muted))
                 Spacer(Modifier.width(8.dp))
                 Text(
                     style.label,
-                    color = if (isSelected) accent else CMuted,
+                    color = if (isSelected) accent else chrome.muted,
+                    fontFamily = chrome.font,
                     fontSize = 13.sp,
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
                 )
@@ -1059,12 +1380,14 @@ private fun SettingSlider(
     valueLabel: String,
     range: ClosedFloatingPointRange<Float>,
     step: Int,
+    retro: Boolean,
     onChange: (Int) -> Unit
 ) {
+    val chrome = dashboardChrome(retro)
     Column {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(title, color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text(valueLabel, color = CPv, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(title, color = chrome.text, fontFamily = chrome.font, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(valueLabel, color = if (retro) RetroYellow else CPv, fontFamily = chrome.font, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
         Slider(
             value = value.toFloat(),
@@ -1072,13 +1395,36 @@ private fun SettingSlider(
                 val rounded = (raw / step).roundToInt() * step
                 onChange(rounded.coerceIn(range.start.roundToInt(), range.endInclusive.roundToInt()))
             },
-            valueRange = range
+            valueRange = range,
+            colors = if (retro) {
+                SliderDefaults.colors(
+                    thumbColor = RetroYellow,
+                    activeTrackColor = RetroSage,
+                    inactiveTrackColor = RetroLine,
+                    activeTickColor = RetroBackground,
+                    inactiveTickColor = RetroOlive
+                )
+            } else {
+                SliderDefaults.colors()
+            }
         )
     }
 }
 
 @Composable
-private fun HistorySheet(metric: HistoryMetric) {
+private fun retroSwitchColors() = SwitchDefaults.colors(
+    checkedThumbColor = RetroBackground,
+    checkedTrackColor = RetroSage,
+    checkedBorderColor = RetroSage,
+    uncheckedThumbColor = RetroMuted,
+    uncheckedTrackColor = RetroPanelRaised,
+    uncheckedBorderColor = RetroOlive
+)
+
+@Composable
+private fun HistorySheet(metric: HistoryMetric, retro: Boolean, embedded: Boolean = false) {
+    val chrome = dashboardChrome(retro)
+    val accent = historyAccent(metric.field, metric.color, retro)
     var selectedRange by remember(metric.field) { mutableStateOf(metric.defaultRange) }
     var series by remember(metric.field) { mutableStateOf<HistorySeries?>(null) }
     var loading by remember(metric.field) { mutableStateOf(false) }
@@ -1099,47 +1445,60 @@ private fun HistorySheet(metric: HistoryMetric) {
         loading = false
     }
 
+    val scrollModifier = if (embedded) Modifier else Modifier.verticalScroll(rememberScrollState())
     Column(
         Modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(start = 18.dp, end = 18.dp, bottom = 28.dp)
+            .then(scrollModifier)
+            .padding(
+                start = if (embedded) 2.dp else 18.dp,
+                end = if (embedded) 2.dp else 18.dp,
+                bottom = if (embedded) 0.dp else 28.dp
+            )
     ) {
-        Text(metric.title, color = CText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            if (retro) metric.title.uppercase(Locale.getDefault()) else metric.title,
+            color = if (retro) accent else chrome.text,
+            fontFamily = chrome.font,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold
+        )
         Spacer(Modifier.height(4.dp))
         Text(
             historySubtitle(metric),
-            color = CMuted,
+            color = chrome.muted,
+            fontFamily = chrome.font,
             fontSize = 12.sp
         )
         Spacer(Modifier.height(14.dp))
         RangeSelector(
             ranges = metric.ranges,
             selectedRange = selectedRange,
-            color = metric.color
+            color = accent,
+            retro = retro
         ) { selectedRange = it }
         Spacer(Modifier.height(16.dp))
 
         when {
             loading -> {
-                Text("Se incarca...", color = CMuted, fontSize = 14.sp)
+                Text("Se incarca...", color = chrome.muted, fontFamily = chrome.font, fontSize = 14.sp)
                 Spacer(Modifier.height(24.dp))
             }
             error != null -> {
-                Text(error ?: "", color = CGrid, fontSize = 14.sp)
+                Text(error ?: "", color = chrome.danger, fontFamily = chrome.font, fontSize = 14.sp)
                 Spacer(Modifier.height(24.dp))
             }
             series == null || series?.points?.isEmpty() == true -> {
-                Text("Fara date pentru intervalul ales", color = CMuted, fontSize = 14.sp)
+                Text("Fara date pentru intervalul ales", color = chrome.muted, fontFamily = chrome.font, fontSize = 14.sp)
                 Spacer(Modifier.height(24.dp))
             }
             else -> {
                 val loaded = series
                 if (loaded != null) {
-                    HistoryChart(series = loaded, metric = metric)
+                    HistoryChart(series = loaded, metric = metric, retro = retro)
                     Spacer(Modifier.height(14.dp))
                     loaded.stats?.let { stats ->
-                        HistoryStatsGrid(stats = stats, metric = metric)
+                        HistoryStatsGrid(stats = stats, metric = metric, retro = retro)
                     }
                 }
             }
@@ -1152,6 +1511,7 @@ private fun RangeSelector(
     ranges: List<String>,
     selectedRange: String,
     color: Color,
+    retro: Boolean,
     onRangeClick: (String) -> Unit
 ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1161,6 +1521,7 @@ private fun RangeSelector(
                 label = range,
                 selected = range == selectedRange,
                 color = color,
+                retro = retro,
                 onClick = { onRangeClick(range) }
             )
         }
@@ -1173,12 +1534,15 @@ private fun RangeChip(
     label: String,
     selected: Boolean,
     color: Color,
+    retro: Boolean,
     onClick: () -> Unit
 ) {
-    val bg = if (selected) color.copy(alpha = 0.18f) else CPanelSoft
-    val border = if (selected) color.copy(alpha = 0.70f) else CLine
+    val chrome = dashboardChrome(retro)
+    val bg = if (selected) color.copy(alpha = 0.18f) else chrome.raised
+    val border = if (selected) color.copy(alpha = 0.70f) else chrome.line
     Box(
         modifier
+            .shadow(if (selected && retro) 4.dp else 0.dp, RoundedCornerShape(999.dp), clip = false)
             .clip(RoundedCornerShape(999.dp))
             .background(bg)
             .border(1.dp, border, RoundedCornerShape(999.dp))
@@ -1186,17 +1550,25 @@ private fun RangeChip(
             .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(label, color = if (selected) color else CMuted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            label,
+            color = if (selected) color else chrome.muted,
+            fontFamily = chrome.font,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
 @Composable
-private fun HistoryChart(series: HistorySeries, metric: HistoryMetric) {
+private fun HistoryChart(series: HistorySeries, metric: HistoryMetric, retro: Boolean) {
     if (metric.chartStyle == ChartStyle.Bar) {
-        BarHistoryChart(series = series, metric = metric)
+        BarHistoryChart(series = series, metric = metric, retro = retro)
         return
     }
 
+    val chrome = dashboardChrome(retro)
+    val accent = historyAccent(metric.field, metric.color, retro)
     val values = series.points.map { it.value }
     val axis = lineAxis(metric, values)
     val timeTicks = timeTicks(series)
@@ -1204,197 +1576,212 @@ private fun HistoryChart(series: HistorySeries, metric: HistoryMetric) {
 
     Column {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(axis.title, color = CMuted, fontSize = 11.sp)
-            Text("${series.points.size} puncte", color = CMuted, fontSize = 11.sp)
+            Text(axis.title, color = chrome.muted, fontFamily = chrome.font, fontSize = 11.sp)
+            Text("${series.points.size} puncte", color = chrome.muted, fontFamily = chrome.font, fontSize = 11.sp)
         }
         Spacer(Modifier.height(6.dp))
-        Canvas(
+        Box(
             Modifier
                 .fillMaxWidth()
                 .height(190.dp)
+                .shadow(if (retro) 7.dp else 0.dp, RoundedCornerShape(14.dp), clip = false)
                 .clip(RoundedCornerShape(14.dp))
-                .background(CBg)
-                .border(1.dp, CLine, RoundedCornerShape(14.dp))
-                .padding(10.dp)
+                .background(chrome.background)
+                .border(1.dp, chrome.line, RoundedCornerShape(14.dp))
         ) {
-            val leftPad = 38f * density
-            val rightPad = 7f * density
-            val topPad = 8f * density
-            val bottomPad = 24f * density
-            val plotLeft = leftPad
-            val plotRight = size.width - rightPad
-            val plotTop = topPad
-            val plotBottom = size.height - bottomPad
-            val plotWidth = (plotRight - plotLeft).coerceAtLeast(1f)
-            val plotHeight = (plotBottom - plotTop).coerceAtLeast(1f)
-            val firstMs = pointTimes.firstOrNull()
-            val lastMs = pointTimes.lastOrNull()
+            Canvas(Modifier.matchParentSize().padding(10.dp)) {
+                val leftPad = 46f * density
+                val rightPad = 7f * density
+                val topPad = 16f * density
+                val bottomPad = 24f * density
+                val plotLeft = leftPad
+                val plotRight = size.width - rightPad
+                val plotTop = topPad
+                val plotBottom = size.height - bottomPad
+                val plotWidth = (plotRight - plotLeft).coerceAtLeast(1f)
+                val plotHeight = (plotBottom - plotTop).coerceAtLeast(1f)
+                val firstMs = pointTimes.firstOrNull()
+                val lastMs = pointTimes.lastOrNull()
 
-            val yPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = CMuted.toArgb()
-                textSize = 10f * density
-                textAlign = Paint.Align.LEFT
-            }
-            val xPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = CMuted.toArgb()
-                textSize = 10f * density
-                textAlign = Paint.Align.CENTER
-            }
-
-            fun yFor(value: Double): Float {
-                val normalized = ((value - axis.min) / (axis.max - axis.min)).toFloat()
-                return plotBottom - normalized.coerceIn(0f, 1f) * plotHeight
-            }
-
-            fun xFor(index: Int): Float {
-                val time = pointTimes.getOrNull(index)
-                if (time != null && firstMs != null && lastMs != null && lastMs > firstMs) {
-                    val normalized = ((time - firstMs).toDouble() / (lastMs - firstMs).toDouble()).toFloat()
-                    return plotLeft + normalized.coerceIn(0f, 1f) * plotWidth
+                val yPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = chrome.muted.toArgb()
+                    textSize = 10f * density
+                    textAlign = Paint.Align.LEFT
                 }
-                return if (series.points.size <= 1) {
-                    plotLeft + plotWidth / 2f
-                } else {
-                    plotLeft + plotWidth * index / series.points.lastIndex.toFloat()
+                val xPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = chrome.muted.toArgb()
+                    textSize = 10f * density
+                    textAlign = Paint.Align.CENTER
                 }
-            }
 
-            axis.gridValues.forEach { value ->
-                val y = yFor(value)
-                drawLine(
-                    color = CLine.copy(alpha = 0.55f),
-                    start = Offset(plotLeft, y),
-                    end = Offset(plotRight, y),
-                    strokeWidth = 1.2f
-                )
-                drawContext.canvas.nativeCanvas.drawText(
-                    formatAxisValue(value, metric.unit),
-                    2f * density,
-                    y - 4f,
-                    yPaint
-                )
-            }
+                fun yFor(value: Double): Float {
+                    val normalized = ((value - axis.min) / (axis.max - axis.min)).toFloat()
+                    return plotBottom - normalized.coerceIn(0f, 1f) * plotHeight
+                }
 
-            if (firstMs != null && lastMs != null && lastMs > firstMs) {
-                timeTicks.forEach { tick ->
-                    val normalized = ((tick.timeMs - firstMs).toDouble() / (lastMs - firstMs).toDouble()).toFloat()
-                    val x = plotLeft + normalized.coerceIn(0f, 1f) * plotWidth
+                fun xFor(index: Int): Float {
+                    val time = pointTimes.getOrNull(index)
+                    if (time != null && firstMs != null && lastMs != null && lastMs > firstMs) {
+                        val normalized = ((time - firstMs).toDouble() / (lastMs - firstMs).toDouble()).toFloat()
+                        return plotLeft + normalized.coerceIn(0f, 1f) * plotWidth
+                    }
+                    return if (series.points.size <= 1) {
+                        plotLeft + plotWidth / 2f
+                    } else {
+                        plotLeft + plotWidth * index / series.points.lastIndex.toFloat()
+                    }
+                }
+
+                axis.gridValues.forEach { value ->
+                    val y = yFor(value)
                     drawLine(
-                        color = CLine.copy(alpha = 0.24f),
-                        start = Offset(x, plotTop),
-                        end = Offset(x, plotBottom),
-                        strokeWidth = 1f
-                    )
-                    drawContext.canvas.nativeCanvas.drawText(
-                        tick.label,
-                        x,
-                        size.height - 5f * density,
-                        xPaint
-                    )
-                }
-            }
-
-            metric.thresholds.forEach { threshold ->
-                if (threshold.value in axis.min..axis.max) {
-                    val y = yFor(threshold.value)
-                    drawLine(
-                        color = threshold.color.copy(alpha = 0.70f),
+                        color = chrome.line.copy(alpha = 0.55f),
                         start = Offset(plotLeft, y),
                         end = Offset(plotRight, y),
-                        strokeWidth = 2.5f,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
+                        strokeWidth = 1.2f
+                    )
+                    drawContext.canvas.nativeCanvas.drawText(
+                        formatAxisValue(value, metric.unit),
+                        17f * density,
+                        y - 4f,
+                        yPaint
+                    )
+                }
+
+                if (firstMs != null && lastMs != null && lastMs > firstMs) {
+                    timeTicks.forEach { tick ->
+                        val normalized = ((tick.timeMs - firstMs).toDouble() / (lastMs - firstMs).toDouble()).toFloat()
+                        val x = plotLeft + normalized.coerceIn(0f, 1f) * plotWidth
+                        drawLine(
+                            color = chrome.line.copy(alpha = 0.24f),
+                            start = Offset(x, plotTop),
+                            end = Offset(x, plotBottom),
+                            strokeWidth = 1f
+                        )
+                        drawContext.canvas.nativeCanvas.drawText(
+                            tick.label,
+                            x,
+                            size.height - 5f * density,
+                            xPaint
+                        )
+                    }
+                }
+
+                metric.thresholds.forEach { threshold ->
+                    if (threshold.value in axis.min..axis.max) {
+                        val y = yFor(threshold.value)
+                        drawLine(
+                            color = (if (retro) RetroRed else threshold.color).copy(alpha = 0.70f),
+                            start = Offset(plotLeft, y),
+                            end = Offset(plotRight, y),
+                            strokeWidth = 2.5f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
+                        )
+                    }
+                }
+
+                if (series.points.size == 1) {
+                    drawCircle(accent, radius = 5f, center = Offset(plotLeft + plotWidth / 2f, yFor(values.first())))
+                } else {
+                    val path = Path()
+                    series.points.forEachIndexed { index, point ->
+                        val x = xFor(index)
+                        val y = yFor(point.value)
+                        if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                    }
+                    drawPath(
+                        path = path,
+                        color = accent,
+                        style = Stroke(width = 4f, cap = StrokeCap.Round)
+                    )
+                    val last = series.points.last()
+                    drawCircle(
+                        color = accent,
+                        radius = 5f,
+                        center = Offset(xFor(series.points.lastIndex), yFor(last.value))
                     )
                 }
             }
-
-            if (series.points.size == 1) {
-                drawCircle(metric.color, radius = 5f, center = Offset(plotLeft + plotWidth / 2f, yFor(values.first())))
-            } else {
-                val path = Path()
-                series.points.forEachIndexed { index, point ->
-                    val x = xFor(index)
-                    val y = yFor(point.value)
-                    if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                }
-                drawPath(
-                    path = path,
-                    color = metric.color,
-                    style = Stroke(width = 4f, cap = StrokeCap.Round)
-                )
-                val last = series.points.last()
-                drawCircle(
-                    color = metric.color,
-                    radius = 5f,
-                    center = Offset(xFor(series.points.lastIndex), yFor(last.value))
-                )
+            if (retro) {
+                RetroReliefEdges(Modifier.matchParentSize(), RoundedCornerShape(14.dp), subtle = true)
+                RetroCornerScrews(Modifier.matchParentSize())
             }
         }
     }
 }
 
 @Composable
-private fun BarHistoryChart(series: HistorySeries, metric: HistoryMetric) {
+private fun BarHistoryChart(series: HistorySeries, metric: HistoryMetric, retro: Boolean) {
+    val chrome = dashboardChrome(retro)
+    val accent = historyAccent(metric.field, metric.color, retro)
     val values = series.points.map { it.value.coerceAtLeast(0.0) }
     val maxValue = max(values.maxOrNull() ?: 1.0, 1.0)
 
     Column {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatHistoryValue(maxValue, metric.unit), color = CMuted, fontSize = 11.sp)
-            Text("${series.points.size} zile", color = CMuted, fontSize = 11.sp)
+            Text(formatHistoryValue(maxValue, metric.unit), color = chrome.muted, fontFamily = chrome.font, fontSize = 11.sp)
+            Text("${series.points.size} zile", color = chrome.muted, fontFamily = chrome.font, fontSize = 11.sp)
         }
         Spacer(Modifier.height(6.dp))
-        Canvas(
+        Box(
             Modifier
                 .fillMaxWidth()
                 .height(190.dp)
+                .shadow(if (retro) 7.dp else 0.dp, RoundedCornerShape(14.dp), clip = false)
                 .clip(RoundedCornerShape(14.dp))
-                .background(CBg)
-                .border(1.dp, CLine, RoundedCornerShape(14.dp))
-                .padding(10.dp)
+                .background(chrome.background)
+                .border(1.dp, chrome.line, RoundedCornerShape(14.dp))
         ) {
-            val width = size.width
-            val height = size.height
-            for (i in 0..3) {
-                val y = height * i / 3f
-                drawLine(
-                    color = CLine.copy(alpha = 0.55f),
-                    start = Offset(0f, y),
-                    end = Offset(width, y),
-                    strokeWidth = 1.2f
-                )
-            }
-            if (values.isNotEmpty()) {
-                val slot = width / values.size
-                val barWidth = (slot * 0.62f).coerceAtLeast(3f)
-                values.forEachIndexed { index, value ->
-                    val x = slot * index + slot / 2f
-                    val y = height - ((value / maxValue).toFloat().coerceIn(0f, 1f) * height)
+            Canvas(Modifier.matchParentSize().padding(10.dp)) {
+                val width = size.width
+                val height = size.height
+                for (i in 0..3) {
+                    val y = height * i / 3f
                     drawLine(
-                        color = metric.color,
-                        start = Offset(x, height),
-                        end = Offset(x, y),
-                        strokeWidth = barWidth,
-                        cap = StrokeCap.Butt
+                        color = chrome.line.copy(alpha = 0.55f),
+                        start = Offset(0f, y),
+                        end = Offset(width, y),
+                        strokeWidth = 1.2f
                     )
                 }
+                if (values.isNotEmpty()) {
+                    val slot = width / values.size
+                    val barWidth = (slot * 0.62f).coerceAtLeast(3f)
+                    values.forEachIndexed { index, value ->
+                        val x = slot * index + slot / 2f
+                        val y = height - ((value / maxValue).toFloat().coerceIn(0f, 1f) * height)
+                        drawLine(
+                            color = accent,
+                            start = Offset(x, height),
+                            end = Offset(x, y),
+                            strokeWidth = barWidth,
+                            cap = StrokeCap.Butt
+                        )
+                    }
+                }
+            }
+            if (retro) {
+                RetroReliefEdges(Modifier.matchParentSize(), RoundedCornerShape(14.dp), subtle = true)
+                RetroCornerScrews(Modifier.matchParentSize())
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text("0 ${metric.unit}", color = CMuted, fontSize = 11.sp)
+        Text("0 ${metric.unit}", color = chrome.muted, fontFamily = chrome.font, fontSize = 11.sp)
     }
 }
 
 @Composable
-private fun HistoryStatsGrid(stats: HistoryStats, metric: HistoryMetric) {
+private fun HistoryStatsGrid(stats: HistoryStats, metric: HistoryMetric, retro: Boolean) {
+    val accent = historyAccent(metric.field, metric.color, retro)
     if (metric.chartStyle == ChartStyle.Bar) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatTile(Modifier.weight(1f), "Total", formatHistoryValue(stats.sum, metric.unit), metric.color)
-                StatTile(Modifier.weight(1f), "Medie/zi", formatHistoryValue(stats.avg, metric.unit), metric.color)
+                StatTile(Modifier.weight(1f), "Total", formatHistoryValue(stats.sum, metric.unit), accent, retro)
+                StatTile(Modifier.weight(1f), "Medie/zi", formatHistoryValue(stats.avg, metric.unit), accent, retro)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatTile(Modifier.weight(1f), "Max zi", formatHistoryValue(stats.max, metric.unit), metric.color)
-                StatTile(Modifier.weight(1f), "Ultima zi", formatHistoryValue(stats.last, metric.unit), metric.color)
+                StatTile(Modifier.weight(1f), "Max zi", formatHistoryValue(stats.max, metric.unit), accent, retro)
+                StatTile(Modifier.weight(1f), "Ultima zi", formatHistoryValue(stats.last, metric.unit), accent, retro)
             }
         }
         return
@@ -1403,27 +1790,36 @@ private fun HistoryStatsGrid(stats: HistoryStats, metric: HistoryMetric) {
     val maxLabel = if (metric.unit == "W") "Varf" else "Max"
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatTile(Modifier.weight(1f), "Ultim", formatHistoryValue(stats.last, metric.unit), metric.color)
-            StatTile(Modifier.weight(1f), "Min", formatHistoryValue(stats.min, metric.unit), metric.color)
+            StatTile(Modifier.weight(1f), "Ultim", formatHistoryValue(stats.last, metric.unit), accent, retro)
+            StatTile(Modifier.weight(1f), "Min", formatHistoryValue(stats.min, metric.unit), accent, retro)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatTile(Modifier.weight(1f), "Medie", formatHistoryValue(stats.avg, metric.unit), metric.color)
-            StatTile(Modifier.weight(1f), maxLabel, formatHistoryValue(stats.max, metric.unit), metric.color)
+            StatTile(Modifier.weight(1f), "Medie", formatHistoryValue(stats.avg, metric.unit), accent, retro)
+            StatTile(Modifier.weight(1f), maxLabel, formatHistoryValue(stats.max, metric.unit), accent, retro)
         }
     }
 }
 
 @Composable
-private fun StatTile(modifier: Modifier, label: String, value: String, color: Color) {
-    Column(
+private fun StatTile(modifier: Modifier, label: String, value: String, color: Color, retro: Boolean) {
+    val chrome = dashboardChrome(retro)
+    Box(
         modifier
+            .shadow(if (retro) 6.dp else 0.dp, RoundedCornerShape(12.dp), clip = false)
             .clip(RoundedCornerShape(12.dp))
-            .background(CPanelSoft)
-            .padding(12.dp)
-    ) {
-        Text(label, color = CMuted, fontSize = 12.sp)
-        Spacer(Modifier.height(4.dp))
-        Text(value, color = color, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            .background(chrome.raised)
+            .then(
+                if (retro) Modifier.border(1.dp, RetroOlive.copy(alpha = 0.52f), RoundedCornerShape(12.dp))
+                else Modifier
+            )
+        ) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+            Text(label, color = chrome.muted, fontFamily = chrome.font, fontSize = 12.sp)
+            Spacer(Modifier.height(4.dp))
+            Text(value, color = color, fontFamily = chrome.font, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+        if (retro) RetroReliefEdges(Modifier.matchParentSize(), RoundedCornerShape(12.dp), subtle = true)
+        if (retro) RetroCornerScrews(Modifier.matchParentSize())
     }
 }
 

@@ -50,6 +50,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.cos
@@ -57,24 +60,34 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-private val RetroSage = Color(0xFFACCC78)
-private val RetroOlive = Color(0xFF81795A)
-private val RetroYellow = Color(0xFFF1E169)
-private val RetroBackground = Color(0xFF14150F)
-private val RetroPanel = Color(0xFF202117)
-private val RetroPanelRaised = Color(0xFF29291C)
-private val RetroText = Color(0xFFE8E3CA)
-private val RetroMuted = Color(0xFFA9A184)
-private val RetroLine = Color(0xFF5E5A43)
+internal val RetroSage = Color(0xFFACCC78)
+internal val RetroOlive = Color(0xFF81795A)
+internal val RetroYellow = Color(0xFFF1E169)
+internal val RetroRed = Color(0xFFD66B5D)
+internal val RetroBackground = Color(0xFF14150F)
+internal val RetroPanel = Color(0xFF202117)
+internal val RetroPanelRaised = Color(0xFF29291C)
+internal val RetroText = Color(0xFFE8E3CA)
+internal val RetroMuted = Color(0xFFA9A184)
+internal val RetroLine = Color(0xFF5E5A43)
 private const val RETRO_DEAD = 50.0
 
+internal enum class RetroTab(val label: String, val shortLabel: String) {
+    DASHBOARD("TABLOU", "ACUM"),
+    ENERGY("ENERGIE", "kWh"),
+    SYSTEM("SISTEM", "SYS"),
+    SETTINGS("SETARI", "CFG")
+}
+
 @Composable
-fun RetroDashboard(
+internal fun RetroDashboard(
     data: SolarData?,
     alarmThresholdW: Int,
-    onHistoryClick: () -> Unit,
-    onHistoryFieldClick: (String) -> Unit,
-    onSettingsClick: () -> Unit
+    selectedTab: RetroTab,
+    onTabSelected: (RetroTab) -> Unit,
+    onEnergyFieldClick: (String) -> Unit,
+    energyContent: @Composable () -> Unit,
+    settingsContent: @Composable () -> Unit
 ) {
     Box(
         Modifier
@@ -83,35 +96,74 @@ fun RetroDashboard(
     ) {
         RetroBackdrop(Modifier.fillMaxSize())
         Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 14.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            Modifier.fillMaxSize()
         ) {
-            RetroHeader(
-                onHistoryClick = onHistoryClick,
-                onSettingsClick = onSettingsClick
-            )
-            RetroLivePanel(
-                data = data,
-                alarmThresholdW = alarmThresholdW,
-                onHouseHistoryClick = { onHistoryFieldClick("output_power") },
-                onPvHistoryClick = { onHistoryFieldClick("pv_power") }
-            )
-            RetroFlowPanel(data = data)
-            RetroDailyPanel(data = data, onHistoryFieldClick = onHistoryFieldClick)
-            RetroSystemPanel(data = data, onHistoryFieldClick = onHistoryFieldClick)
-            Text(
-                "GROWATT SPF 6000 ES PLUS  ·  READ ONLY",
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                color = RetroOlive,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 9.sp,
-                letterSpacing = 1.sp,
-                textAlign = TextAlign.Center
-            )
+            Box(Modifier.weight(1f)) {
+                when (selectedTab) {
+                    RetroTab.DASHBOARD -> RetroOverviewPage(
+                        data = data,
+                        alarmThresholdW = alarmThresholdW,
+                        onEnergyFieldClick = onEnergyFieldClick
+                    )
+                    RetroTab.ENERGY -> energyContent()
+                    RetroTab.SYSTEM -> RetroSystemPage(
+                        data = data,
+                        onEnergyFieldClick = onEnergyFieldClick
+                    )
+                    RetroTab.SETTINGS -> settingsContent()
+                }
+            }
+            RetroBottomNavigation(selectedTab = selectedTab, onTabSelected = onTabSelected)
         }
+    }
+}
+
+@Composable
+private fun RetroOverviewPage(
+    data: SolarData?,
+    alarmThresholdW: Int,
+    onEnergyFieldClick: (String) -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        RetroPageHeader(
+            title = "SOLAR MONITOR",
+            subtitle = if (data == null) "ASTEPT DATE" else "SISTEM IN FUNCTIUNE",
+            statusColor = if (data == null) RetroOlive else RetroSage
+        )
+        RetroLivePanel(
+            data = data,
+            alarmThresholdW = alarmThresholdW,
+            onHouseHistoryClick = { onEnergyFieldClick("output_power") },
+            onPvHistoryClick = { onEnergyFieldClick("pv_power") }
+        )
+        RetroFlowPanel(data = data)
+        RetroReadOnlyFooter()
+    }
+}
+
+@Composable
+private fun RetroSystemPage(data: SolarData?, onEnergyFieldClick: (String) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        RetroPageHeader(
+            title = "SISTEM",
+            subtitle = if (data == null) "TELEMETRIE INDISPONIBILA" else "TELEMETRIE ACTIVA",
+            statusColor = if (data == null) RetroRed else RetroSage
+        )
+        RetroInverterStatusPanel(data)
+        RetroSystemPanel(data = data, onHistoryFieldClick = onEnergyFieldClick)
+        RetroReadOnlyFooter()
     }
 }
 
@@ -133,15 +185,15 @@ private fun RetroBackdrop(modifier: Modifier) {
 }
 
 @Composable
-private fun RetroHeader(onHistoryClick: () -> Unit, onSettingsClick: () -> Unit) {
+internal fun RetroPageHeader(title: String, subtitle: String, statusColor: Color = RetroSage) {
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                "SOLAR MONITOR",
+                title,
                 color = RetroYellow,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 22.sp,
@@ -150,56 +202,180 @@ private fun RetroHeader(onHistoryClick: () -> Unit, onSettingsClick: () -> Unit)
                 maxLines = 1
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(7.dp).clip(CircleShape).background(RetroSage))
+                Box(Modifier.size(7.dp).clip(CircleShape).background(statusColor))
                 Spacer(Modifier.width(7.dp))
                 Text(
-                    "SISTEM IN FUNCTIUNE",
-                    color = RetroSage,
+                    subtitle,
+                    color = statusColor,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 9.sp,
                     letterSpacing = 0.8.sp
                 )
             }
         }
-        RetroHeaderButton("ISTORIC", onHistoryClick)
-        Surface(
-            modifier = Modifier
-                .size(40.dp)
-                .semantics { contentDescription = "Setari" }
-                .clickable(onClick = onSettingsClick),
-            shape = CircleShape,
-            color = RetroPanel,
-            border = BorderStroke(1.dp, RetroOlive.copy(alpha = 0.65f))
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text("⚙", color = RetroYellow, fontSize = 18.sp)
+    }
+}
+
+@Composable
+private fun RetroBottomNavigation(
+    selectedTab: RetroTab,
+    onTabSelected: (RetroTab) -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = RetroPanel,
+        border = BorderStroke(1.dp, RetroOlive.copy(alpha = 0.72f)),
+        shadowElevation = 12.dp
+    ) {
+        Box {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                RetroTab.entries.forEach { tab ->
+                    RetroNavigationItem(
+                        modifier = Modifier.weight(1f),
+                        tab = tab,
+                        selected = tab == selectedTab,
+                        onClick = { onTabSelected(tab) }
+                    )
+                }
+            }
+            RetroReliefEdges(Modifier.matchParentSize(), RoundedCornerShape(16.dp))
+            RetroCornerScrews(Modifier.matchParentSize())
+        }
+    }
+}
+
+@Composable
+private fun RetroNavigationItem(
+    modifier: Modifier,
+    tab: RetroTab,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier
+            .height(54.dp)
+            .semantics {
+                contentDescription = "Tab ${tab.label}${if (selected) ", selectat" else ""}"
+            }
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(9.dp),
+        color = if (selected) RetroPanelRaised else RetroPanel.copy(alpha = 0.78f),
+        border = BorderStroke(
+            1.dp,
+            if (selected) RetroYellow.copy(alpha = 0.58f) else RetroLine.copy(alpha = 0.60f)
+        ),
+        shadowElevation = if (selected) 6.dp else 2.dp
+    ) {
+        Box {
+            Column(
+                Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    tab.shortLabel,
+                    color = if (selected) RetroYellow else RetroOlive,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    tab.label,
+                    color = if (selected) RetroYellow else RetroMuted,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = if (tab == RetroTab.SETTINGS) 8.sp else 9.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1
+                )
+            }
+            RetroReliefEdges(Modifier.matchParentSize(), RoundedCornerShape(9.dp), subtle = true)
+        }
+    }
+}
+
+@Composable
+private fun RetroInverterStatusPanel(data: SolarData?) {
+    RetroPanelSurface {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background((if (data == null) RetroRed else RetroSage).copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(if (data == null) RetroRed else RetroSage)
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (data == null) "FARA DATE" else "INVERTOR CONECTAT",
+                    color = if (data == null) RetroRed else RetroSage,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "GROWATT SPF 6000 ES PLUS",
+                    color = RetroMuted,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    data?.let { "COD ${it.status.roundToInt()}" } ?: "COD —",
+                    color = RetroYellow,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    retroTimestamp(data?.timestamp),
+                    color = RetroOlive,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 8.sp
+                )
             }
         }
     }
 }
 
 @Composable
-private fun RetroHeaderButton(label: String, onClick: () -> Unit) {
-    Surface(
-        modifier = Modifier
-            .height(40.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(8.dp),
-        color = RetroPanel,
-        border = BorderStroke(1.dp, RetroOlive.copy(alpha = 0.75f))
-    ) {
-        Box(Modifier.padding(horizontal = 11.dp), contentAlignment = Alignment.Center) {
-            Text(
-                label,
-                color = RetroYellow,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.8.sp
-            )
-        }
-    }
+private fun RetroReadOnlyFooter() {
+    Text(
+        "GROWATT SPF 6000 ES PLUS  ·  READ ONLY",
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        color = RetroOlive,
+        fontFamily = FontFamily.Monospace,
+        fontSize = 9.sp,
+        letterSpacing = 1.sp,
+        textAlign = TextAlign.Center
+    )
+}
+
+private fun retroTimestamp(value: String?): String {
+    if (value.isNullOrBlank()) return "READ ONLY"
+    return runCatching {
+        OffsetDateTime.parse(value)
+            .atZoneSameInstant(ZoneId.of("Europe/Bucharest"))
+            .format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+    }.getOrDefault("SYNC API")
 }
 
 @Composable
@@ -282,6 +458,7 @@ private fun RetroLivePanel(
 @Composable
 private fun AnalogHouseGauge(valueW: Double?, alarmThresholdW: Int, modifier: Modifier = Modifier) {
     val target = (valueW ?: 0.0).toFloat().coerceIn(0f, 7_000f)
+    val loadColor = retroLoadColor(valueW ?: 0.0, alarmThresholdW)
     val animatedValue by animateFloatAsState(
         targetValue = target,
         animationSpec = tween(durationMillis = 700),
@@ -308,7 +485,7 @@ private fun AnalogHouseGauge(valueW: Double?, alarmThresholdW: Int, modifier: Mo
                 style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round)
             )
             drawArc(
-                color = RetroYellow.copy(alpha = 0.22f),
+                color = RetroRed.copy(alpha = 0.20f),
                 startAngle = startAngle + sweep * thresholdFraction,
                 sweepAngle = sweep * (1f - thresholdFraction),
                 useCenter = false,
@@ -317,7 +494,7 @@ private fun AnalogHouseGauge(valueW: Double?, alarmThresholdW: Int, modifier: Mo
                 style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round)
             )
             drawArc(
-                color = if (fraction >= thresholdFraction) RetroYellow else RetroSage,
+                color = loadColor,
                 startAngle = startAngle,
                 sweepAngle = sweep * fraction,
                 useCenter = false,
@@ -347,7 +524,11 @@ private fun AnalogHouseGauge(valueW: Double?, alarmThresholdW: Int, modifier: Mo
                 val from = point(angle, radius - if (major) 15.dp.toPx() else 10.dp.toPx())
                 val to = point(angle, radius + 1.dp.toPx())
                 drawLine(
-                    color = if (tickFraction >= thresholdFraction) RetroYellow else RetroSage,
+                    color = when {
+                        tickFraction >= thresholdFraction -> RetroRed
+                        tickFraction >= thresholdFraction * 0.8f -> RetroYellow
+                        else -> RetroSage
+                    },
                     start = from,
                     end = to,
                     strokeWidth = if (major) 2.dp.toPx() else 1.dp.toPx(),
@@ -367,14 +548,14 @@ private fun AnalogHouseGauge(valueW: Double?, alarmThresholdW: Int, modifier: Mo
             val needleAngle = startAngle + sweep * fraction
             val needleEnd = point(needleAngle, radius - 31.dp.toPx())
             drawLine(
-                color = RetroYellow,
+                color = loadColor,
                 start = center,
                 end = needleEnd,
                 strokeWidth = 3.dp.toPx(),
                 cap = StrokeCap.Round
             )
             drawCircle(RetroBackground, radius = 9.dp.toPx(), center = center)
-            drawCircle(RetroYellow, radius = 5.dp.toPx(), center = center)
+            drawCircle(loadColor, radius = 5.dp.toPx(), center = center)
             drawCircle(RetroBackground, radius = 2.dp.toPx(), center = center)
         }
 
@@ -393,7 +574,7 @@ private fun AnalogHouseGauge(valueW: Double?, alarmThresholdW: Int, modifier: Mo
         ) {
             SevenSegmentValue(
                 value = retroWhole(valueW),
-                color = if ((valueW ?: 0.0) >= alarmThresholdW) RetroYellow else RetroSage,
+                color = loadColor,
                 modifier = Modifier.width(112.dp).height(46.dp)
             )
             Spacer(Modifier.width(7.dp))
@@ -452,7 +633,7 @@ private fun RetroFlowPanel(data: SolarData?) {
                 connection(pvPoint, housePoint, pv > RETRO_DEAD, RetroSage)
                 connection(pvPoint, batteryPoint, charging, RetroSage)
                 connection(batteryPoint, housePoint, discharging, RetroYellow)
-                connection(gridPoint, housePoint, grid > RETRO_DEAD, RetroYellow)
+                connection(gridPoint, housePoint, grid > RETRO_DEAD, RetroRed)
             }
 
             RetroFlowNode(
@@ -474,14 +655,14 @@ private fun RetroFlowPanel(data: SolarData?) {
                 symbol = "CASA",
                 label = "CASA",
                 value = "${retroWhole(data?.house)} W",
-                color = RetroSage
+                color = RetroText
             )
             RetroFlowNode(
                 modifier = Modifier.align(Alignment.BottomEnd).width(86.dp),
                 symbol = "AC",
                 label = "RETEA",
                 value = "${retroWhole(if (data == null) null else grid)} W",
-                color = RetroOlive
+                color = RetroRed
             )
         }
     }
@@ -526,7 +707,7 @@ private fun RetroFlowNode(
 }
 
 @Composable
-private fun RetroDailyPanel(data: SolarData?, onHistoryFieldClick: (String) -> Unit) {
+internal fun RetroDailyPanel(data: SolarData?, onHistoryFieldClick: (String) -> Unit) {
     RetroPanelSurface {
         RetroSectionLabel("ASTAZI")
         Spacer(Modifier.height(10.dp))
@@ -601,8 +782,8 @@ private fun RetroSystemPanel(data: SolarData?, onHistoryFieldClick: (String) -> 
                 Modifier.weight(1f),
                 "BATERIE",
                 data?.let { String.format(Locale.US, "%.2f V", it.batteryVoltage) } ?: "—",
-                data?.let { "${retroSigned(it.batteryDisplay)} W" } ?: "ASTEPT",
-                RetroSage,
+                data?.let { "SOC ${it.batterySoc.roundToInt()}% · ${retroSigned(it.batteryDisplay)} W" } ?: "ASTEPT",
+                RetroYellow,
                 onClick = { onHistoryFieldClick("battery_voltage") }
             )
             RetroStatusDivider()
@@ -611,7 +792,7 @@ private fun RetroSystemPanel(data: SolarData?, onHistoryFieldClick: (String) -> 
                 "RETEA",
                 data?.let { String.format(Locale.US, "%.1f V", it.gridVoltage) } ?: "—",
                 data?.let { "IMPORT ${((it.gridImport + it.gridCharge).roundToInt())} W" } ?: "ASTEPT",
-                RetroYellow
+                RetroRed
             )
         }
         RetroDivider()
@@ -688,15 +869,75 @@ private fun RetroStatusDivider() {
 }
 
 @Composable
-private fun RetroPanelSurface(content: @Composable ColumnScope.() -> Unit) {
+internal fun RetroPanelSurface(content: @Composable ColumnScope.() -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(17.dp),
         color = RetroPanel,
         border = BorderStroke(1.dp, RetroOlive.copy(alpha = 0.62f)),
-        shadowElevation = 2.dp
+        shadowElevation = 8.dp
     ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 13.dp), content = content)
+        Box {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 15.dp), content = content)
+            RetroReliefEdges(Modifier.matchParentSize(), RoundedCornerShape(17.dp))
+            RetroCornerScrews(Modifier.matchParentSize())
+        }
+    }
+}
+
+@Composable
+internal fun RetroReliefEdges(
+    modifier: Modifier = Modifier,
+    shape: RoundedCornerShape = RoundedCornerShape(0.dp),
+    subtle: Boolean = false
+) {
+    Canvas(modifier.clip(shape)) {
+        val inset = if (subtle) 3.dp.toPx() else 5.dp.toPx()
+        val stroke = if (subtle) 0.7.dp.toPx() else 1.dp.toPx()
+        val light = RetroText.copy(alpha = if (subtle) 0.07f else 0.10f)
+        val dark = RetroBackground.copy(alpha = if (subtle) 0.62f else 0.78f)
+        drawLine(light, Offset(inset, inset), Offset(size.width - inset, inset), stroke)
+        drawLine(light, Offset(inset, inset), Offset(inset, size.height - inset), stroke)
+        drawLine(
+            dark,
+            Offset(inset, size.height - inset),
+            Offset(size.width - inset, size.height - inset),
+            stroke
+        )
+        drawLine(
+            dark,
+            Offset(size.width - inset, inset),
+            Offset(size.width - inset, size.height - inset),
+            stroke
+        )
+    }
+}
+
+@Composable
+internal fun RetroCornerScrews(modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val inset = 12.dp.toPx()
+        val radius = 3.2.dp.toPx()
+        val slot = 1.8.dp.toPx()
+        val centers = listOf(
+            Offset(inset, inset),
+            Offset(size.width - inset, inset),
+            Offset(inset, size.height - inset),
+            Offset(size.width - inset, size.height - inset)
+        )
+        centers.forEachIndexed { index, center ->
+            drawCircle(RetroBackground.copy(alpha = 0.92f), radius = radius + 1.dp.toPx(), center = center)
+            drawCircle(RetroOlive, radius = radius, center = center)
+            drawCircle(RetroText.copy(alpha = 0.16f), radius = radius * 0.52f, center = center)
+            val direction = if (index % 2 == 0) 1f else -1f
+            drawLine(
+                color = RetroBackground.copy(alpha = 0.88f),
+                start = Offset(center.x - slot, center.y - slot * direction),
+                end = Offset(center.x + slot, center.y + slot * direction),
+                strokeWidth = 0.9.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+        }
     }
 }
 
@@ -833,6 +1074,12 @@ private fun sourceRetroLabel(data: SolarData): String = when (data.houseSource.r
 private fun sourceRetroColor(data: SolarData?): Color = when (data?.let(::sourceRetroLabel)) {
     "SOLAR" -> RetroSage
     "BATERIE" -> RetroYellow
-    "RETEA" -> RetroYellow
+    "RETEA" -> RetroRed
     else -> RetroOlive
+}
+
+private fun retroLoadColor(valueW: Double, alarmThresholdW: Int): Color = when {
+    valueW >= alarmThresholdW -> RetroRed
+    valueW >= alarmThresholdW * 0.8 -> RetroYellow
+    else -> RetroSage
 }

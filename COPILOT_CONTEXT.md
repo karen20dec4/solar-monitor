@@ -509,3 +509,47 @@ collectorul, API-ul sau regula READ-ONLY.
   `android/build/emulator-artifacts/release-v2.0-signed.png`.
 - `testDebugUnitTest` (fără teste definite), `lintDebug`, `lintVitalRelease`, build R8 și verificarea vizuală
   au trecut. Nu este necesar rebuild pentru API/server; modificările sunt exclusiv Android/UI și documentație.
+
+### 13.22 Retro extins pe ecranele adiacente (release 2.01, 2026-07-20)
+
+- Când este selectat `RETRO`, meniul Istoric, paginile Consum/PV/Baterie/Energie și Setările folosesc acum
+  aceeași paletă olive/sage/yellow, fundal industrial și font monospace; tema albastră rămâne numai în `SIMPLE`.
+- Panourile mari Retro, graficele și cardurile de statistici au patru șuruburi discrete desenate nativ în
+  Compose Canvas, inspirate din `retro-theme.png`; nu sunt imagini raster și se scalează corect.
+- Cod semantic păstrat și clarificat: verde = solar/normal, galben = baterie/atenție, roșu = rețea/alarmă;
+  casa este neutră. Cadranul consumului trece verde → galben la 80% din prag → roșu peste prag.
+- Controalele Material din Settings (sheet handle, switch și slider) primesc culorile Retro, fără urme albastre.
+- Verificat pe emulator Android 14: dashboard, Istoric, Energie produsă cu date reale, Setări, schimbare
+  Simple→Retro, persistență `RETRO`, build debug și lint OK, fără crash-uri. Capturi în directorul ignorat Git:
+  `retro-screws-dashboard.png`, `retro-history-menu.png`, `retro-energy-produced.png`, `retro-settings-final.png`.
+- Inclus în release-ul Android 2.01.
+
+### 13.23 Navigație Retro în patru taburi (release 2.01, 2026-07-20)
+
+- Tema `RETRO` are acum o bară inferioară fixă, desenată ca un singur panou metalic: `TABLOU`, `ENERGIE`,
+  `SISTEM`, `SETARI`. Nu există și nu se va adăuga `CONTROL`; aplicația rămâne intenționat READ-ONLY.
+- `TABLOU` conține numai consumul live și fluxul energetic. `ENERGIE` grupează totalurile zilei, selectorul
+  celor cinci metrici și graficele. `SISTEM` grupează bateria, rețeaua, temperatura, pierderile, codul brut
+  și starea conexiunii invertorului. `SETARI` este pagină, nu bottom sheet, în tema Retro.
+- Butonul separat `Istoric` a fost eliminat din Retro. Apăsarea cadranului sau a valorii PV schimbă direct
+  pe `ENERGIE` cu graficul potrivit; valorile zilnice aleg direct graficul produs/consumat.
+- Bara și butoanele active au relief discret: umbră exterioară plus muchie luminoasă sus-stânga și muchie
+  întunecată jos-dreapta. Tabul activ este iluminat subtil cu `#f1e169`. Aceeași logică de relief este
+  aplicată panourilor, graficelor și statisticilor, fără a colora integral contururile.
+- Șuruburile tuturor panourilor au fost mutate cu 3 dp spre interior (inset 9 dp → 12 dp). Sunt desenate
+  prin Compose Canvas și nu interceptează apăsările.
+- Tema `SIMPLE` își păstrează navigația și foile modale existente.
+
+### 13.24 Release Android v2.01 (2026-07-20)
+
+- **versionCode 12 / versionName 2.01**; fișier semnat: `/opt/solar-monitor/SolarMonitor-v2.01.apk`.
+- Dimensiune: **1.018.031 bytes**; SHA-256:
+  `3a6d5dbd1f0794f1c5c5dd44d1e8acd6d616c224a048772ebfa88b443eddfec7`.
+- `aapt` confirmă pachetul `com.rolling7.solar`, minSdk 26, target/compile SDK 34 și versiunea 2.01 (12).
+- `apksigner` confirmă APK Signature Scheme v2 și certificatul SHA-256
+  `b892e453841228510aa4c08f9a164652baa0005638279cc18572dde677d293f6`, identic cu APK-ul 2.0.
+- Upgrade real verificat pe emulator Android 14: instalare APK semnat 2.0 (code 11), urmată de
+  `adb install -r` pentru 2.01 (code 12), lansare cu date live și fără crash. Captură:
+  `android/build/emulator-artifacts/release-v2.01-signed.png`.
+- `assembleDebug`, `lintDebug`, `testDebugUnitTest` (fără teste definite), `lintVitalRelease`, R8 și build-ul
+  release semnat au trecut. Schimbările sunt exclusiv Android/UI și documentație; serverul nu necesită rebuild.
