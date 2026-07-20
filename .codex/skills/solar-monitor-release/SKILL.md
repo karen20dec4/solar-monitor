@@ -26,14 +26,25 @@ Use this skill for Solar Monitor Android release requests. The source of truth f
    - package must be `com.rolling7.solar`;
    - confirm `versionCode` and `versionName` from `aapt dump badging`;
    - record APK path, size, and SHA256.
-5. If repo files changed, stage only intended files, commit, and push.
-6. Report final version, APK path, SHA256, commit hash if any, and whether server rebuild is needed.
+5. After all APK checks pass, send it once through the configured Telegram bot unless the user explicitly
+   asks not to:
+   ```bash
+   scripts/send-android-release-telegram.sh /opt/solar-monitor/SolarMonitor-v<versionName>.apk
+   ```
+   This uses SSH to `root@celestia.go.ro`; the bot token and `ADMIN_CHAT_ID` remain in
+   `/opt/sun-tattva/.env`. First run with `--dry-run` when diagnosing delivery. Confirm the returned
+   filename and file size. A Telegram failure does not invalidate or delete the local APK.
+6. If repo files changed, stage only intended files, commit, and push.
+7. Report final version, local APK path, SHA256, Telegram delivery/message id, commit hash if any, and
+   whether server rebuild is needed.
 
 ## Rules
 
 - A pure APK release build does not require `docker compose up -d --build api`.
 - For API/server/deploy changes, run or remind: `cd /opt/solar-monitor && docker compose up -d --build api`.
 - APKs, build directories, keystores, and `keystore.properties` stay ignored and untracked.
+- Never print, copy locally, or commit the Telegram bot token. Do not modify the dirty Sun Tattva worktree
+  merely to send a Solar Monitor release.
 - The system remains READ-ONLY toward the Growatt inverter.
 
 ## Common Fixes

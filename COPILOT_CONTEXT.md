@@ -553,3 +553,16 @@ collectorul, API-ul sau regula READ-ONLY.
   `android/build/emulator-artifacts/release-v2.01-signed.png`.
 - `assembleDebug`, `lintDebug`, `testDebugUnitTest` (fără teste definite), `lintVitalRelease`, R8 și build-ul
   release semnat au trecut. Schimbările sunt exclusiv Android/UI și documentație; serverul nu necesită rebuild.
+
+### 13.25 Livrare release Android prin Telegram (2026-07-21)
+
+- Release-urile Solar Monitor rămân salvate local în `/opt/solar-monitor/SolarMonitor-v<versiune>.apk` și
+  sunt trimise, după verificare, ca document prin `@sun_tattva_access_bot` către chatul administratorului.
+- Tokenul și `ADMIN_CHAT_ID` rămân exclusiv pe `root@celestia.go.ro`, în `/opt/sun-tattva/.env`; nu sunt
+  copiate pe serverul Solar Monitor, afișate în loguri sau salvate în Git.
+- Scriptul versionat `scripts/send-android-release-telegram.sh` verifică pachetul `com.rolling7.solar`,
+  versiunea, dimensiunea și SHA-256, copiază temporar APK-ul prin SSH, verifică identitatea botului, trimite
+  documentul și șterge copia temporară. `--dry-run` verifică integrarea fără să trimită un mesaj.
+- Skill-ul `solar-monitor-release` cere acum această livrare după ce build-ul, semnătura și upgrade-ul au
+  fost validate. O eroare Telegram nu invalidează și nu șterge APK-ul local.
+- Prima livrare verificată: `SolarMonitor-v2.01.apk`, 1.018.031 bytes, mesaj Telegram ID 45.
