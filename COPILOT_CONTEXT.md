@@ -83,12 +83,16 @@ solar-monitor/
 | 22 | ×0.1 V | tensiune ieșire AC |
 | 23 | ×0.01 Hz | frecvență ieșire |
 | 25 | ×0.1 °C | temperatură invertor |
-| 27 | % | grad de încărcare invertor (load%) |
-| **90** | **×0.1 A (semnat, compl. 2)** | **curent baterie** (+ încărcare / − descărcare) — IDENTIFICAT 2026-05-31 ziua, prin corelație cu PV |
+| 27 | ×0.1 → % | grad de încărcare invertor (load%). ⚠️ registru ×10 → `regs[27]*0.1` (altfel raporta 312% în loc de 31.2%) |
+| 48-49 / 50-51 | ×0.1 kWh (32-bit) | energie PV azi / total |
+| **77-78** | **×0.1 W (32-bit semnat, compl. 2)** | **Bat_Watt = putere baterie (OFICIAL).** În registru: **+ descărcare / − încărcare**; codul îl neagă → câmpul `battery_power` păstrează convenția **+ încărcare / − descărcare** |
+| 83 | ×0.1 A | curent **încărcare** baterie (`battery_charge_current`) |
+| 84 | ×0.1 A | curent **descărcare** baterie (`battery_discharge_current`) |
+| 85-86 / 87-88 | ×0.1 kWh (32-bit) | consum casă azi / total |
 
-⚠️ `REG_COUNT` trebuie să rămână **≥ 91** (avem nevoie de registrul 90).
+⚠️ **Registrul 90 NU mai e folosit.** Puterea și curenții bateriei au fost mutate pe registrele oficiale **77/78 (Bat_Watt)** și **83/84 (curenți)** în commit-ul `d0287f0 "Use official battery watt registers"`. Cel mai mare index citit acum este **88** (`energy_load_total`, reg 87/88) → `REG_COUNT` trebuie **≥ 89**; păstrăm `REG_COUNT=91` (marjă). **`collector.py` e sursa de adevăr** când tabelul de mai sus diferă.
 
-**Putere baterie** = acum **REALĂ (măsurată):** `battery_power = (reg90×0.1) × battery_voltage` (semn: + încărcare / − descărcare). Câmpuri noi: `battery_current`, `inverter_loss`, `house_source`.
+**Putere baterie** = **REALĂ (măsurată):** `battery_power = -(Bat_Watt reg77/78 semnat × 0.1)` (semn câmp: **+ încărcare / − descărcare**). `battery_current = charge_current(reg83) − discharge_current(reg84)`. Câmpuri derivate: `battery_charge_current`, `battery_discharge_current`, `inverter_loss`, `house_source`, plus logica de descărcare inferată / import rețea (vezi CLAUDE.md „Derived signals").
 
 **Sursă consum casă** `house_source` (cod, calculat în collector): `1=PV` / `2=Baterie` / `3=Rețea`. Prag mort 50W. Ordine: încărcare rețea>50→3; descărcare baterie>50→2; PV>50→1; consum fără sursă→3.
 Consumul e rutat și pe câmpul sursei active: `house_pv` / `house_bat` / `house_grid` = `output_power` (doar cel activ scris/ciclu). Cardul „Consum casa" are 3 serii (A=house_pv verde ☀️, B=house_bat galben 🔋, C=house_grid roșu ⚡) cu override `displayName`+`color fixed`, `textMode=value_and_name`, range `-8s` → o singură pastilă colorată cu W + emoji sursă.
@@ -97,7 +101,7 @@ Consumul e rutat și pe câmpul sursei active: `house_pv` / `house_bat` / `house
 `inverter_loss = pv_power + battery_discharge_power + grid_charge_power − output_power − battery_charge_power` (clamp ≥0).
 - Ziua (încărcare): `= PV − consum − încărcare_baterie_reală` (exact formula cerută de Florin).
 - Noaptea (descărcare): `= descărcare_baterie − consum`.
-✅ Semnul reg90 la descărcare este validat noaptea: curent/putere baterie negative la descărcare.
+✅ Semnul puterii bateriei la descărcare e validat noaptea: `battery_power` negativ la descărcare (validare istorică pe reg90; convenția a rămas identică după mutarea pe Bat_Watt reg77/78).
 
 ## 7. Alerte (în collector, praguri în `.env`)
 | Cheie | Declanșare | Revenire |
@@ -144,6 +148,8 @@ curl -d "mesaj" -H "Title: test" -H "Priority: urgent" -H "Tags: zap" http://loc
 ### ✅ #1 — REZOLVAT 2026-05-31 (PV mare): pierderea în conversie + putere baterie reală
 **Făcut:** registrul **90 = curent baterie ×0.1 A (semnat)** identificat prin corelație cu PV (r90 urca 554→572 când bateria urca 3082→3169W). `battery_power` comutat pe măsurătoarea reală (`reg90×0.1 × Vbat`). Adăugat câmp `inverter_loss` + câmp `battery_current`. Panou nou **„⚡ Consum invertor (pierderi)"** pe dashboard + linie în graficul live. Validat: pierdere stabilă **~90–110W** ziua. `REG_COUNT=91`, `DEBUG_RAW=0`.
 
+> ⚠️ **Actualizare ulterioară (commit `d0287f0`):** puterea bateriei a fost mutată de pe reg90 pe registrele **oficiale Bat_Watt 77/78** (int32 semnat ×0.1W), iar curenții pe **83/84**. Reg90 nu mai e citit/folosit. Vezi tabelul din secțiunea 6 — `collector.py` e sursa de adevăr.
+
 #### ✅ #1b — REZOLVAT 2026-06-17: validare semn reg90 la DESCĂRCARE (noaptea)
 Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.1A`, `battery_power=-423W`, `battery_discharge_power=423W`, `output_power=301W`, `inverter_loss=122W`. Semnul registrului 90 este corect negativ la descărcare; nu trebuie schimbat `parse()`.
 
@@ -164,7 +170,7 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 ✅ Stack Docker complet pornit pe HP: `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy`.
 ✅ Monitorizare live 1s + istoric 60s/31 zile, verificate după cutover.
 ✅ API Android: `/solar/latest` + `/solar/history`, acces prin `https://vyra.go.ro:31443`.
-✅ App Android nativă cu UI nou, carduri clickabile, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 8 / versionName 1.7**.
+✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 11 / versionName 2.0**.
 ✅ Alerte protecție în collector + ntfy; alarmă locală în Android pentru consum mare.
 ✅ 100% local/self-hosted pentru datele invertorului, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
@@ -299,7 +305,7 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
 - Docker pe HP:
   - imaginile pentru `influxdb`, `grafana`, `ntfy`, `caddy`, `api`, `collector` au fost trase/construite;
   - containerele `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy` sunt pornite pe HP.
-- Runbook-ul **`schimbare-server.md`** rămâne documentație istorică și checklist de fallback. Mutarea principală este completă.
+- Runbook-ul **`schimbare-server.md`** a fost **șters** (2026-07-10, de Florin) după finalizarea mutării — mutarea principală este completă și nu mai e necesar.
 ### 13.12 Release Android portabil (2026-06-17)
 - Script tracked în repo: **`scripts/build-android-release.sh`**.
 - Comandă recomandată pe HP/Linux:
@@ -322,3 +328,184 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
 - Regula de versionare: se incrementează `versionCode` / `versionName` doar când s-a modificat codul/resursele Android. Pentru rebuild al aceleiași versiuni nu se incrementează.
 - APK-urile rămân ignorate de git; release-ul nu cere rebuild API. Pentru API/server/deploy rămâne regula: `docker compose up -d --build api`.
 
+### 13.13 Sincronizare documentație cu collector.py (2026-07-10)
+- Verificat `collector.py` ca **sursă de adevăr** și aliniat `COPILOT_CONTEXT.md` la cod. Fără modificări de cod — doar documentație. Collectorul rămâne READ-ONLY (doar FC04).
+- **Putere/curent baterie:** confirmat că **NU mai** vin din reg90, ci din **Bat_Watt reg 77/78** (int32 semnat ×0.1W) pentru putere și **reg 83 (încărcare) / reg 84 (descărcare)** pentru curenți (commit `d0287f0 "Use official battery watt registers"`). Actualizat tabelul de registre (secțiunea 6), formula puterii bateriei și nota `REG_COUNT`.
+- **REG_COUNT:** cel mai mare index citit este **88** (`energy_load_total`, reg 87/88) → minim real **≥ 89**; păstrat `REG_COUNT=91` (marjă). Corectate comentariile stale din `.env` și `.env.example` care ziceau „reg90 = curent baterie".
+- **load_percent (reg27):** confirmat ×0.1 în cod (`regs[27]*0.1`); tabel actualizat.
+- Adăugate în tabelul secțiunii 6 și registrele de energie deja folosite: **48/49, 50/51** (PV azi/total), **85/86, 87/88** (consum azi/total).
+
+### 13.14 Recon FC03 (holding registers) + decizie „rămânem READ-ONLY" (2026-07-10)
+**Context:** Florin vrea bateria plină la pragul de sus (**56V**) seara (~19–20), ca să aibă mai mult curent
+noaptea; în practică ajunge pe la ~54.5V. A propus un buton în app care să pornească încărcarea din PV până
+la 56V. Asta ar fi cerut **scriere în invertor** (FC06/FC16) → atinge invariantul dur READ-ONLY.
+
+**Diagnostic pe datele READ-ONLY (InfluxDB, zi însorită 9 iulie 2026):**
+- La prânz PV era **gâtuit (curtailment):** panourile puteau da **5184W**, dar media la prânz ~1100W ≈ consum,
+  pentru că bateria era deja plină la 56V. ~4kW PV nefolosit → bateria e la vârf, n-are unde încărca.
+- Bateria NU scade lent toată ziua; **cade după-amiaza** (ex. 16:00: consum 1032W, PV real doar 286W →
+  descărcare 907W → 53.9V). După 16:00 PV < consum, deci **nu mai există surplus PV de reîncărcat**.
+- Concluzie: problema nu e pragul de încărcare, ci **PV insuficient seara + consum mare după-amiaza**.
+
+**Recon FC03 (READ-ONLY, one-off):** collectorul oprit temporar (ca să nu fie doi maeștri pe bus), rulat un
+container din imaginea collectorului care citește **doar FC03 (holding) + FC04 (input)**, apoi collector repornit.
+Script: `scratchpad/recon.py` (nu e în repo). Ancoră OK: `reg17 input = 5600 = 56.00V`. Registre de setare
+(holding), **validate pe LCD de Florin:**
+
+| holding reg | citit | funcție (confirmat pe LCD) |
+|---|---|---|
+| 34 | 70 | curent max încărcare = **70A** ✅ |
+| 35 | 560 (×0.1) | tensiune încărcare C.V./bulk = **56.0V** ✅ |
+| 36 | 560 (×0.1) | tensiune **float = 56.0V** ✅ |
+| 37 | 482 (×0.1) | prag jos ~48.2V (back-to-grid, neconfirmat exact) |
+| — | — | **Output source priority = SBU** (Solar>Baterie>Rețea) ✅ |
+| — | — | **Charger source priority = SOLAR ONLY** (bateria se încarcă DOAR din PV, niciodată din rețea) ✅ |
+
+Alte praguri plauzibile (neetichetate încă): reg 87=60.0V, reg 109=58.4V (probabil protecție supratensiune
+~4.17V/celulă), reg 94=42.0V (cutoff jos), reg 82=46.0, 85=50.0, 86=48.0, 95=51.0.
+⚠️ `reg 155=5600`, `158=2287`, `160=2303` **NU sunt praguri** — sunt valori **live oglindite** în holding
+(baterie/rețea/ieșire), identice cu input-urile 17/20/22. **FC03 = citire, nu încalcă invariantul.**
+
+**Decizie (Florin, 2026-07-10): NU adăugăm control/scriere. Sistemul rămâne 100% READ-ONLY (FC04).**
+- Ținta de încărcare e **deja 56V** (bulk=float=56, confirmat) ȘI încărcarea e deja **doar din PV**
+  (charger source = SOLAR ONLY) → un buton „încarcă din PV până la 56V" ar cere fix ce e deja setat →
+  **fără efect.** Pârghia reală ar fi prioritatea sursei (consum din rețea seara, nu din baterie), dar aia
+  folosește rețeaua (nu „doar PV") și tot scriere ar fi. Nu merită spart invariantul.
+- Butonul „live" din app **se păstrează**; nu se implementează butonul de încărcare.
+- Alternative fără scriere pentru 56V seara, dacă se dorește cândva: **load-shifting** (muți consumatorii mari
+  spre prânz, unde sunt ~4kW PV irosiți) sau o **setare one-time pe LCD** (prioritate ieșire pe rețea în ferestrele
+  fără soare).
+- Collector **nemodificat:** poll rămâne la **1s** (`POLL_INTERVAL_LIVE=1`); ideea de 2s a rămas doar discuție.
+
+### 13.15 App Android v1.8 — alarmă opribilă, tensiune baterie mare, chevroane flux (2026-07-10)
+**versionCode 9 / versionName 1.8.** Doar UI/serviciu Android; server/API/collector neatinse. Build debug verificat OK.
+- **Alarmă consum mare — mai ușor de oprit:**
+  - Durata maximă a sunetului **30s → 15s** (`SolarAlarmService.ALARM_SOUND_MS`).
+  - **Pop-up în aplicație** când sună: dialog cu buton mare roșu „OPRESTE ALARMA" (`AlarmOverlay` în
+    `MainActivity`) → trimite `ACTION_SILENCE` la service și oprește sunetul. Notificarea cu „Opreste sunet"
+    rămâne și ea.
+  - Stare partajată nouă **`AlarmState`** (StateFlow in-proces) între service (care sună) și activitate
+    (care afișează pop-up-ul).
+- **Card „Consum casa" (`MainStatusPanel`):** tensiunea bateriei afișată **mare (38sp)**, lângă consum
+  (ambele numere-titlu, egale). Dedesubt: pastila sursă (solar/baterie/rețea) + puterea bateriei; apoi
+  PV acum + Pierderi. **Bara „Nivel baterie" eliminată** (redundantă). Puterea bateriei **colorată după
+  sens:** descărcare (−W) galben `CBat`, încărcare (+W) verde `CPv`. (Eliminat `SourceBadge`/`batteryVoltageLevel`,
+  folosit `StatusPill`.)
+- **Header:** scoasă pastila „live/offline" de lângă butonul de setări (inutilă); scos și state-ul `online`.
+- **Flux energie (`ArrowLine`):** liniuțele animate înlocuite cu **chevroane care curg** (`> < ^ v`),
+  subțiri (stroke 2.5dp) și rare (spacing 15dp), în sensul curgerii (încărcare→spre baterie, descărcare→spre
+  casă, rețea→spre casă, PV→jos).
+- Nemodificat în browser/Grafana (Florin nu prea folosește browserul); dacă se dorește, tensiunea mare se
+  poate reflecta și pe dashboard-ul `solar.json`.
+
+### 13.16 App Android v1.9 — notificare cu Casa/PV/Bat, fără titlu flux (2026-07-10)
+**versionCode 10 / versionName 1.9.** Doar UI/serviciu Android. Release semnat OK.
+- **Notificarea permanentă** (`SolarAlarmService.monitorNotification`) arată acum mai multe date fără a
+  deschide app-ul: titlu `Casa: X kW · PV: Y kW · Bat: ±Z kW` (Bat cu semn: + încărcare / − descărcare),
+  text `Prag alarma: N kW`. Scos „clear" și subtext-ul redundant; adăugat `formatKwSigned`.
+- **Card „Flux energie":** scos titlul „Flux energie" (`SectionTitle` eliminat) — se câștigă spațiu,
+  diagrama e evidentă oricum.
+
+### 13.17 Cercetare protocol: comandă „încarcă bateria" — NU EXISTĂ. Subiect ÎNCHIS (2026-07-18)
+**Întrebarea lui Florin:** se poate trimite din app o comandă Modbus care să pornească încărcarea bateriei
+din PV până la limita setată (56V)? Context: după-amiaza bateria plutește sub 56V (ex. 55.6V, descărcare
+~50W) și nu se reîncarcă, deși e soare; seara intră în noapte cu ~54.5V.
+
+**Rezultatul cercetării (documentație oficială + comunitate): NU există o astfel de comandă.**
+- Încărcătorul solar e mașină de stări autonomă (bulk → CV → float → done). După „done", reintră la
+  încărcare doar sub un **prag intern din firmware, nesetabil** (comunitate: ≈ float − 2V ≈ **54.0V** la noi).
+  De-aceea bateria plutește 56 → ~54.5 toată după-amiaza fără reîncărcare. Confirmat de prezentarea oficială
+  Growatt SPF 6000ES PLUS (tabel „Off-Grid Battery Related Settings", ierarhia setărilor 21<12<13<20<19;
+  item 19=CV, 20=float, 12=comutare pe rețea, 21=cutoff).
+- Harta holding validată încrucișat (recon nostru FC03 + proiecte comunitate): **reg 1** = prioritate ieșire
+  (0=SBU/1=SOL/2=UTI), **reg 2** = sursă încărcare (2=PV only), reg 3–6 ferestre orare UTI, reg 20–22
+  restart/buzzer, reg 34–38 = curent max/CV/float/prag-spre-rețea/curent float, reg 39 = tip baterie (2=custom),
+  **reg 45–50 = ceasul invertorului (RTC)** — citit 2026-07-10 17:56:54, exact momentul recon-ului ✓.
+- Surse: github rodrigojfernandez/Growatt_SPF5000ES_HomeAssistant (scrie doar reg 1,2,3-6,20-22,34);
+  github Tobster86/growatt-spf5000es-modbus-offpeak-charging (proiect dedicat controlului încărcării —
+  folosește DOAR reg 1); OpenInverterGateway (zero holding pt. SPF); PDF oficial Growatt SPF 6000ES PLUS
+  Introduction/Troubleshooting (SolarNRG, mayoristaenergiasolar.com).
+- Singura manevră existentă în protocol: comutare **reg 1 SBU→UTI** (casa pe rețea, PV dedicat bateriei).
+  **RESPINSĂ de Florin (2026-07-18):** casa ar consuma 3–4 kWh din rețea în câteva ore pentru ~+0.5V în
+  baterie — nu e un câștig.
+
+**DECIZIE FINALĂ (Florin): ne oprim. Fără buton, fără scrieri. Sistemul rămâne 100% READ-ONLY (FC04).**
+Subiectul „comandă de încărcare on-demand" este închis definitiv — nu redeschide fără informații noi
+(ex. firmware nou cu registre noi documentate).
+
+### 13.18 App Android v2.0 — dashboard premium, compact (2026-07-20)
+**versionCode 11 / versionName 2.0.** Schimbare numai în stratul UI Android; API-ul, collectorul, alarma și
+regula READ-ONLY rămân neschimbate. Build debug și lint verificate OK.
+- Eliminată repetarea acelorași valori în status, flux și grila de opt carduri. Noul `EnergyOverview`
+  grupează fluxul live și sumarul energetic al zilei într-o singură suprafață Material 3.
+- Casa este nodul vizual principal; Panouri este secundar; Baterie și Rețea au o greutate mai mică.
+- Contururile colorate au fost eliminate din dashboard. Separarea folosește culoare tonală și elevatie
+  subtilă; culorile de status apar numai în valori, puncte și particule.
+- Fluxul nu mai folosește chevroane/săgeți text. Un `Canvas` desenează topologia și particule animate în
+  sensurile Panouri→Casă, Panouri→Baterie, Baterie→Casă și Rețea→Casă.
+- Istoricul are buton unic în header și un selector cu toate cele cinci metrici; valorile relevante rămân
+  scurtături directe printr-o pictogramă discretă de grafic.
+- Detaliile tehnice sunt rânduri într-o singură suprafață, nu carduri individuale.
+- Adăugat ghidul pentru începători `android/DASHBOARD_REDESIGN.md` cu logica UX, layout-urile, modifierii,
+  tipografia și animația explicate pas cu pas.
+
+### 13.19 App Android v2.0 final — teme Retro/Simple + cadran analogic (2026-07-20)
+**versionCode 11 / versionName 2.0.** Această iterație face parte din release-ul public 2.0, următorul după
+1.9. Schimbare numai în UI-ul Android; API-ul, collectorul, polling-ul și
+alarma rămân neschimbate, iar sistemul continuă să fie READ-ONLY.
+- Adăugate două dashboarduri complete: `RetroDashboard` și tema existentă, redenumită `Simple`.
+- Tema implicită este **Retro**, inclusiv pentru instalările existente care nu au încă o preferință salvată.
+- Selector segmentat `Retro / Simple` în Settings; alegerea este salvată în `SharedPreferences` prin
+  `DashboardStyleStore` și persistă după închiderea aplicației sau repornirea telefonului.
+- Tema Retro folosește paleta aleasă (`#accc78`, `#81795a`, `#f1e169`), panouri industriale olive,
+  etichete monospace, LED-uri și valori cu șapte segmente desenate nativ în Compose Canvas.
+- Consumul casei are cadran analogic animat 0–7 kW. Zona de avertizare începe la pragul real configurat
+  pentru alarma locală, iar atingerea cadranului deschide istoricul consumului.
+- Flux energetic Retro cu particule animate pentru Panouri→Casă, Panouri→Baterie, Baterie→Casă și
+  Rețea→Casă; sumar zilnic și panou de sistem grupate dedesubt.
+
+### 13.20 Emulator Android local + skill de verificare (2026-07-20)
+
+Pe serverul HP există acum un mediu complet de test Android, accelerat KVM și utilizabil fără interfață
+grafică. Emulatorul se pornește numai la cerere, nu ca serviciu la boot.
+
+- SDK: `/opt/android-sdk`; `ANDROID_HOME` și `ANDROID_SDK_ROOT` sunt configurate global în
+  `/etc/profile.d/android-sdk.sh`.
+- Pachete instalate: Android Emulator **36.6.11**, platform-tools **37.0.0**, platform API 34,
+  build-tools 34.0.0 și `system-images;android-34;google_apis;x86_64` revizia 14.
+- AVD: `SolarMonitor_API_34`, profil Pixel 6, Android 14/API 34, Google APIs x86_64, 1080×2400,
+  stocat în `/root/.android/avd/SolarMonitor_API_34.avd`.
+- Accelerarea hardware este activă prin `/dev/kvm`; `emulator -accel-check` confirmă că KVM este utilizabil.
+- Spațiu ocupat la instalare: aproximativ 819 MB emulator, 4,2 GB imagine de sistem și 1,3 GB AVD.
+
+A fost creat skill-ul versionat `.codex/skills/solar-monitor-emulator/`, instalat și în catalogul local
+`/root/.codex/skills/solar-monitor-emulator/` pentru a fi descoperit în sesiuni viitoare. Comanda recomandată:
+
+```bash
+cd /opt/solar-monitor
+.codex/skills/solar-monitor-emulator/scripts/emulator-check.sh verify
+```
+
+`verify` controlează SDK/AVD/KVM, pornește emulatorul headless, așteaptă boot-ul, construiește APK-ul debug,
+îl instalează și lansează, apoi salvează screenshot, arbore UI și logcat în directorul ignorat de Git
+`android/build/emulator-artifacts/`. Subcomenzi disponibile: `doctor`, `start`, `wait`, `build`, `install`,
+`launch`, `screenshot`, `status`, `verify`, `stop`.
+
+Verificare reală efectuată pe Android 14 pentru aplicația **2.0**: dashboardul Retro s-a randat cu date live,
+selectorul Retro/Simple a funcționat, tema Simple s-a păstrat după force-stop/restart, apoi preferința a fost
+readusă la Retro. Captura stabilă este `android/build/emulator-artifacts/retro-verified.png`. Nu s-a modificat
+collectorul, API-ul sau regula READ-ONLY.
+
+### 13.21 Release Android v2.0 (2026-07-20)
+
+- Release public următor după `SolarMonitor-v1.9.apk`: **versionCode 11 / versionName 2.0**.
+- APK semnat: `/opt/solar-monitor/SolarMonitor-v2.0.apk`, 1.005.983 bytes.
+- SHA-256: `6350aee68869d42f8e3d5df2959eff2479f910fea3af2bc6f302b8366909e2f3`.
+- `aapt` confirmă pachetul `com.rolling7.solar`, versiunea 2.0 (11), compile SDK 34.
+- `apksigner` confirmă APK Signature Scheme v2 și certificatul SHA-256
+  `b892e453841228510aa4c08f9a164652baa0005638279cc18572dde677d293f6`, identic cu v1.9.
+- Verificat upgrade real în emulator Android 14: instalare v1.9, apoi `adb install -r` v2.0 cu succes;
+  release-ul semnat pornește, afișează date live și nu produce crash. Captură:
+  `android/build/emulator-artifacts/release-v2.0-signed.png`.
+- `testDebugUnitTest` (fără teste definite), `lintDebug`, `lintVitalRelease`, build R8 și verificarea vizuală
+  au trecut. Nu este necesar rebuild pentru API/server; modificările sunt exclusiv Android/UI și documentație.

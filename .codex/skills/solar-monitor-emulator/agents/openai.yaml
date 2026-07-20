@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solar Monitor Emulator"
+  short_description: "Build, launch, inspect, and capture the Android app"
+  default_prompt: "Use $solar-monitor-emulator to verify the Solar Monitor Android UI in the local emulator."

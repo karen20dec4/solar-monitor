@@ -25,13 +25,13 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -40,9 +40,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
@@ -53,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,11 +70,17 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -81,7 +88,7 @@ import kotlinx.coroutines.withContext
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import kotlin.math.abs
+import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.log10
@@ -95,6 +102,7 @@ private val CGrid = Color(0xFFE85663)
 private val CHouse = Color(0xFF5AA7F7)
 private val CPanel = Color(0xFF121923)
 private val CPanelSoft = Color(0xFF172130)
+private val CPanelRaised = Color(0xFF1B2635)
 private val CBg = Color(0xFF090D12)
 private val CLine = Color(0xFF263241)
 private val CMuted = Color(0xFF94A3B8)
@@ -113,11 +121,14 @@ class MainActivity : ComponentActivity() {
 fun App() {
     val context = LocalContext.current
     var data by remember { mutableStateOf<SolarData?>(null) }
-    var online by remember { mutableStateOf(false) }
     var selectedHistory by remember { mutableStateOf<HistoryMetric?>(null) }
+    var showHistoryMenu by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var alarmSettings by remember { mutableStateOf(AlarmSettingsStore.read(context)) }
+    var dashboardStyle by remember { mutableStateOf(DashboardStyleStore.read(context)) }
     var enableAfterNotificationPermission by remember { mutableStateOf(false) }
+    val alarmRinging by AlarmState.ringing.collectAsState()
+    val alarmMessage by AlarmState.message.collectAsState()
 
     fun saveAlarmSettings(next: AlarmSettings, applyService: Boolean = true) {
         alarmSettings = next
@@ -125,6 +136,11 @@ fun App() {
         if (applyService) {
             AlarmSettingsStore.applyServiceState(context, next)
         }
+    }
+
+    fun saveDashboardStyle(next: DashboardStyle) {
+        dashboardStyle = next
+        DashboardStyleStore.save(context, next)
     }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -151,9 +167,6 @@ fun App() {
             val d = withContext(Dispatchers.IO) { SolarRepository.fetch() }
             if (d != null) {
                 data = d
-                online = true
-            } else {
-                online = false
             }
             delay(2000)
         }
@@ -167,18 +180,35 @@ fun App() {
             onSurface = CText
         )
     ) {
-        Surface(Modifier.fillMaxSize(), color = CBg) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+        when (dashboardStyle) {
+            DashboardStyle.RETRO -> RetroDashboard(
+                data = data,
+                alarmThresholdW = alarmSettings.thresholdW,
+                onHistoryClick = { showHistoryMenu = true },
+                onHistoryFieldClick = { field -> selectedHistory = historyMetric(field) },
+                onSettingsClick = { showSettings = true }
+            )
+            DashboardStyle.SIMPLE -> SimpleDashboard(
+                data = data,
+                onHistoryClick = { showHistoryMenu = true },
+                onHistoryFieldClick = { selectedHistory = it },
+                onSettingsClick = { showSettings = true }
+            )
+        }
+
+        if (showHistoryMenu) {
+            ModalBottomSheet(
+                onDismissRequest = { showHistoryMenu = false },
+                containerColor = CPanel,
+                contentColor = CText
             ) {
-                Header(data = data, online = online, onSettingsClick = { showSettings = true })
-                MainStatusPanel(data = data)
-                FlowDiagram(data = data)
-                MetricsGrid(data = data, onHistoryClick = { selectedHistory = it })
+                HistoryMenuSheet(
+                    metrics = DashboardHistoryMetrics,
+                    onMetricClick = { metric ->
+                        showHistoryMenu = false
+                        selectedHistory = metric
+                    }
+                )
             }
         }
 
@@ -199,9 +229,11 @@ fun App() {
                 contentColor = CText
             ) {
                 SettingsSheet(
+                    dashboardStyle = dashboardStyle,
                     settings = alarmSettings,
                     ringtoneTitle = AlarmSettingsStore.ringtoneTitle(context, alarmSettings),
                     version = appVersion(context),
+                    onDashboardStyleChange = ::saveDashboardStyle,
                     onEnabledChange = { enabled ->
                         if (enabled && !hasNotificationPermission(context)) {
                             enableAfterNotificationPermission = true
@@ -218,15 +250,97 @@ fun App() {
                 )
             }
         }
+
+        if (alarmRinging) {
+            AlarmOverlay(
+                message = alarmMessage,
+                onStop = {
+                    context.startService(
+                        Intent(context, SolarAlarmService::class.java)
+                            .setAction(SolarAlarmService.ACTION_SILENCE)
+                    )
+                    AlarmState.onRingStop()
+                }
+            )
+        }
     }
 }
 
 @Composable
-private fun Header(data: SolarData?, online: Boolean, onSettingsClick: () -> Unit) {
+private fun SimpleDashboard(
+    data: SolarData?,
+    onHistoryClick: () -> Unit,
+    onHistoryFieldClick: (HistoryMetric) -> Unit,
+    onSettingsClick: () -> Unit
+) {
+    Surface(Modifier.fillMaxSize(), color = CBg) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Header(
+                onHistoryClick = onHistoryClick,
+                onSettingsClick = onSettingsClick
+            )
+            EnergyOverview(data = data, onHistoryClick = onHistoryFieldClick)
+            SystemDetails(data = data, onHistoryClick = onHistoryFieldClick)
+            Spacer(Modifier.height(4.dp))
+        }
+    }
+}
+
+@Composable
+private fun AlarmOverlay(message: String?, onStop: () -> Unit) {
+    Dialog(onDismissRequest = onStop) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(CPanel)
+                .border(2.dp, CGrid, RoundedCornerShape(20.dp))
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                "⚠ Alarma consum mare",
+                color = CGrid,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                message ?: "Consum mare casa",
+                color = CText,
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(22.dp))
+            Button(
+                onClick = onStop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CGrid,
+                    contentColor = Color.White
+                )
+            ) {
+                Text("OPRESTE ALARMA", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Header(onHistoryClick: () -> Unit, onSettingsClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Column(Modifier.weight(1f)) {
             Text(
@@ -244,88 +358,96 @@ private fun Header(data: SolarData?, online: Boolean, onSettingsClick: () -> Uni
                 overflow = TextOverflow.Ellipsis
             )
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatusPill(
-                label = when {
-                    data == null -> "conectare"
-                    online -> "live"
-                    else -> "offline"
-                },
-                color = if (online) CPv else if (data == null) CMuted else CGrid
-            )
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(CPanel)
-                    .border(1.dp, CLine, CircleShape)
-                    .clickable(onClick = onSettingsClick),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("⚙", color = CText, fontSize = 18.sp)
-            }
+        HistoryHeaderButton(onClick = onHistoryClick)
+        HeaderIconButton(description = "Setari", onClick = onSettingsClick) {
+            SettingsGlyph(Modifier.size(18.dp), CMuted)
         }
     }
 }
 
 @Composable
-private fun MainStatusPanel(data: SolarData?) {
-    val house = data?.house ?: 0.0
-    val source = sourceLabel(data)
-    val sourceColor = sourceColor(data)
-    val batteryVoltage = data?.batteryVoltage ?: 0.0
-    val batteryLevel = batteryVoltageLevel(batteryVoltage)
-
-    Column(
+private fun HistoryHeaderButton(onClick: () -> Unit) {
+    Row(
         Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .height(40.dp)
+            .clip(RoundedCornerShape(20.dp))
             .background(CPanel)
-            .border(1.dp, CLine, RoundedCornerShape(18.dp))
-            .padding(18.dp)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "Deschide istoricul" }
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Consum casa", color = CMuted, fontSize = 13.sp)
-                Text(
-                    watts(house),
-                    color = CHouse,
-                    fontSize = 42.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
+        TrendGlyph(Modifier.size(16.dp), CPv)
+        Text("Istoric", color = CText, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun HeaderIconButton(
+    description: String,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit
+) {
+    Box(
+        Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(CPanel)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center
+    ) {
+        icon()
+    }
+}
+
+@Composable
+private fun SettingsGlyph(modifier: Modifier, color: Color) {
+    Canvas(modifier) {
+        val stroke = 1.7.dp.toPx()
+        val knob = 2.4.dp.toPx()
+        val ys = listOf(size.height * 0.24f, size.height * 0.50f, size.height * 0.76f)
+        val xs = listOf(size.width * 0.67f, size.width * 0.34f, size.width * 0.60f)
+        ys.forEachIndexed { index, y ->
+            drawLine(color, Offset(0f, y), Offset(size.width, y), strokeWidth = stroke, cap = StrokeCap.Round)
+            drawCircle(CPanel, radius = knob + stroke, center = Offset(xs[index], y))
+            drawCircle(color, radius = knob, center = Offset(xs[index], y))
+        }
+    }
+}
+
+@Composable
+private fun EnergyOverview(data: SolarData?, onHistoryClick: (HistoryMetric) -> Unit) {
+    val source = sourceLabel(data)
+    val sourceStatus = if (data == null) "Se conecteaza" else "Casa din $source"
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        color = CPanel,
+        tonalElevation = 2.dp,
+        shadowElevation = 1.dp
+    ) {
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 18.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Acum", color = CText, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Flux energetic live", color = CMuted, fontSize = 11.sp)
+                }
+                StatusPill(label = sourceStatus, color = sourceColor(data))
             }
-            SourceBadge(label = source, color = sourceColor)
-        }
 
-        Spacer(Modifier.height(16.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            CompactStat(Modifier.weight(1f), "PV acum", watts(data?.pv ?: 0.0), CPv)
-            CompactStat(Modifier.weight(1f), "Baterie", signedWatts(data?.batteryDisplay ?: 0.0), batteryColor(batteryVoltage))
-        }
-
-        Spacer(Modifier.height(16.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Baterie", color = CMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.width(10.dp))
-            LinearProgressIndicator(
-                progress = { batteryLevel },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(20.dp)),
-                color = batteryColor(batteryVoltage),
-                trackColor = Color.White.copy(alpha = 0.08f)
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(String.format("%.2f V", batteryVoltage), color = CText, fontSize = 13.sp)
+            Spacer(Modifier.height(14.dp))
+            EnergyFlow(data = data, onHistoryClick = onHistoryClick)
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider(color = CLine.copy(alpha = 0.65f))
+            Spacer(Modifier.height(14.dp))
+            DailySummary(data = data, onHistoryClick = onHistoryClick)
         }
     }
 }
@@ -335,325 +457,368 @@ private fun StatusPill(label: String, color: Color) {
     Row(
         Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(color.copy(alpha = 0.13f))
-            .border(1.dp, color.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+            .background(color.copy(alpha = 0.12f))
             .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            Modifier
-                .size(7.dp)
-                .clip(CircleShape)
-                .background(color)
-        )
+        Box(Modifier.size(6.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(7.dp))
-        Text(label, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
 
 @Composable
-private fun SourceBadge(label: String, color: Color) {
-    Column(horizontalAlignment = Alignment.End) {
-        Text("sursa", color = CMuted, fontSize = 12.sp)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            label,
-            color = color,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1
-        )
-    }
-}
-
-@Composable
-private fun CompactStat(modifier: Modifier, label: String, value: String, color: Color) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(CPanelSoft)
-            .padding(12.dp)
-    ) {
-        Text(label, color = CMuted, fontSize = 12.sp, maxLines = 1)
-        Spacer(Modifier.height(3.dp))
-        Text(value, color = color, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-    }
-}
-
-@Composable
-private fun FlowDiagram(data: SolarData?) {
+private fun EnergyFlow(data: SolarData?, onHistoryClick: (HistoryMetric) -> Unit) {
     val pv = data?.pv ?: 0.0
-    val house = data?.house ?: 0.0
-    val batDisplay = data?.batteryDisplay ?: 0.0
-    val batCharge = data?.batteryCharge ?: 0.0
-    val batSupport = data?.batterySupport ?: 0.0
+    val battery = data?.batteryDisplay ?: 0.0
+    val batteryCharge = data?.batteryCharge ?: 0.0
+    val batterySupport = data?.batterySupport ?: 0.0
     val grid = (data?.gridImport ?: 0.0) + (data?.gridCharge ?: 0.0)
-    val charging = batCharge > DEAD || batDisplay > DEAD
-    val discharging = batSupport > DEAD || batDisplay < -DEAD
-
-    val transition = rememberInfiniteTransition(label = "flow")
-    val phase by transition.animateFloat(
+    val charging = batteryCharge > DEAD || battery > DEAD
+    val discharging = batterySupport > DEAD || battery < -DEAD
+    val phase by rememberInfiniteTransition(label = "flux energie").animateFloat(
         initialValue = 0f,
-        targetValue = 18f,
-        animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing), RepeatMode.Restart),
-        label = "phase"
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1_400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pozitie particule"
     )
 
-    Column(
+    Box(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(CPanel)
-            .border(1.dp, CLine, RoundedCornerShape(18.dp))
-            .padding(14.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .height(272.dp)
     ) {
-        SectionTitle("Flux energie")
-        Spacer(Modifier.height(12.dp))
-        FlowNode(Modifier.fillMaxWidth(0.58f), "Panouri", watts(pv), CPv, large = true)
-        ArrowLine(vertical = true, active = pv > DEAD, reversed = false, color = CPv, phase = phase, arrowSize = 42.dp)
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FlowNode(
-                Modifier.weight(1f),
-                if (charging) "Incarcare" else if (discharging) "Descarcare" else "Baterie",
-                watts(abs(batDisplay)),
-                CBat
-            )
-            ArrowLine(
-                vertical = false,
-                active = charging || discharging,
-                reversed = charging,
-                color = if (charging) CPv else CBat,
-                phase = phase,
-                arrowSize = 28.dp
-            )
-            FlowNode(Modifier.weight(1.08f), "Casa", watts(house), CHouse, large = true)
-            ArrowLine(
-                vertical = false,
-                active = grid > DEAD,
-                reversed = true,
-                color = CGrid,
-                phase = phase,
-                arrowSize = 28.dp
-            )
-            FlowNode(Modifier.weight(1f), "Retea", watts(grid), CGrid)
-        }
-    }
-}
+        Canvas(Modifier.fillMaxSize()) {
+            val solar = Offset(50.dp.toPx(), 43.dp.toPx())
+            val batteryNode = Offset(50.dp.toPx(), size.height - 43.dp.toPx())
+            val house = Offset(size.width / 2f, size.height / 2f)
+            val gridNode = Offset(size.width - 40.dp.toPx(), size.height / 2f)
 
-@Composable
-private fun SectionTitle(text: String) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(text, color = CText, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.weight(1f))
-    }
-}
+            fun connection(start: Offset, end: Offset, active: Boolean, color: Color) {
+                drawLine(
+                    color = CLine.copy(alpha = 0.85f),
+                    start = start,
+                    end = end,
+                    strokeWidth = 1.5.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+                if (!active) return
 
-@Composable
-private fun FlowNode(
-    modifier: Modifier,
-    label: String,
-    value: String,
-    color: Color,
-    large: Boolean = false
-) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(13.dp))
-            .background(color.copy(alpha = 0.10f))
-            .border(1.dp, color.copy(alpha = 0.45f), RoundedCornerShape(13.dp))
-            .padding(horizontal = 7.dp, vertical = if (large) 14.dp else 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(label, color = CMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            value,
-            color = color,
-            fontSize = if (large) 22.sp else 18.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1
-        )
-    }
-}
-
-@Composable
-private fun ArrowLine(
-    vertical: Boolean,
-    active: Boolean,
-    reversed: Boolean,
-    color: Color,
-    phase: Float,
-    arrowSize: Dp
-) {
-    val modifier = if (vertical) {
-        Modifier.width(24.dp).height(arrowSize)
-    } else {
-        Modifier.width(arrowSize).height(30.dp)
-    }
-    val drawColor = if (active) color else color.copy(alpha = 0.16f)
-    Canvas(modifier) {
-        val effect = if (active) {
-            PathEffect.dashPathEffect(floatArrayOf(11f, 8f), if (reversed) phase else -phase)
-        } else {
-            null
-        }
-        if (vertical) {
-            val x = size.width / 2
-            drawLine(
-                drawColor,
-                Offset(x, 0f),
-                Offset(x, size.height),
-                strokeWidth = 6f,
-                cap = StrokeCap.Round,
-                pathEffect = effect
-            )
-        } else {
-            val y = size.height / 2
-            drawLine(
-                drawColor,
-                Offset(0f, y),
-                Offset(size.width, y),
-                strokeWidth = 6f,
-                cap = StrokeCap.Round,
-                pathEffect = effect
-            )
-        }
-    }
-}
-
-@Composable
-private fun MetricsGrid(data: SolarData?, onHistoryClick: (HistoryMetric) -> Unit) {
-    val pvEnergyHistory = HistoryMetric(
-        title = "Produs",
-        field = "energy_pv_today",
-        unit = "kWh",
-        color = CPv,
-        defaultRange = "7d",
-        ranges = listOf("7d", "30d"),
-        chartStyle = ChartStyle.Bar
-    )
-    val loadEnergyHistory = HistoryMetric(
-        title = "Consum",
-        field = "energy_load_today",
-        unit = "kWh",
-        color = CHouse,
-        defaultRange = "7d",
-        ranges = listOf("7d", "30d"),
-        chartStyle = ChartStyle.Bar
-    )
-    val batteryHistory = HistoryMetric(
-        title = "Baterie",
-        field = "battery_voltage",
-        unit = "V",
-        color = CBat,
-        defaultRange = "24h",
-        ranges = listOf("1h", "6h", "24h"),
-        thresholds = listOf(
-            ChartThreshold(48.0, CGrid),
-            ChartThreshold(57.0, CGrid)
-        )
-    )
-    val houseHistory = HistoryMetric(
-        title = "Consum casa",
-        field = "output_power",
-        unit = "W",
-        color = CHouse,
-        defaultRange = "1h",
-        ranges = listOf("1h", "6h", "24h")
-    )
-    val pvHistory = HistoryMetric(
-        title = "PV intrari",
-        field = "pv_power",
-        unit = "W",
-        color = CPv,
-        defaultRange = "24h",
-        ranges = listOf("1h", "6h", "24h")
-    )
-
-    val items = listOf(
-        Metric("Produs azi", String.format("%.1f kWh", data?.energyPvToday ?: 0.0), "total ${(data?.energyPvTotal ?: 0.0).roundToInt()} kWh", CPv, pvEnergyHistory),
-        Metric("Consum azi", String.format("%.1f kWh", data?.energyLoadToday ?: 0.0), "total ${(data?.energyLoadTotal ?: 0.0).roundToInt()} kWh", CHouse, loadEnergyHistory),
-        Metric("PV intrari", watts(data?.pv ?: 0.0), "PV1 ${watts(data?.pv1 ?: 0.0)}  |  PV2 ${watts(data?.pv2 ?: 0.0)}", CPv, pvHistory),
-        Metric("Baterie", String.format("%.2f V", data?.batteryVoltage ?: 0.0), signedWatts(data?.batteryDisplay ?: 0.0), batteryColor(data?.batteryVoltage ?: 0.0), batteryHistory),
-        Metric("Casa", watts(data?.house ?: 0.0), "incarcare ${(data?.loadPercent ?: 0.0).roundToInt()}%", CHouse, houseHistory),
-        Metric("Retea", String.format("%.1f V", data?.gridVoltage ?: 0.0), "import ${watts((data?.gridImport ?: 0.0) + (data?.gridCharge ?: 0.0))}", CGrid),
-        Metric("Temperatura", String.format("%.1f C", data?.inverterTemp ?: 0.0), "invertor", CHouse),
-        Metric("Pierderi", watts(data?.inverterLoss ?: 0.0), "consum propriu", CMuted)
-    )
-
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val twoColumns = maxWidth >= 360.dp
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (twoColumns) {
-                items.chunked(2).forEach { rowItems ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        rowItems.forEach { item ->
-                            MetricCard(Modifier.weight(1f), item, onHistoryClick)
-                        }
-                        if (rowItems.size == 1) {
-                            Spacer(Modifier.weight(1f))
-                        }
-                    }
-                }
-            } else {
-                items.forEach { item ->
-                    MetricCard(Modifier.fillMaxWidth(), item, onHistoryClick)
+                drawLine(
+                    color = color.copy(alpha = 0.24f),
+                    start = start,
+                    end = end,
+                    strokeWidth = 2.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+                repeat(3) { index ->
+                    val progress = (phase + index / 3f) % 1f
+                    val x = start.x + (end.x - start.x) * progress
+                    val y = start.y + (end.y - start.y) * progress
+                    val point = Offset(x, y)
+                    drawCircle(color.copy(alpha = 0.16f), radius = 6.dp.toPx(), center = point)
+                    drawCircle(color, radius = 2.6.dp.toPx(), center = point)
                 }
             }
+
+            connection(solar, house, active = pv > DEAD, color = CPv)
+            connection(solar, batteryNode, active = charging, color = CPv)
+            connection(batteryNode, house, active = discharging, color = CBat)
+            connection(gridNode, house, active = grid > DEAD, color = CGrid)
+        }
+
+        EnergyNode(
+            modifier = Modifier.align(Alignment.TopStart).width(100.dp),
+            label = "Panouri",
+            number = wholeNumber(data?.pv),
+            unit = "W",
+            supporting = data?.let { "PV1 ${it.pv1.roundToInt()} · PV2 ${it.pv2.roundToInt()}" } ?: "astept date",
+            color = CPv,
+            onClick = { onHistoryClick(historyMetric("pv_power")) }
+        )
+        EnergyNode(
+            modifier = Modifier.align(Alignment.BottomStart).width(100.dp),
+            label = "Baterie",
+            number = signedNumber(data?.batteryDisplay),
+            unit = "W",
+            supporting = data?.let { String.format(Locale.US, "%.2f V", it.batteryVoltage) } ?: "astept date",
+            color = data?.let { batteryColor(it.batteryVoltage) } ?: CMuted,
+            onClick = { onHistoryClick(historyMetric("battery_voltage")) }
+        )
+        EnergyNode(
+            modifier = Modifier.align(Alignment.Center).width(116.dp),
+            label = "Casa",
+            number = wholeNumber(data?.house),
+            unit = "W",
+            supporting = data?.let { "sarcina ${it.loadPercent.roundToInt()}%" } ?: "astept date",
+            color = CHouse,
+            prominent = true,
+            onClick = { onHistoryClick(historyMetric("output_power")) }
+        )
+        EnergyNode(
+            modifier = Modifier.align(Alignment.CenterEnd).width(80.dp),
+            label = "Retea",
+            number = wholeNumber(if (data == null) null else grid),
+            unit = "W",
+            supporting = data?.let { String.format(Locale.US, "%.1f V", it.gridVoltage) } ?: "astept",
+            color = CGrid
+        )
+    }
+}
+
+@Composable
+private fun EnergyNode(
+    modifier: Modifier,
+    label: String,
+    number: String,
+    unit: String,
+    supporting: String,
+    color: Color,
+    prominent: Boolean = false,
+    onClick: (() -> Unit)? = null
+) {
+    val clickModifier = if (onClick == null) Modifier else Modifier.clickable(onClick = onClick)
+    Surface(
+        modifier = modifier
+            .heightIn(min = if (prominent) 94.dp else 86.dp)
+            .then(clickModifier),
+        shape = RoundedCornerShape(if (prominent) 20.dp else 17.dp),
+        color = if (prominent) CPanelRaised else CPanelSoft,
+        tonalElevation = if (prominent) 4.dp else 1.dp,
+        shadowElevation = if (prominent) 2.dp else 0.dp
+    ) {
+        Column(
+            Modifier.padding(horizontal = if (prominent) 12.dp else 9.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(color))
+                Spacer(Modifier.width(6.dp))
+                Text(label, color = CMuted, fontSize = 11.sp, maxLines = 1)
+                if (onClick != null) {
+                    Spacer(Modifier.width(5.dp))
+                    TrendGlyph(Modifier.size(12.dp), color.copy(alpha = 0.8f))
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            MeasurementText(number = number, unit = unit, color = color, prominent = prominent)
+            Spacer(Modifier.height(3.dp))
+            Text(
+                supporting,
+                color = CMuted,
+                fontSize = if (prominent) 10.sp else 9.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
 
 @Composable
-private fun MetricCard(
-    modifier: Modifier,
-    metric: Metric,
-    onHistoryClick: (HistoryMetric) -> Unit
-) {
-    val clickModifier = metric.history?.let { history ->
-        Modifier.clickable { onHistoryClick(history) }
-    } ?: Modifier
+private fun MeasurementText(number: String, unit: String, color: Color, prominent: Boolean = false) {
+    Text(
+        text = buildAnnotatedString {
+            withStyle(
+                SpanStyle(
+                    fontSize = if (prominent) 28.sp else 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = color
+                )
+            ) { append(number) }
+            append(" ")
+            withStyle(
+                SpanStyle(
+                    fontSize = if (prominent) 13.sp else 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = CMuted
+                )
+            ) { append(unit) }
+        },
+        maxLines = 1
+    )
+}
 
+@Composable
+private fun DailySummary(data: SolarData?, onHistoryClick: (HistoryMetric) -> Unit) {
+    Column {
+        Text("Astazi", color = CText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            DailyMetric(
+                modifier = Modifier.weight(1f),
+                label = "Produs",
+                number = decimalNumber(data?.energyPvToday, 1),
+                total = data?.let { "total ${it.energyPvTotal.roundToInt()} kWh" } ?: "astept date",
+                color = CPv,
+                onClick = { onHistoryClick(historyMetric("energy_pv_today")) }
+            )
+            Box(Modifier.width(1.dp).height(52.dp).background(CLine.copy(alpha = 0.75f)))
+            DailyMetric(
+                modifier = Modifier.weight(1f),
+                label = "Consum",
+                number = decimalNumber(data?.energyLoadToday, 1),
+                total = data?.let { "total ${it.energyLoadTotal.roundToInt()} kWh" } ?: "astept date",
+                color = CHouse,
+                onClick = { onHistoryClick(historyMetric("energy_load_today")) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun DailyMetric(
+    modifier: Modifier,
+    label: String,
+    number: String,
+    total: String,
+    color: Color,
+    onClick: () -> Unit
+) {
     Column(
         modifier
             .clip(RoundedCornerShape(14.dp))
-            .background(CPanel)
-            .border(1.dp, metric.color.copy(alpha = 0.30f), RoundedCornerShape(14.dp))
-            .then(clickModifier)
-            .padding(14.dp)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                metric.label,
-                color = CMuted,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            if (metric.history != null) {
-                Text("istoric", color = metric.color, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-            }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = CMuted, fontSize = 11.sp)
+            Spacer(Modifier.width(6.dp))
+            TrendGlyph(Modifier.size(12.dp), color.copy(alpha = 0.8f))
         }
-        Spacer(Modifier.height(6.dp))
-        Text(metric.value, color = metric.color, fontSize = 23.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         Spacer(Modifier.height(3.dp))
-        Text(metric.sub, color = CMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        MeasurementText(number = number, unit = "kWh", color = color)
+        Text(total, color = CMuted, fontSize = 9.sp, maxLines = 1)
     }
 }
 
-private data class Metric(
-    val label: String,
-    val value: String,
-    val sub: String,
-    val color: Color,
-    val history: HistoryMetric? = null
-)
+@Composable
+private fun SystemDetails(data: SolarData?, onHistoryClick: (HistoryMetric) -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        color = CPanel,
+        tonalElevation = 1.dp
+    ) {
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
+            Text("Detalii sistem", color = CText, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            DetailRow(
+                label = "Baterie",
+                value = data?.let { String.format(Locale.US, "%.2f V", it.batteryVoltage) } ?: "—",
+                supporting = data?.let { batteryStateLabel(it.batteryDisplay) + " · " + signedWatts(it.batteryDisplay) } ?: "Astept date",
+                color = data?.let { batteryColor(it.batteryVoltage) } ?: CMuted,
+                onClick = { onHistoryClick(historyMetric("battery_voltage")) }
+            )
+            DetailDivider()
+            DetailRow(
+                label = "Panouri",
+                value = data?.let { "${it.pv.roundToInt()} W" } ?: "—",
+                supporting = data?.let { "PV1 ${it.pv1.roundToInt()} W · PV2 ${it.pv2.roundToInt()} W" } ?: "Astept date",
+                color = CPv,
+                onClick = { onHistoryClick(historyMetric("pv_power")) }
+            )
+            DetailDivider()
+            DetailRow(
+                label = "Retea",
+                value = data?.let { String.format(Locale.US, "%.1f V", it.gridVoltage) } ?: "—",
+                supporting = data?.let { "Import ${((it.gridImport + it.gridCharge).roundToInt())} W" } ?: "Astept date",
+                color = CGrid
+            )
+            DetailDivider()
+            DetailRow(
+                label = "Invertor",
+                value = data?.let { String.format(Locale.US, "%.1f °C", it.inverterTemp) } ?: "—",
+                supporting = data?.let { "Consum propriu ${it.inverterLoss.roundToInt()} W" } ?: "Astept date",
+                color = CMuted
+            )
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(
+    label: String,
+    value: String,
+    supporting: String,
+    color: Color,
+    onClick: (() -> Unit)? = null
+) {
+    val clickModifier = if (onClick == null) Modifier else Modifier.clickable(onClick = onClick)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .then(clickModifier)
+            .padding(vertical = 11.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, color = CText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text(supporting, color = CMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text(value, color = color, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        if (onClick != null) {
+            Spacer(Modifier.width(9.dp))
+            TrendGlyph(Modifier.size(15.dp), color.copy(alpha = 0.85f))
+        }
+    }
+}
+
+@Composable
+private fun DetailDivider() {
+    HorizontalDivider(Modifier.padding(start = 20.dp), color = CLine.copy(alpha = 0.55f))
+}
+
+@Composable
+private fun TrendGlyph(modifier: Modifier, color: Color) {
+    Canvas(modifier) {
+        val path = Path().apply {
+            moveTo(0f, size.height * 0.76f)
+            lineTo(size.width * 0.32f, size.height * 0.48f)
+            lineTo(size.width * 0.58f, size.height * 0.62f)
+            lineTo(size.width, size.height * 0.18f)
+        }
+        drawPath(path, color, style = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round))
+    }
+}
+
+@Composable
+private fun HistoryMenuSheet(metrics: List<HistoryMetric>, onMetricClick: (HistoryMetric) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 18.dp, end = 18.dp, bottom = 28.dp)
+    ) {
+        Text("Istoric", color = CText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Text("Alege valoarea pe care vrei sa o analizezi.", color = CMuted, fontSize = 12.sp)
+        Spacer(Modifier.height(12.dp))
+        metrics.forEachIndexed { index, metric ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { onMetricClick(metric) }
+                    .padding(horizontal = 10.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(metric.color))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(metric.title, color = CText, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(historySubtitle(metric), color = CMuted, fontSize = 10.sp)
+                }
+                TrendGlyph(Modifier.size(18.dp), metric.color)
+            }
+            if (index < metrics.lastIndex) DetailDivider()
+        }
+    }
+}
 
 private data class HistoryMetric(
     val title: String,
@@ -670,6 +835,58 @@ private enum class ChartStyle { Line, Bar }
 
 private data class ChartThreshold(val value: Double, val color: Color)
 
+private val DashboardHistoryMetrics = listOf(
+    HistoryMetric(
+        title = "Consum casa",
+        field = "output_power",
+        unit = "W",
+        color = CHouse,
+        defaultRange = "1h",
+        ranges = listOf("1h", "6h", "24h")
+    ),
+    HistoryMetric(
+        title = "Productie PV",
+        field = "pv_power",
+        unit = "W",
+        color = CPv,
+        defaultRange = "24h",
+        ranges = listOf("1h", "6h", "24h")
+    ),
+    HistoryMetric(
+        title = "Baterie",
+        field = "battery_voltage",
+        unit = "V",
+        color = CBat,
+        defaultRange = "24h",
+        ranges = listOf("1h", "6h", "24h"),
+        thresholds = listOf(
+            ChartThreshold(48.0, CGrid),
+            ChartThreshold(57.0, CGrid)
+        )
+    ),
+    HistoryMetric(
+        title = "Energie produsa",
+        field = "energy_pv_today",
+        unit = "kWh",
+        color = CPv,
+        defaultRange = "7d",
+        ranges = listOf("7d", "30d"),
+        chartStyle = ChartStyle.Bar
+    ),
+    HistoryMetric(
+        title = "Energie consumata",
+        field = "energy_load_today",
+        unit = "kWh",
+        color = CHouse,
+        defaultRange = "7d",
+        ranges = listOf("7d", "30d"),
+        chartStyle = ChartStyle.Bar
+    )
+)
+
+private fun historyMetric(field: String): HistoryMetric =
+    DashboardHistoryMetrics.first { it.field == field }
+
 private data class LineAxis(
     val min: Double,
     val max: Double,
@@ -685,9 +902,11 @@ private val TimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:m
 
 @Composable
 private fun SettingsSheet(
+    dashboardStyle: DashboardStyle,
     settings: AlarmSettings,
     ringtoneTitle: String,
     version: String,
+    onDashboardStyleChange: (DashboardStyle) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     onThresholdChange: (Int) -> Unit,
     onCooldownChange: (Int) -> Unit,
@@ -703,9 +922,28 @@ private fun SettingsSheet(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text("Setari", color = CText, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-        Text("Alarma locala ruleaza pe telefon prin foreground service.", color = CMuted, fontSize = 12.sp)
+        Text("Aspectul si comportamentul aplicatiei.", color = CMuted, fontSize = 12.sp)
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Tema dashboard", color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            DashboardStyleSwitcher(
+                selected = dashboardStyle,
+                onSelected = onDashboardStyleChange
+            )
+            Text(
+                if (dashboardStyle == DashboardStyle.RETRO) {
+                    "Retro: cadran analogic, afisaj segmentat si panou industrial."
+                } else {
+                    "Simple: interfata moderna, aerisita si accente Material 3."
+                },
+                color = CMuted,
+                fontSize = 11.sp
+            )
+        }
 
         HorizontalDivider(color = CLine)
+
+        Text("Alarma locala ruleaza pe telefon prin foreground service.", color = CMuted, fontSize = 12.sp)
 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -768,6 +1006,48 @@ private fun SettingsSheet(
             Text("Versiune $version", color = CMuted, fontSize = 12.sp)
             Text("Endpoint: vyra.go.ro:31443", color = CMuted, fontSize = 12.sp)
             Text("Polling alarma: 2s prin API, nu direct invertor.", color = CMuted, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun DashboardStyleSwitcher(
+    selected: DashboardStyle,
+    onSelected: (DashboardStyle) -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(CPanelSoft)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        DashboardStyle.entries.forEach { style ->
+            val isSelected = style == selected
+            val accent = if (style == DashboardStyle.RETRO) Color(0xFFACCC78) else CHouse
+            Row(
+                Modifier
+                    .weight(1f)
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(if (isSelected) accent.copy(alpha = 0.17f) else Color.Transparent)
+                    .clickable { onSelected(style) }
+                    .semantics {
+                        contentDescription = "Tema ${style.label}${if (isSelected) ", selectata" else ""}"
+                    },
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(if (isSelected) accent else CMuted))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    style.label,
+                    color = if (isSelected) accent else CMuted,
+                    fontSize = 13.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
+                )
+            }
         }
     }
 }
@@ -1149,6 +1429,22 @@ private fun StatTile(modifier: Modifier, label: String, value: String, color: Co
 
 private fun watts(value: Double): String = "${value.roundToInt()} W"
 
+private fun wholeNumber(value: Double?): String = value?.roundToInt()?.toString() ?: "—"
+
+private fun signedNumber(value: Double?): String {
+    val rounded = value?.roundToInt() ?: return "—"
+    return if (rounded > 0) "+$rounded" else rounded.toString()
+}
+
+private fun decimalNumber(value: Double?, decimals: Int): String =
+    value?.let { String.format(Locale.US, "%.${decimals}f", it) } ?: "—"
+
+private fun batteryStateLabel(power: Double): String = when {
+    power > DEAD -> "Incarcare"
+    power < -DEAD -> "Descarcare"
+    else -> "Standby"
+}
+
 private fun lineAxis(metric: HistoryMetric, values: List<Double>): LineAxis {
     if (metric.field == "battery_voltage") {
         return LineAxis(
@@ -1229,15 +1525,15 @@ private fun floorToStep(time: OffsetDateTime, stepMinutes: Long): OffsetDateTime
 private fun formatAxisValue(value: Double, unit: String): String = when (unit) {
     "V" -> "${value.roundToInt()}V"
     "W" -> "${value.roundToInt()}W"
-    "kWh" -> String.format("%.1fkWh", value)
-    else -> String.format("%.1f%s", value, unit)
+    "kWh" -> String.format(Locale.US, "%.1fkWh", value)
+    else -> String.format(Locale.US, "%.1f%s", value, unit)
 }
 
 private fun formatHistoryValue(value: Double, unit: String): String = when (unit) {
-    "V" -> String.format("%.2f V", value)
+    "V" -> String.format(Locale.US, "%.2f V", value)
     "W" -> "${value.roundToInt()} W"
-    "kWh" -> String.format("%.1f kWh", value)
-    else -> String.format("%.1f %s", value, unit)
+    "kWh" -> String.format(Locale.US, "%.1f kWh", value)
+    else -> String.format(Locale.US, "%.1f %s", value, unit)
 }
 
 private fun historySubtitle(metric: HistoryMetric): String = when (metric.field) {
@@ -1283,9 +1579,6 @@ private fun sourceColor(data: SolarData?): Color {
         else -> CMuted
     }
 }
-
-private fun batteryVoltageLevel(voltage: Double): Float =
-    ((voltage - 46.0) / 12.0).toFloat().coerceIn(0f, 1f)
 
 private fun batteryColor(voltage: Double): Color = when {
     voltage < 48.5 -> CGrid

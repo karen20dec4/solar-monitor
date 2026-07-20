@@ -53,7 +53,7 @@ class SolarAlarmService : Service() {
                 triggerAlarm(settings, null, test = true)
                 if (!settings.enabled) {
                     scope.launch {
-                        delay(30_000)
+                        delay(ALARM_SOUND_MS)
                         stopEverything()
                     }
                 }
@@ -131,6 +131,7 @@ class SolarAlarmService : Service() {
 
         notify(ALERT_ID, alertNotification(title, body))
         playAlarmSound(settings)
+        AlarmState.onRingStart(body)
         if (settings.vibrate) vibrate()
     }
 
@@ -152,14 +153,16 @@ class SolarAlarmService : Service() {
     }
 
     private fun monitorNotification(settings: AlarmSettings, data: SolarData?): Notification {
-        val currentTitle = data?.house?.let { "Casa ${formatKw(it)}" } ?: "Casa - astept date"
+        val title = if (data != null) {
+            "Casa: ${formatKw(data.house)} · PV: ${formatKw(data.pv)} · Bat: ${formatKwSigned(data.batteryDisplay)}"
+        } else {
+            "Solar - astept date"
+        }
         val threshold = formatKw(settings.thresholdW.toDouble())
-        val clear = formatKw(settings.clearThresholdW.toDouble())
         return NotificationCompat.Builder(this, CHANNEL_MONITOR)
             .setSmallIcon(R.drawable.ic_stat_solar)
-            .setContentTitle(currentTitle)
-            .setContentText("Alarma activa • prag $threshold • clear $clear")
-            .setSubText(data?.house?.let { formatKw(it) })
+            .setContentTitle(title)
+            .setContentText("Prag alarma: $threshold")
             .setContentIntent(openAppIntent())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -215,7 +218,7 @@ class SolarAlarmService : Service() {
         ringtone = next
         next.play()
         alarmStopJob = scope.launch {
-            delay(30_000)
+            delay(ALARM_SOUND_MS)
             stopAlarmSound()
         }
     }
@@ -225,6 +228,7 @@ class SolarAlarmService : Service() {
         alarmStopJob = null
         ringtone?.stop()
         ringtone = null
+        AlarmState.onRingStop()
     }
 
     private fun vibrate() {
@@ -265,6 +269,10 @@ class SolarAlarmService : Service() {
     private fun formatKw(valueW: Double): String =
         String.format("%.1f kW", valueW / 1000.0)
 
+    // Cu semn explicit: +incarcare / -descarcare (conventie battery_display_power).
+    private fun formatKwSigned(valueW: Double): String =
+        String.format("%+.1f kW", valueW / 1000.0)
+
     private fun stopEverything() {
         stopAlarmSound()
         monitorJob?.cancel()
@@ -282,5 +290,7 @@ class SolarAlarmService : Service() {
         private const val CHANNEL_ALERTS = "solar_alerts"
         private const val MONITOR_ID = 7001
         private const val ALERT_ID = 7002
+        // Durata maxima cat suna alarma inainte sa se opreasca automat.
+        private const val ALARM_SOUND_MS = 15_000L
     }
 }

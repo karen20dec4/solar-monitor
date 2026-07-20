@@ -19,6 +19,22 @@ priority, etc.) — this is deliberately unimplemented and gated behind an expli
 Treat any change that could write to the serial device as off-limits unless the user explicitly
 asks and accepts the risk.
 
+> **Decision log (2026-07-10):** on-demand charge control (an app button that would write charge/
+> priority registers) was evaluated with the user and **declined** — the charge target is already
+> 56V, charging is already solar-only, so writing them changes nothing, and the only real lever
+> (source priority) isn't worth breaking the invariant. System stays 100% READ-ONLY. The verified
+> FC03 holding-register setpoints (charge/float 56V, max charge 70A, SBU, solar-only) are documented
+> in `COPILOT_CONTEXT.md` §13.14 — read via a one-off FC03 recon, which is a *read* and does not
+> violate the invariant.
+>
+> **Decision log (2026-07-18, topic CLOSED):** researched the SPF Modbus protocol (official docs +
+> community implementations) for a "start charging battery now" command — **no such command exists**;
+> the solar charger is an autonomous state machine with an internal, non-settable re-charge threshold
+> (≈ float −2V). The only protocol-level workaround (writing holding reg 1 to switch output to
+> utility so PV dedicates to the battery) was **rejected by the user** (grid consumption not worth
+> ~0.5V). Final: no button, no writes, READ-ONLY stands. Full research in `COPILOT_CONTEXT.md` §13.17.
+> Do not reopen without new information (e.g. new firmware with documented charge-control registers).
+
 ## Architecture
 
 ```
@@ -46,7 +62,7 @@ Four containers (`docker-compose.yml`): `solar-collector`, `solar-influxdb`, `so
 and retentions. The collector gets the whole file via `env_file: ./.env`, so tuning an alert =
 edit `.env` then `docker compose up -d collector` (no rebuild needed for env changes).
 
-`REG_COUNT` must be **≥ the highest register index the code reads** (currently 84 → 91 is fine).
+`REG_COUNT` must be **≥ the highest register index the code reads** (currently 88 → 91 is fine).
 The collector reads registers `0..REG_COUNT-1` in one FC04 call. Lower it and `parse()` will
 IndexError.
 
@@ -72,6 +88,27 @@ docker exec solar-influxdb influx query --org casa --token <INFLUXDB_TOKEN> \
 # test an ntfy push
 curl -d "test" -H "Title: test" -H "Priority: urgent" -H "Tags: zap" http://localhost:8088/Alerta_6Kw
 ```
+
+### Android emulator
+
+The host has a working, KVM-accelerated, headless Android emulator for UI verification:
+
+- SDK: `/opt/android-sdk`; emulator `36.6.11`; platform-tools `37.0.0`.
+- AVD: `SolarMonitor_API_34` (Pixel 6, Android 14/API 34, Google APIs x86_64, 1080x2400).
+- AVD files: `/root/.android/avd/SolarMonitor_API_34.avd`.
+- Project skill: `.codex/skills/solar-monitor-emulator/SKILL.md`.
+- Generated screenshots, UI hierarchy and logcat are stored in the gitignored
+  `android/build/emulator-artifacts/` directory.
+
+Run the complete build/install/render/crash check with:
+
+```bash
+.codex/skills/solar-monitor-emulator/scripts/emulator-check.sh verify
+```
+
+Useful subcommands are `doctor`, `start`, `wait`, `build`, `install`, `launch`, `screenshot`, `status`
+and `stop`. The emulator is intentionally started on demand rather than as a boot service. A successful
+Gradle build is not enough for UI work: inspect the captured PNG after `verify`.
 
 **Deploy flow:** edit locally → `git push` → on the server `cd /opt/solar-monitor && git pull &&
 docker compose up -d --build`. To debug the Modbus mapping live, set `DEBUG_RAW=1` in `.env`,
