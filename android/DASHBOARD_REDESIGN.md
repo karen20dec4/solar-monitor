@@ -18,15 +18,15 @@ API-ul sau logica, iar datele continua sa se actualizeze la fiecare raspuns de l
 
 Resursele principale sunt in `app/src/main/res/drawable-nodpi/`:
 
-- `retro_dashboard_background_artwork.webp` — fundalul cu zonele TABLOU delimitate;
-- `retro_page_background_artwork.webp` — `background-cu-navbar.png`, fara delimitari pentru continut,
-  dar cu placa inferioara rezervata NAV-ului; este folosit de ENERGIE, SISTEM si SETARI;
+- `retro_dashboard_background_artwork.webp` si `retro_page_background_artwork.webp` — doua iesiri identice
+  generate din `background-v1-optimized.png`; acelasi metal continuu este folosit pe toate cele patru pagini;
 - `retro_dashboard_live_artwork.webp` — placa ACUM/PANOURI, cu ferestre goale pentru valori dinamice;
 - `retro_dashboard_flow_artwork.webp` — placa FLUX ENERGETIC cu miniaturi fotografice;
 - `retro_bottom_navigation_artwork.webp` — bara comuna cu cele patru instrumente de navigare.
 
-Sursele de lucru pot ramane in `android/build/emulator-artifacts/design/` (director ignorat de Git).
-Conversia reproductibila in resurse Android se face cu:
+Sursele Photoshop aprobate sunt versionate in `android/build/emulator-artifacts/design/optimized/`.
+Doar aceste patru PNG-uri sunt exceptate explicit din directorul `android/build/`; toate celelalte
+artefacte generate raman ignorate. Conversia reproductibila in resurse Android se face cu:
 
 ```bash
 scripts/audit-retro-ui-assets.sh
@@ -35,23 +35,18 @@ scripts/prepare-retro-ui-assets.sh
 
 Primul script verifica dimensiunile, spatiul sRGB si alpha-ul cardurilor fara sa modifice imaginile. Cu
 `--strict`, acesta esueaza pana cand exporturile respecta contractul. Al doilea script necesita ImageMagick
-(`magick`), pastreaza direct alpha-ul Photoshop si optimizeaza rezultatul ca WebP. Doar pentru sursele
-vechi opace foloseste temporar eliminarea fundalului exterior conectat si afiseaza un avertisment. Nu se
-editeaza manual fisierele WebP rezultate.
+(`magick`), pastreaza direct alpha-ul Photoshop si optimizeaza rezultatul ca WebP. Cardurile sunt scalate
+la latimea Android de 1024 px cu raportul lor natural de aspect; nu mai sunt deformate intr-un canvas
+comun. Nu se editeaza manual fisierele WebP rezultate.
 
 ### Contract pentru exporturile Photoshop finale
 
-Ca valorile Compose sa ramana perfect aliniate, curata imaginile fara sa muti sau sa redimensionezi
-elementele din interior:
+Contractul curent foloseste exact aceste exporturi PNG-32 sRGB, toate cu alpha real:
 
-- `pag-tablou-card-ACUM.png` si `pag-tablou-card-FLUX-ENERGETIC.png`: canvas 1448×1086, PNG-32 sRGB,
-  exterior complet transparent, fara matte negru; pastreaza umbra reala a placii, dar elimina franjurii
-  negri de 1–2 px de pe muchiile antialiasate;
-- `pag-tablou-card-NAV.png`: canvas 2172×724, PNG-32 sRGB, transparent in jurul panoului; pastreaza cele
-  patru butoane in aceleasi pozitii si nu adauga glow-ul tabului activ;
-- `pag-tablou-background.png` si `background-cu-navbar.png`: canvas 941×1672, sRGB; acestea pot ramane
-  opace. Negrul din exteriorul ramei rotunjite este fundal intentionat, dar petele/franjurii negri intrati
-  peste metal trebuie curatati.
+- `pag-tablou-card-ACUM-optimized.png`: 1386×1011;
+- `pag-tablou-card-FLUX-ENERGETIC-optimized.png`: 1405×939;
+- `pag-tablou-card-NAV-optimized.png`: 1835×321;
+- `background-v1-optimized.png`: 937×1666.
 
 Exporta cu `Transparency` activ si `Matte: None` (alpha ne-premultiplicat). Nu include cifre, unitati,
 acul cadranului, LED-uri animate sau starea selectata; acestea sunt desenate de Compose. Dupa inlocuire,
@@ -64,8 +59,12 @@ Tema Retro este un panou fizic care ocupa intregul spatiu al aplicatiei. `RetroD
 `Column(fillMaxSize())`: continutul paginii primeste `weight(1f)`, iar `RetroBottomNavigation` ramane ultimul
 copil, fix la baza. Niciuna dintre cele patru pagini Retro nu foloseste `verticalScroll` sau `LazyColumn`.
 Pe TABLOU, placile ACUM si FLUX sunt ancorate sus, cu umbrele lor usor suprapuse, nu distribuite cu
-`SpaceEvenly`. Zona metalica ramasa sub FLUX este rezervata intentionat pentru un viitor grup compact de
-informatii esentiale; nu este umpluta automat cu decor sau carduri provizorii.
+`SpaceEvenly`. Pe emulatorul de referinta 1080×2400, ambele au 95% din latimea anterioara si isi pastreaza
+raportul natural de aspect: ACUM este deplasat cu 40 px in jos, iar FLUX cu 140 px fata de pozitia sa
+anterioara. Pozitiile sunt calculate independent intr-un `BoxWithConstraints`, astfel incat shrink-ul
+cardului de sus sa nu traga automat FLUX inapoi in sus. Zona metalica ramasa sub FLUX este rezervata
+intentionat pentru un viitor grup compact de informatii esentiale; nu este umpluta automat cu decor sau
+carduri provizorii.
 
 - TABLOU — consum live, PV si flux energetic;
 - ENERGIE — productie/consum zilnic, totaluri, cinci selectoare si graficul ales;
@@ -74,10 +73,25 @@ informatii esentiale; nu este umpluta automat cu decor sau carduri provizorii.
 
 Nu exista tab CONTROL. Aplicatia ramane READ-ONLY. Atingerea cadranului, a valorilor PV sau a unei valori
 zilnice schimba direct tabul pe ENERGIE si selecteaza graficul potrivit; nu exista un buton separat Istoric
-in tema Retro.
+in tema Retro. Placa NAV foloseste la randul ei 95% din dimensiunea anterioara si este centrata, pentru a
+lasa vizibil fundalul metalic pe toate laturile.
 
 Codul semantic ramane: verde `#accc78` = solar/normal, albastru = casa/consum, galben `#f1e169` = baterie
 sau atentie si rosu = retea/alarma. Olive `#81795a` este material neutru, nu stare energetica.
+
+Fluxul nu foloseste bateria ca nod vizual comun. `resolveRetroEnergyFlow()` stabileste ramuri independente:
+
+- Panouri → Casa: cablu vertical cu LED-uri verzi cand exista productie si consum;
+- Panouri → Baterie: ramura diagonala verde numai cand bateria se incarca;
+- Baterie → Casa: ramura orizontala galbena numai cand bateria se descarca;
+- Retea → Casa/Baterie: rosu numai pentru importul corespunzator.
+
+Puterea bateriei este verde la incarcare, galbena la descarcare si olive in zona neutra de ±50 W. Valoarea
+PV este plasata la dreapta miniaturii panourilor, nu peste traseul direct Panouri → Casa.
+
+Valorile din FLUX folosesc 18 sp bold (cu 20% peste vechiul 15 sp). Eticheta din stanga sus este
+`Versiune V${BuildConfig.VERSION_NAME}`, astfel incat afisajul urmeaza automat versiunea reala a APK-ului,
+fara text duplicat in layout.
 
 Implementarea este impartita astfel:
 

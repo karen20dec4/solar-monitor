@@ -5,7 +5,7 @@ set -euo pipefail
 # Imaginile contin numai sasiul/patina; toate valorile, acul, LED-urile si
 # zonele tactile sunt suprapuse dinamic in Jetpack Compose.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DESIGN_DIR="${1:-$REPO_ROOT/android/build/emulator-artifacts/design}"
+DESIGN_DIR="${1:-$REPO_ROOT/android/build/emulator-artifacts/design/optimized}"
 OUTPUT_DIR="$REPO_ROOT/android/app/src/main/res/drawable-nodpi"
 WORK_DIR="$(mktemp -d /tmp/solar-retro-ui.XXXXXX)"
 
@@ -48,20 +48,17 @@ has_real_transparency() {
 }
 
 for source in \
-    background-cu-navbar.png \
-    pag-tablou-background.png \
-    pag-tablou-card-ACUM.png \
-    pag-tablou-card-FLUX-ENERGETIC.png \
-    pag-tablou-card-NAV.png; do
+    background-v1-optimized.png \
+    pag-tablou-card-ACUM-optimized.png \
+    pag-tablou-card-FLUX-ENERGETIC-optimized.png \
+    pag-tablou-card-NAV-optimized.png; do
     require_source "$source"
 done
 
-
-require_dimensions background-cu-navbar.png 941x1672
-require_dimensions pag-tablou-background.png 941x1672
-require_dimensions pag-tablou-card-ACUM.png 1448x1086
-require_dimensions pag-tablou-card-FLUX-ENERGETIC.png 1448x1086
-require_dimensions pag-tablou-card-NAV.png 2172x724
+require_dimensions background-v1-optimized.png 937x1666
+require_dimensions pag-tablou-card-ACUM-optimized.png 1386x1011
+require_dimensions pag-tablou-card-FLUX-ENERGETIC-optimized.png 1405x939
+require_dimensions pag-tablou-card-NAV-optimized.png 1835x321
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -83,7 +80,7 @@ make_card() {
         printf 'Alpha Photoshop detectat: %s (fara eliminare automata a fundalului).\n' "$source"
         magick "$DESIGN_DIR/$source" \
             -filter Lanczos \
-            -resize '1024x768!' \
+            -resize '1024x' \
             -strip \
             -quality 90 \
             -define webp:method=6 \
@@ -97,7 +94,7 @@ make_card() {
             -fill none \
             -draw 'color 0,0 floodfill' \
             -filter Lanczos \
-            -resize '1024x768!' \
+            -resize '1024x' \
             -strip \
             -quality 90 \
             -define webp:method=6 \
@@ -140,11 +137,11 @@ make_navigation() {
     install -m 0644 "$WORK_DIR/$output" "$OUTPUT_DIR/$output"
 }
 
-make_background pag-tablou-background.png retro_dashboard_background_artwork.webp
-make_background background-cu-navbar.png retro_page_background_artwork.webp
-make_card pag-tablou-card-ACUM.png retro_dashboard_live_artwork.webp
-make_card pag-tablou-card-FLUX-ENERGETIC.png retro_dashboard_flow_artwork.webp
-make_navigation pag-tablou-card-NAV.png retro_bottom_navigation_artwork.webp
+make_background background-v1-optimized.png retro_dashboard_background_artwork.webp
+make_background background-v1-optimized.png retro_page_background_artwork.webp
+make_card pag-tablou-card-ACUM-optimized.png retro_dashboard_live_artwork.webp
+make_card pag-tablou-card-FLUX-ENERGETIC-optimized.png retro_dashboard_flow_artwork.webp
+make_navigation pag-tablou-card-NAV-optimized.png retro_bottom_navigation_artwork.webp
 
 printf 'Resurse Retro pregatite in %s:\n' "$OUTPUT_DIR"
 printf '  %s\n' \

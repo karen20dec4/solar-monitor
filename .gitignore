@@ -16,11 +16,17 @@ keystore.properties
 *.apk
 .gradle/
 android/.gradle/
-android/build/
+# Pastreaza doar exporturile Photoshop aprobate; restul ramane generat local.
+android/build/*
+!android/build/emulator-artifacts/
+android/build/emulator-artifacts/*
+!android/build/emulator-artifacts/design/
+android/build/emulator-artifacts/design/*
+!android/build/emulator-artifacts/design/optimized/
+!android/build/emulator-artifacts/design/optimized/*.png
 android/app/build/
 android/app/release/
 android/local.properties
 
 # Local migration backups
 solar-volume-backup-cutover/
-

@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -51,6 +52,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.OffsetDateTime
@@ -65,6 +67,60 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 private const val RETRO_DEAD = 50.0
+
+internal enum class RetroBatteryFlow {
+    CHARGING,
+    DISCHARGING,
+    IDLE
+}
+
+internal data class RetroEnergyFlowState(
+    val battery: RetroBatteryFlow,
+    val solarToHouse: Boolean,
+    val solarToBattery: Boolean,
+    val batteryToHouse: Boolean,
+    val gridToHouse: Boolean,
+    val gridToBattery: Boolean
+)
+
+internal fun retroBatteryFlowColor(flow: RetroBatteryFlow): Color = when (flow) {
+    RetroBatteryFlow.CHARGING -> RetroSage
+    RetroBatteryFlow.DISCHARGING -> RetroYellow
+    RetroBatteryFlow.IDLE -> RetroOlive
+}
+
+/**
+ * Stabileste traseele energetice inainte de desenare. Semnul valorii afisate a bateriei are prioritate:
+ * pozitiv inseamna incarcare, negativ inseamna descarcare. Campurile charge/support sunt fallback pentru
+ * momentele in care valoarea semnata se afla in zona moarta de 50 W.
+ */
+internal fun resolveRetroEnergyFlow(
+    pv: Double,
+    house: Double,
+    batteryDisplay: Double,
+    batteryCharge: Double,
+    batterySupport: Double,
+    gridImport: Double,
+    gridCharge: Double
+): RetroEnergyFlowState {
+    val battery = when {
+        batteryDisplay > RETRO_DEAD -> RetroBatteryFlow.CHARGING
+        batteryDisplay < -RETRO_DEAD -> RetroBatteryFlow.DISCHARGING
+        batteryCharge > RETRO_DEAD && batterySupport <= RETRO_DEAD -> RetroBatteryFlow.CHARGING
+        batterySupport > RETRO_DEAD -> RetroBatteryFlow.DISCHARGING
+        else -> RetroBatteryFlow.IDLE
+    }
+    val solarActive = pv > RETRO_DEAD
+    val houseActive = house > RETRO_DEAD
+    return RetroEnergyFlowState(
+        battery = battery,
+        solarToHouse = solarActive && houseActive,
+        solarToBattery = solarActive && battery == RetroBatteryFlow.CHARGING,
+        batteryToHouse = houseActive && battery == RetroBatteryFlow.DISCHARGING,
+        gridToHouse = houseActive && gridImport > RETRO_DEAD,
+        gridToBattery = gridCharge > RETRO_DEAD && battery == RetroBatteryFlow.CHARGING
+    )
+}
 
 internal enum class RetroTab(val label: String) {
     DASHBOARD("TABLOU"),
@@ -85,13 +141,7 @@ internal fun RetroDashboard(
 ) {
     Box(Modifier.fillMaxSize()) {
         Image(
-            painter = painterResource(
-                if (selectedTab == RetroTab.DASHBOARD) {
-                    R.drawable.retro_dashboard_background_artwork
-                } else {
-                    R.drawable.retro_page_background_artwork
-                }
-            ),
+            painter = painterResource(R.drawable.retro_page_background_artwork),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.FillBounds
@@ -130,28 +180,37 @@ private fun RetroOverviewPage(
     alarmThresholdW: Int,
     onEnergyFieldClick: (String) -> Unit
 ) {
-    Column(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
-            .padding(start = 7.dp, top = 0.dp, end = 7.dp, bottom = 5.dp),
-        verticalArrangement = Arrangement.Top
+            .padding(start = 7.dp, top = 18.dp, end = 7.dp, bottom = 5.dp)
     ) {
+        val density = LocalDensity.current
+        val cardWidth = maxWidth * 0.95f
+        val originalLiveHeight = maxWidth / (1_386f / 1_011f)
+        val flowTopPx = with(density) {
+            originalLiveHeight.roundToPx() + (-6).dp.roundToPx() + 140
+        }
+
         RetroLivePanel(
             data = data,
             alarmThresholdW = alarmThresholdW,
             onHouseHistoryClick = { onEnergyFieldClick("output_power") },
             onPvHistoryClick = { onEnergyFieldClick("pv_power") },
-            modifier = Modifier.fillMaxWidth().aspectRatio(4f / 3f)
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .width(cardWidth)
+                .aspectRatio(1_386f / 1_011f)
+                .offset { IntOffset(x = 0, y = 40) }
         )
         RetroFlowPanel(
             data = data,
             onEnergyFieldClick = onEnergyFieldClick,
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(4f / 3f)
-                // Resursele au fiecare o mica margine transparenta. Suprapunerea
-                // vizuala le apropie fara sa taie umbrele fotografice ale placilor.
-                .offset(y = (-14).dp)
+                .align(Alignment.TopCenter)
+                .width(cardWidth)
+                .aspectRatio(1_405f / 939f)
+                .offset { IntOffset(x = 0, y = flowTopPx) }
         )
     }
 }
@@ -229,53 +288,59 @@ private fun RetroBottomNavigation(
     selectedTab: RetroTab,
     onTabSelected: (RetroTab) -> Unit
 ) {
-    BoxWithConstraints(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 7.dp, end = 7.dp, bottom = 6.dp)
-            .aspectRatio(1024f / 177f)
+            .padding(start = 7.dp, end = 7.dp, bottom = 6.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Image(
-            painter = painterResource(R.drawable.retro_bottom_navigation_artwork),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.FillBounds
-        )
-        Row(
-            Modifier
-                .fillMaxSize()
-                .padding(horizontal = maxWidth * 0.035f, vertical = maxHeight * 0.09f)
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .aspectRatio(1_835f / 321f)
         ) {
-            RetroTab.entries.forEach { tab ->
-                val selected = tab == selectedTab
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .semantics {
-                            contentDescription = "Tab ${tab.label}${if (selected) ", selectat" else ""}"
-                        }
-                        .clickable { onTabSelected(tab) }
-                ) {
-                    if (selected) {
-                        Canvas(Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp))) {
-                            val glowCenter = Offset(size.width / 2f, size.height * 0.88f)
-                            drawCircle(RetroYellow.copy(alpha = 0.035f), size.width * 0.52f, glowCenter)
-                            drawCircle(RetroYellow.copy(alpha = 0.075f), size.width * 0.32f, glowCenter)
-                            drawLine(
-                                color = RetroYellow.copy(alpha = 0.22f),
-                                start = Offset(size.width * 0.22f, size.height * 0.87f),
-                                end = Offset(size.width * 0.78f, size.height * 0.87f),
-                                strokeWidth = 7.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-                            drawLine(
-                                color = RetroYellow,
-                                start = Offset(size.width * 0.26f, size.height * 0.87f),
-                                end = Offset(size.width * 0.74f, size.height * 0.87f),
-                                strokeWidth = 1.4.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
+            Image(
+                painter = painterResource(R.drawable.retro_bottom_navigation_artwork),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.FillBounds
+            )
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = maxWidth * 0.035f, vertical = maxHeight * 0.09f)
+            ) {
+                RetroTab.entries.forEach { tab ->
+                    val selected = tab == selectedTab
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .semantics {
+                                contentDescription = "Tab ${tab.label}${if (selected) ", selectat" else ""}"
+                            }
+                            .clickable { onTabSelected(tab) }
+                    ) {
+                        if (selected) {
+                            Canvas(Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp))) {
+                                val glowCenter = Offset(size.width / 2f, size.height * 0.88f)
+                                drawCircle(RetroYellow.copy(alpha = 0.035f), size.width * 0.52f, glowCenter)
+                                drawCircle(RetroYellow.copy(alpha = 0.075f), size.width * 0.32f, glowCenter)
+                                drawLine(
+                                    color = RetroYellow.copy(alpha = 0.22f),
+                                    start = Offset(size.width * 0.22f, size.height * 0.87f),
+                                    end = Offset(size.width * 0.78f, size.height * 0.87f),
+                                    strokeWidth = 7.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
+                                drawLine(
+                                    color = RetroYellow,
+                                    start = Offset(size.width * 0.26f, size.height * 0.87f),
+                                    end = Offset(size.width * 0.74f, size.height * 0.87f),
+                                    strokeWidth = 1.4.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
+                            }
                         }
                     }
                 }
@@ -308,7 +373,7 @@ private fun RetroLivePanel(
             }
             .clickable(onClick = onHouseHistoryClick)
     ) {
-        val scale = maxWidth / 1_448f
+        val scale = maxWidth / 1_386f
         Image(
             painter = painterResource(R.drawable.retro_dashboard_live_artwork),
             contentDescription = null,
@@ -317,9 +382,9 @@ private fun RetroLivePanel(
         )
 
         Text(
-            text = "ACUM",
-            modifier = Modifier.offset(x = scale * 104f, y = scale * 60f),
-            color = RetroSage,
+            text = "Versiune V${BuildConfig.VERSION_NAME}",
+            modifier = Modifier.offset(x = scale * 88f, y = scale * 23f),
+            color = Color(0xFFC9BC93),
             fontFamily = RetroMono,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
@@ -328,7 +393,7 @@ private fun RetroLivePanel(
         Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 16.dp, end = 32.dp),
+                .padding(top = scale * 23f, end = scale * 111f),
             verticalAlignment = Alignment.CenterVertically
         ) {
             RetroLed(sourceColor, Modifier.size(16.dp), active = data != null)
@@ -349,7 +414,7 @@ private fun RetroLivePanel(
             unit = "W",
             color = loadColor,
             modifier = Modifier
-                .offset(x = scale * 514f, y = scale * 616f)
+                .offset(x = scale * 483f, y = scale * 579f)
                 .width(scale * 420f)
                 .height(scale * 166f),
             embedded = true,
@@ -360,7 +425,7 @@ private fun RetroLivePanel(
             unit = "W",
             color = RetroSage,
             modifier = Modifier
-                .offset(x = scale * 241f, y = scale * 916f)
+                .offset(x = scale * 210f, y = scale * 879f)
                 .width(scale * 203f)
                 .height(scale * 65f)
                 .clickable(onClick = onPvHistoryClick),
@@ -372,7 +437,7 @@ private fun RetroLivePanel(
             unit = "W",
             color = RetroSage,
             modifier = Modifier
-                .offset(x = scale * 611f, y = scale * 916f)
+                .offset(x = scale * 580f, y = scale * 879f)
                 .width(scale * 203f)
                 .height(scale * 65f)
                 .clickable(onClick = onPvHistoryClick),
@@ -384,7 +449,7 @@ private fun RetroLivePanel(
             unit = "W",
             color = RetroSage,
             modifier = Modifier
-                .offset(x = scale * 893f, y = scale * 849f)
+                .offset(x = scale * 862f, y = scale * 812f)
                 .width(scale * 385f)
                 .height(scale * 126f)
                 .clickable(onClick = onPvHistoryClick),
@@ -406,14 +471,14 @@ private fun RetroArtworkGaugeNeedle(
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier) {
-        val center = Offset(size.width * 0.50f, size.height * 0.511f)
+        val center = Offset(size.width * 0.50f, size.height * 0.512f)
         val fraction = (animatedValue / 7_000f).coerceIn(0f, 1f)
         val angle = (155f + 230f * fraction) * PI.toFloat() / 180f
         val direction = Offset(cos(angle), sin(angle))
         val perpendicular = Offset(-direction.y, direction.x)
-        val length = size.width * 0.275f
+        val length = size.width * 0.287f
         val tip = center + direction * length
-        val tail = center - direction * (size.width * 0.018f)
+        val tail = center - direction * (size.width * 0.019f)
         val halfWidth = size.width * 0.0044f
 
         val shadow = Path().apply {
@@ -757,9 +822,22 @@ private fun RetroFlowPanel(
 ) {
     val pv = data?.pv ?: 0.0
     val battery = data?.batteryDisplay ?: 0.0
-    val charging = (data?.batteryCharge ?: 0.0) > RETRO_DEAD || battery > RETRO_DEAD
-    val discharging = (data?.batterySupport ?: 0.0) > RETRO_DEAD || battery < -RETRO_DEAD
     val grid = (data?.gridImport ?: 0.0) + (data?.gridCharge ?: 0.0)
+    val flow = resolveRetroEnergyFlow(
+        pv = pv,
+        house = data?.house ?: 0.0,
+        batteryDisplay = battery,
+        batteryCharge = data?.batteryCharge ?: 0.0,
+        batterySupport = data?.batterySupport ?: 0.0,
+        gridImport = data?.gridImport ?: 0.0,
+        gridCharge = data?.gridCharge ?: 0.0
+    )
+    val batteryColor = retroBatteryFlowColor(flow.battery)
+    val batteryAction = when (flow.battery) {
+        RetroBatteryFlow.CHARGING -> "incarcare"
+        RetroBatteryFlow.DISCHARGING -> "descarcare"
+        RetroBatteryFlow.IDLE -> "repaus"
+    }
     val phase by rememberInfiniteTransition(label = "flux retro industrial").animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -771,7 +849,7 @@ private fun RetroFlowPanel(
     )
 
     BoxWithConstraints(modifier = modifier) {
-        val scale = maxWidth / 1_448f
+        val scale = maxWidth / 1_405f
         Image(
             painter = painterResource(R.drawable.retro_dashboard_flow_artwork),
             contentDescription = null,
@@ -780,6 +858,35 @@ private fun RetroFlowPanel(
         )
 
         Canvas(Modifier.fillMaxSize()) {
+            fun cubicPoint(start: Offset, control1: Offset, control2: Offset, end: Offset, t: Float): Offset {
+                val inverse = 1f - t
+                return start * (inverse * inverse * inverse) +
+                    control1 * (3f * inverse * inverse * t) +
+                    control2 * (3f * inverse * t * t) +
+                    end * (t * t * t)
+            }
+
+            fun cubicTangent(start: Offset, control1: Offset, control2: Offset, end: Offset, t: Float): Offset {
+                val inverse = 1f - t
+                return (control1 - start) * (3f * inverse * inverse) +
+                    (control2 - control1) * (6f * inverse * t) +
+                    (end - control2) * (3f * t * t)
+            }
+
+            fun led(point: Offset, perpendicular: Offset, index: Int, color: Color) {
+                val jitter = sin((index + 1) * 4.13f + phase * 6.7f) * 1.05.dp.toPx()
+                val center = point + perpendicular * jitter
+                val irregularity = 0.84f + 0.16f * sin((index + 2) * 2.47f + phase * 5.1f)
+                drawCircle(color.copy(alpha = 0.055f), 8.dp.toPx() * irregularity, center)
+                drawCircle(color.copy(alpha = 0.16f), 4.5.dp.toPx() * irregularity, center)
+                drawCircle(color.copy(alpha = 0.92f), 2.05.dp.toPx() * irregularity, center)
+                drawCircle(
+                    Color.White.copy(alpha = 0.52f),
+                    0.58.dp.toPx(),
+                    center - Offset(0.45.dp.toPx(), 0.50.dp.toPx())
+                )
+            }
+
             fun movingLeds(start: Offset, end: Offset, active: Boolean, color: Color) {
                 if (!active) return
                 val vector = end - start
@@ -787,35 +894,80 @@ private fun RetroFlowPanel(
                 val perpendicular = Offset(-vector.y / length, vector.x / length)
                 repeat(3) { index ->
                     val progress = (phase + index / 3f) % 1f
-                    val jitter = sin((index + 1) * 4.13f + phase * 6.7f) * 1.05.dp.toPx()
-                    val point = start + vector * progress + perpendicular * jitter
-                    val irregularity = 0.84f + 0.16f * sin((index + 2) * 2.47f + phase * 5.1f)
-                    drawCircle(color.copy(alpha = 0.055f), 8.dp.toPx() * irregularity, point)
-                    drawCircle(color.copy(alpha = 0.16f), 4.5.dp.toPx() * irregularity, point)
-                    drawCircle(color.copy(alpha = 0.92f), 2.05.dp.toPx() * irregularity, point)
-                    drawCircle(
-                        Color.White.copy(alpha = 0.52f),
-                        0.58.dp.toPx(),
-                        point - Offset(0.45.dp.toPx(), 0.50.dp.toPx())
-                    )
+                    val point = start + vector * progress
+                    led(point, perpendicular, index, color)
                 }
             }
 
-            val solarJoint = Offset(size.width * 0.452f, size.height * 0.361f)
-            val batteryJoint = Offset(size.width * 0.232f, size.height * 0.671f)
-            val houseLeft = Offset(size.width * 0.447f, size.height * 0.674f)
-            val houseRight = Offset(size.width * 0.619f, size.height * 0.674f)
-            val gridJoint = Offset(size.width * 0.775f, size.height * 0.674f)
+            fun physicalCableAndLeds(
+                start: Offset,
+                control1: Offset,
+                control2: Offset,
+                end: Offset,
+                active: Boolean,
+                color: Color
+            ) {
+                val path = Path().apply {
+                    moveTo(start.x, start.y)
+                    cubicTo(control1.x, control1.y, control2.x, control2.y, end.x, end.y)
+                }
+                drawPath(path, Color.Black.copy(alpha = 0.68f), style = Stroke(5.2.dp.toPx(), cap = StrokeCap.Round))
+                drawPath(path, RetroBrassDark.copy(alpha = 0.96f), style = Stroke(3.1.dp.toPx(), cap = StrokeCap.Round))
+                drawPath(path, RetroBrassLight.copy(alpha = 0.66f), style = Stroke(0.85.dp.toPx(), cap = StrokeCap.Round))
 
-            movingLeds(solarJoint, batteryJoint, pv > RETRO_DEAD, RetroSage)
-            when {
-                discharging -> movingLeds(batteryJoint, houseLeft, active = true, color = RetroYellow)
-                pv > RETRO_DEAD -> movingLeds(batteryJoint, houseLeft, active = true, color = RetroSage)
+                // Inele neregulate: cablu impletit/patinat, nu o linie vectoriala perfecta.
+                repeat(17) { index ->
+                    val t = (index + 1f) / 18f
+                    val point = cubicPoint(start, control1, control2, end, t)
+                    val tangent = cubicTangent(start, control1, control2, end, t)
+                    val length = sqrt(tangent.x * tangent.x + tangent.y * tangent.y).coerceAtLeast(1f)
+                    val perpendicular = Offset(-tangent.y / length, tangent.x / length)
+                    val half = (1.15f + 0.28f * sin(index * 2.31f)) * density
+                    drawLine(
+                        color = Color.Black.copy(alpha = if (index % 3 == 0) 0.42f else 0.25f),
+                        start = point - perpendicular * half,
+                        end = point + perpendicular * half,
+                        strokeWidth = 0.55.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+
+                if (!active) return
+                repeat(4) { index ->
+                    val t = (phase + index / 4f) % 1f
+                    val point = cubicPoint(start, control1, control2, end, t)
+                    val tangent = cubicTangent(start, control1, control2, end, t)
+                    val length = sqrt(tangent.x * tangent.x + tangent.y * tangent.y).coerceAtLeast(1f)
+                    led(point, Offset(-tangent.y / length, tangent.x / length), index, color)
+                }
             }
-            if (charging && pv <= RETRO_DEAD) {
+
+            val solarJoint = Offset(size.width * 0.450f, size.height * 0.345f)
+            val batteryJoint = Offset(size.width * 0.230f, size.height * 0.711f)
+            val houseLeft = Offset(size.width * 0.445f, size.height * 0.711f)
+            val houseRight = Offset(size.width * 0.622f, size.height * 0.711f)
+            val gridJoint = Offset(size.width * 0.783f, size.height * 0.711f)
+
+            val solarHouseStart = Offset(size.width * 0.520f, size.height * 0.396f)
+            val solarHouseControl1 = Offset(size.width * 0.516f, size.height * 0.450f)
+            val solarHouseControl2 = Offset(size.width * 0.524f, size.height * 0.535f)
+            val solarHouseEnd = Offset(size.width * 0.520f, size.height * 0.585f)
+
+            physicalCableAndLeds(
+                start = solarHouseStart,
+                control1 = solarHouseControl1,
+                control2 = solarHouseControl2,
+                end = solarHouseEnd,
+                active = flow.solarToHouse,
+                color = RetroSage
+            )
+            movingLeds(solarJoint, batteryJoint, flow.solarToBattery, RetroSage)
+            movingLeds(batteryJoint, houseLeft, flow.batteryToHouse, RetroYellow)
+            movingLeds(gridJoint, houseRight, flow.gridToHouse, RetroRed)
+            if (flow.gridToBattery) {
+                movingLeds(houseRight, houseLeft, active = true, color = RetroRed)
                 movingLeds(houseLeft, batteryJoint, active = true, color = RetroRed)
             }
-            movingLeds(gridJoint, houseRight, grid > RETRO_DEAD, RetroRed)
         }
 
         RetroArtworkFlowValue(
@@ -824,16 +976,16 @@ private fun RetroFlowPanel(
             description = "Panouri ${retroWhole(data?.pv)} W. Deschide graficul Energie.",
             onClick = { onEnergyFieldClick("pv_power") },
             modifier = Modifier
-                .offset(x = scale * 596f, y = scale * 470f)
-                .width(scale * 270f)
+                .offset(x = scale * 823f, y = scale * 290f)
+                .width(scale * 300f)
         )
         RetroArtworkFlowValue(
             value = "${retroSigned(data?.batteryDisplay)} W",
-            color = RetroYellow,
-            description = "Baterie ${retroSigned(data?.batteryDisplay)} W. Deschide graficul Energie.",
+            color = batteryColor,
+            description = "Baterie ${retroSigned(data?.batteryDisplay)} W, $batteryAction. Deschide graficul Energie.",
             onClick = { onEnergyFieldClick("battery_voltage") },
             modifier = Modifier
-                .offset(x = scale * 70f, y = scale * 856f)
+                .offset(x = scale * 73f, y = scale * 786f)
                 .width(scale * 300f)
         )
         RetroArtworkFlowValue(
@@ -842,7 +994,7 @@ private fun RetroFlowPanel(
             description = "Casa ${retroWhole(data?.house)} W. Deschide graficul Energie.",
             onClick = { onEnergyFieldClick("output_power") },
             modifier = Modifier
-                .offset(x = scale * 580f, y = scale * 856f)
+                .offset(x = scale * 608f, y = scale * 786f)
                 .width(scale * 290f)
         )
         RetroArtworkFlowValue(
@@ -850,7 +1002,7 @@ private fun RetroFlowPanel(
             color = RetroRed,
             description = "Retea ${retroWhole(if (data == null) null else grid)} W",
             modifier = Modifier
-                .offset(x = scale * 1_075f, y = scale * 856f)
+                .offset(x = scale * 1_053f, y = scale * 786f)
                 .width(scale * 285f)
         )
     }
@@ -872,8 +1024,8 @@ private fun RetroArtworkFlowValue(
             .semantics { contentDescription = description },
         color = color,
         fontFamily = RetroMono,
-        fontSize = 15.sp,
-        fontWeight = FontWeight.Medium,
+        fontSize = 18.sp,
+        fontWeight = FontWeight.Bold,
         letterSpacing = 0.6.sp,
         textAlign = TextAlign.Center,
         maxLines = 1

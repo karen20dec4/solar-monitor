@@ -572,18 +572,18 @@ collectorul, API-ul sau regula READ-ONLY.
 - Referința vizuală este `/opt/delete/retro-theme-v4.png`. Pentru fidelitate, tema Retro folosește acum
   un sistem hibrid: șasiul, patina, miniaturile și NAV-ul sunt resurse WebP fotografice, iar valorile live,
   unitățile, acul cadranului, LED-urile, animațiile și zonele tactile rămân native Compose.
-- TABLOU folosește `pag-tablou-background.png`, `pag-tablou-card-ACUM.png`,
-  `pag-tablou-card-FLUX-ENERGETIC.png` și `pag-tablou-card-NAV.png`. ENERGIE, SISTEM și SETARI folosesc
-  noul `background-cu-navbar.png`: zona de conținut nu are delimitări prestabilite, iar placa inferioară
-  rezervă vizual locul NAV-ului, astfel încât layouturile nu lasă goluri negre.
+- Toate cele patru pagini folosesc acum același `background-v1-optimized.png`, fără delimitări desenate
+  pentru carduri. TABLOU suprapune resursele optimizate `pag-tablou-card-ACUM-optimized.png`,
+  `pag-tablou-card-FLUX-ENERGETIC-optimized.png` și `pag-tablou-card-NAV-optimized.png`; alpha-ul lor curat
+  elimină vechile margini negre.
 - Resursele optimizate sunt în `android/app/src/main/res/drawable-nodpi/`. Scriptul
   `scripts/prepare-retro-ui-assets.sh` regenerează determinist cele cinci resurse WebP din sursele aflate
-  în `android/build/emulator-artifacts/design/`. Sunt instalate ImageMagick 7.1.1-43 și WebP 1.5.0.
+  în `android/build/emulator-artifacts/design/optimized/`. Sunt instalate ImageMagick 7.1.1-43 și WebP 1.5.0.
 - Toate cele patru pagini Retro ocupă ecranul disponibil și nu folosesc scroll vertical. NAV-ul comun este
   fix jos, iar conținutul se măsoară în spațiul rămas. Tema Simple nu este modificată de această regulă.
-- Pe TABLOU, ACUM și FLUX sunt ancorate în partea de sus; FLUX este ridicat cu 14 dp pentru a compensa
-  marginile transparente ale resurselor. Zona rămasă sub ele este rezervată pentru viitoare informații
-  esențiale și trebuie păstrată liberă până la aprobarea conținutului.
+- Pe TABLOU, ACUM și FLUX sunt ancorate în partea de sus și folosesc raportul natural de aspect al
+  exporturilor decupate. Zona rămasă sub ele este rezervată pentru viitoare informații esențiale și
+  trebuie păstrată liberă până la aprobarea conținutului.
 - Codul de culoare rămâne: verde = solar/normal, albastru = casă/consum, galben = baterie/atenție,
   roșu = rețea/alarmă. Nu există CONTROL și nu s-a adăugat nicio operație de scriere spre invertor.
 - Textura fotografică `retro_metal_texture.png` este activă și pe panourile Compose din paginile adiacente;
@@ -596,8 +596,7 @@ collectorul, API-ul sau regula READ-ONLY.
 - `scripts/audit-retro-ui-assets.sh` verifică fără modificări dimensiunile, sRGB și transparența exporturilor
   Photoshop. Importerul păstrează alpha-ul curat; flood-fill-ul rămâne doar fallback temporar pentru PNG-urile
   opace existente, ca să nu afecteze umbrele și patina viitoarelor exporturi finale.
-- Capturile finale de lucru sunt `retro-v4-final-tablou.png`, `retro-v4-final-energie.png`,
-  `retro-v4-final-sistem.png` și `retro-v4-final-setari.png` în directorul ignorat
+- Capturile de verificare sunt generate temporar în directorul ignorat
   `android/build/emulator-artifacts/`. Aceste schimbări sunt incluse în release-ul Android 3.0.
 
 ### 13.27 Release Android v3.0 — Retro v4 fotografic (2026-07-23)
@@ -613,3 +612,41 @@ collectorul, API-ul sau regula READ-ONLY.
   Captura release este `android/build/emulator-artifacts/release-v3.0-signed.png`.
 - Livrare Telegram reușită prin `@sun_tattva_access_bot`: mesaj ID 47, nume și dimensiune confirmate de API.
 - Release-ul rămâne READ-ONLY; nu s-au adăugat endpointuri sau operații de scriere către invertor.
+
+### 13.28 Corecție semantică flux solar/baterie (feedback telefon, 2026-07-23)
+
+- Fluxurile sunt calculate independent prin `resolveRetroEnergyFlow()`: Panouri → Casă este o conexiune
+  directă verde; Panouri → Baterie apare verde numai la încărcare; Baterie → Casă apare galben numai la
+  descărcare. Nu se mai folosește segmentul bateriei ca substitut vizual pentru energia solară spre casă.
+- Valoarea PV a fost mutată la dreapta miniaturii panourilor, eliberând centrul pentru cablul fizic vertical
+  și LED-urile care intră în acoperișul casei.
+- Puterea bateriei este verde la încărcare, galbenă la descărcare și olive în repaus. Patru teste unitare
+  acoperă încărcarea solară, descărcarea spre casă, zona neutră și încărcarea din rețea.
+- Captura de verificare cu date live este
+  `android/build/emulator-artifacts/TABLOU-feedback-2.png`.
+
+### 13.29 Exporturi Photoshop optimizate și reglaje FLUX (2026-07-23)
+
+- Contractul aprobat este în `android/build/emulator-artifacts/design/optimized/`: fundal 937×1666,
+  ACUM 1386×1011, FLUX 1405×939 și NAV 1835×321. Toate sunt PNG sRGB cu alpha și trec auditul strict.
+- `background-v1-optimized.png` este fundalul comun pentru TABLOU, ENERGIE, SISTEM și SETARI. Cardurile
+  păstrează raportul natural de aspect. În geometria revizuită, ACUM și FLUX au 95% din dimensiunea
+  anterioară și sunt centrate; ACUM este coborât exact 40 px, iar FLUX exact 140 px față de captura
+  precedentă. Pozițiile lor sunt independente, ca shrink-ul să nu producă o nouă suprapunere.
+- Toate valorile FLUX sunt 18 sp bold. PV a fost mutat la stânga/jos, Casa și Bateria spre dreapta,
+  iar starea din dreapta are margine mai mare și se extinde spre stânga.
+- Eticheta statică `ACUM` a devenit `Versiune V${BuildConfig.VERSION_NAME}` în `#c9bc93`, deci urmează
+  automat versiunea APK-ului; în build-ul curent afișează V3.0.
+- NAV-ul fotografic are 95% din dimensiunea anterioară și este centrat, lăsând vizibil fundalul metalic.
+- Build-ul debug, testele unitare și lint-ul trec. Toate cele patru taburi au fost verificate în emulator,
+  pe același fundal, fără crash și fără scroll vertical.
+
+### 13.30 Hand-off pentru Android Studio pe Windows 10 (2026-07-23)
+
+- Instrucțiunile autonome pentru agentul Windows sunt în `deploy-windows.md`. Proiectul Android trebuie
+  deschis din `H:\__Proiecte\_Growatt\solar-monitor\android`, nu din rădăcina repository-ului.
+- Clona Windows păstrează istoricul Git, sursele curente și cele patru exporturi Photoshop versionate din
+  `android/build/emulator-artifacts/design/optimized/`, dar exclude `.env`, cheia de semnare, parolele,
+  `local.properties`, APK-urile, cache-urile și restul build-urilor generate.
+- Build-ul debug nu necesită cheia de release. Agentul Windows nu trebuie să genereze o cheie nouă și nu
+  trebuie să reseteze schimbările locale livrate în snapshot.

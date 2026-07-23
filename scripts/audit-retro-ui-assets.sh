@@ -9,7 +9,7 @@ if [[ "${1:-}" == "--strict" ]]; then
     STRICT=true
     shift
 fi
-DESIGN_DIR="${1:-$REPO_ROOT/android/build/emulator-artifacts/design}"
+DESIGN_DIR="${1:-$REPO_ROOT/android/build/emulator-artifacts/design/optimized}"
 ISSUES=0
 
 report_issue() {
@@ -62,8 +62,8 @@ check_file() {
     corners="$(magick "$path" -format '%[fx:p{0,0}.a] %[fx:p{w-1,0}.a] %[fx:p{0,h-1}.a] %[fx:p{w-1,h-1}.a]' info:)"
     if ! awk -v values="$corners" 'BEGIN {
         count = split(values, alpha, " ")
-        for (index = 1; index <= count; index++) {
-            if (alpha[index] > 0.01) exit 1
+        for (position = 1; position <= count; position++) {
+            if (alpha[position] > 0.01) exit 1
         }
     }'; then
         report_issue "$name nu are toate cele patru colturi complet transparente"
@@ -77,11 +77,10 @@ if ! command -v magick >/dev/null 2>&1; then
     exit 1
 fi
 
-check_file pag-tablou-card-ACUM.png 1448x1086 yes
-check_file pag-tablou-card-FLUX-ENERGETIC.png 1448x1086 yes
-check_file pag-tablou-card-NAV.png 2172x724 yes
-check_file pag-tablou-background.png 941x1672 no
-check_file background-cu-navbar.png 941x1672 no
+check_file pag-tablou-card-ACUM-optimized.png 1386x1011 yes
+check_file pag-tablou-card-FLUX-ENERGETIC-optimized.png 1405x939 yes
+check_file pag-tablou-card-NAV-optimized.png 1835x321 yes
+check_file background-v1-optimized.png 937x1666 yes
 
 printf '\nRezultat: %d problema(e) detectata(e).\n' "$ISSUES"
 printf 'Franjurii negri de 1-2 px de pe muchii necesita in continuare inspectie vizuala la 200-400%%.\n'
