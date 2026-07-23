@@ -170,7 +170,7 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 ✅ Stack Docker complet pornit pe HP: `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy`.
 ✅ Monitorizare live 1s + istoric 60s/31 zile, verificate după cutover.
 ✅ API Android: `/solar/latest` + `/solar/history`, acces prin `https://vyra.go.ro:31443`.
-✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 13 / versionName 3.0**.
+✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 15 / versionName 3.02**.
 ✅ Alerte protecție în collector + ntfy; alarmă locală în Android pentru consum mare.
 ✅ 100% local/self-hosted pentru datele invertorului, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
@@ -683,4 +683,38 @@ collectorul, API-ul sau regula READ-ONLY.
   fără crash și fără container scrollabil.
 - Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **48**, nume
   `SolarMonitor-v3.01.apk`, dimensiune 2.798.679 bytes.
+- Release-ul rămâne READ-ONLY; nu necesită rebuild pentru API sau containerele serverului.
+
+### 13.33 TABLOU v6 — instrumente compacte și valori FLUX digitale (2026-07-23)
+
+- Referința aprobată este
+  `android/build/emulator-artifacts/design/optimized/design-v6.png`.
+- Cadranele Baterie și Invertor sunt pe același rând, cu minimum 20 dp între ele și cu înălțimea exact
+  1,2× față de cadranul Temperatură. Rândul Temperatură rămâne dedesubt, iar întregul grup este ancorat
+  jos ca să nu se suprapună peste cardul FLUX pe telefoane mai scurte.
+- Etichetele mici `Bat` și `Inv` folosesc verdele Retro `#accc78`; ambele au fost mutate cu 20 px spre
+  dreapta și 20 px în sus față de prima randare v6.
+- Semnul puterii bateriei are prioritate fără zonă neutră artificială: orice valoare pozitivă înseamnă
+  încărcare și este verde, orice valoare negativă înseamnă descărcare și este galben-portocaliu
+  `#f1e169`. Testul explicit pentru `-44 W` confirmă descărcarea spre casă.
+- Valorile Panouri, Baterie, Casă și Rețea din FLUX folosesc același renderer 7-segment
+  `RetroVfdDisplay` ca instrumentele digitale. Unitatea `W` are spațiu rezervat și rămâne vizibilă
+  indiferent de semn, numărul de cifre sau font scale.
+- Versiunea asociată este **versionCode 15 / versionName 3.02**. Aplicația rămâne READ-ONLY și nu
+  necesită modificări de API sau collector.
+
+### 13.34 Release Android v3.02 — TABLOU v6 (2026-07-23)
+
+- **versionCode 15 / versionName 3.02**; APK semnat:
+  `/opt/solar-monitor/SolarMonitor-v3.02.apk`.
+- Dimensiune: **2.751.499 bytes**; SHA-256:
+  `3f7126dd4312d392b510fb0f0fe56510944a703b434ecee483129973c228d278`.
+- `aapt` confirmă pachetul `com.rolling7.solar`, target/compile SDK 34 și versiunea 3.02 (15).
+  `apksigner` confirmă APK Signature Scheme v2 și certificatul permanent Borealis Media, SHA-256
+  `b892e453841228510aa4c08f9a164652baa0005638279cc18572dde677d293f6`.
+- APK-ul final semnat a fost instalat și randat pe emulatorul Android 14, 1080×2400. Captura este
+  `android/build/emulator-artifacts/release-v3.02-signed.png`; toate cele patru taburi au trecut
+  verificarea automată fără crash și fără container scrollabil.
+- Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **50**, nume
+  `SolarMonitor-v3.02.apk`, dimensiune 2.751.499 bytes.
 - Release-ul rămâne READ-ONLY; nu necesită rebuild pentru API sau containerele serverului.

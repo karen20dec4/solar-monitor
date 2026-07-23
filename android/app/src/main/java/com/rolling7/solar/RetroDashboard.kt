@@ -93,8 +93,8 @@ internal fun retroBatteryFlowColor(flow: RetroBatteryFlow): Color = when (flow) 
 
 /**
  * Stabileste traseele energetice inainte de desenare. Semnul valorii afisate a bateriei are prioritate:
- * pozitiv inseamna incarcare, negativ inseamna descarcare. Campurile charge/support sunt fallback pentru
- * momentele in care valoarea semnata se afla in zona moarta de 50 W.
+ * pozitiv inseamna incarcare, negativ inseamna descarcare, inclusiv pentru puteri mici precum -44 W.
+ * Campurile charge/support sunt fallback cand valoarea semnata este exact zero.
  */
 internal fun resolveRetroEnergyFlow(
     pv: Double,
@@ -106,8 +106,8 @@ internal fun resolveRetroEnergyFlow(
     gridCharge: Double
 ): RetroEnergyFlowState {
     val battery = when {
-        batteryDisplay > RETRO_DEAD -> RetroBatteryFlow.CHARGING
-        batteryDisplay < -RETRO_DEAD -> RetroBatteryFlow.DISCHARGING
+        batteryDisplay > 0.0 -> RetroBatteryFlow.CHARGING
+        batteryDisplay < 0.0 -> RetroBatteryFlow.DISCHARGING
         batteryCharge > RETRO_DEAD && batterySupport <= RETRO_DEAD -> RetroBatteryFlow.CHARGING
         batterySupport > RETRO_DEAD -> RetroBatteryFlow.DISCHARGING
         else -> RetroBatteryFlow.IDLE
@@ -232,85 +232,131 @@ private fun RetroOverviewTelemetry(
     val inverterLoss = data?.let { it.inverterLoss.roundToInt().toString() } ?: "—"
     val inverterTemperature = data?.let { String.format(Locale.US, "%.1f", it.inverterTemp) } ?: "—"
 
-    Column(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 34.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+            .padding(horizontal = 34.dp)
     ) {
-        RetroOverviewTelemetryRow(
-            labelRes = R.drawable.retro_dashboard_label_battery,
-            labelHeight = 28.dp,
-            labelAspectRatio = 200f / 55f,
-            dialRes = R.drawable.retro_dashboard_dial_battery,
-            dialAspectRatio = 600f / 190f,
-            value = batteryVoltage,
-            valueWidth = 92.dp,
-            description = "Baterie $batteryVoltage V",
-            onClick = onBatteryClick
+        val primaryGap = 20.dp
+        val primaryDialWidth = (maxWidth - primaryGap) / 2f
+        val primaryDialHeight = primaryDialWidth / (600f / 190f)
+        // Bat/Inv raman exact cu 20% mai inalte decat cadranul temperaturii.
+        val temperatureDialHeight = primaryDialHeight / 1.2f
+
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(primaryGap),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RetroCompactTelemetryDial(
+                    shortLabel = "Bat",
+                    dialRes = R.drawable.retro_dashboard_dial_battery,
+                    value = batteryVoltage,
+                    description = "Baterie $batteryVoltage V",
+                    onClick = onBatteryClick,
+                    modifier = Modifier
+                        .width(primaryDialWidth)
+                        .height(primaryDialHeight)
+                )
+                RetroCompactTelemetryDial(
+                    shortLabel = "Inv",
+                    dialRes = R.drawable.retro_dashboard_dial_inverter,
+                    value = inverterLoss,
+                    description = "Consum propriu invertor $inverterLoss W",
+                    modifier = Modifier
+                        .width(primaryDialWidth)
+                        .height(primaryDialHeight)
+                )
+            }
+            RetroTemperatureTelemetryRow(
+                value = inverterTemperature,
+                dialHeight = temperatureDialHeight,
+                description = "Temperatura invertor $inverterTemperature grade Celsius"
+            )
+        }
+    }
+}
+
+@Composable
+private fun RetroCompactTelemetryDial(
+    shortLabel: String,
+    dialRes: Int,
+    value: String,
+    description: String,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
+) {
+    BoxWithConstraints(
+        modifier = modifier
+            .semantics { contentDescription = description },
+    ) {
+        Image(
+            painter = painterResource(dialRes),
+            contentDescription = null,
+            modifier = Modifier
+                .fillMaxSize()
+                .then(if (onClick == null) Modifier else Modifier.clickable(onClick = onClick)),
+            contentScale = ContentScale.FillBounds
         )
-        RetroOverviewTelemetryRow(
-            labelRes = R.drawable.retro_dashboard_label_inverter,
-            labelHeight = 27.dp,
-            labelAspectRatio = 220f / 55f,
-            dialRes = R.drawable.retro_dashboard_dial_inverter,
-            dialAspectRatio = 600f / 190f,
-            value = inverterLoss,
-            valueWidth = 92.dp,
-            description = "Consum propriu invertor $inverterLoss W"
+        Text(
+            text = shortLabel,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .offset(x = maxWidth * 0.085f, y = (-1).dp)
+                .offset { IntOffset(x = 20, y = -20) },
+            color = RetroSage,
+            fontFamily = RetroMono,
+            fontSize = 7.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.35.sp,
+            maxLines = 1
         )
-        RetroOverviewTelemetryRow(
-            labelRes = R.drawable.retro_dashboard_label_temperature,
-            labelHeight = 32.dp,
-            labelAspectRatio = 271f / 55f,
-            dialRes = R.drawable.retro_dashboard_dial_temperature,
-            dialAspectRatio = 477f / 190f,
-            value = inverterTemperature,
-            valueWidth = 64.dp,
-            valueOffsetX = 10.dp,
-            description = "Temperatura invertor $inverterTemperature grade Celsius"
+        RetroVfdDisplay(
+            value = value,
+            unit = "",
+            color = RetroSage,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .offset(x = maxWidth * 0.27f)
+                .width(maxWidth * 0.51f)
+                .height(maxHeight * 0.64f),
+            embedded = true,
+            description = description
         )
     }
 }
 
 @Composable
-private fun RetroOverviewTelemetryRow(
-    labelRes: Int,
-    labelHeight: Dp,
-    labelAspectRatio: Float,
-    dialRes: Int,
-    dialAspectRatio: Float,
+private fun RetroTemperatureTelemetryRow(
     value: String,
-    valueWidth: Dp,
-    description: String,
-    valueOffsetX: Dp = 11.dp,
-    onClick: (() -> Unit)? = null
+    dialHeight: Dp,
+    description: String
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(42.dp)
+            .height(dialHeight)
             .semantics { contentDescription = description },
         verticalAlignment = Alignment.CenterVertically
     ) {
         Image(
-            painter = painterResource(labelRes),
+            painter = painterResource(R.drawable.retro_dashboard_label_temperature),
             contentDescription = null,
             modifier = Modifier
-                .height(labelHeight)
-                .aspectRatio(labelAspectRatio)
+                .height(dialHeight * 0.76f)
+                .aspectRatio(271f / 55f)
                 .alpha(0.7f),
             contentScale = ContentScale.FillBounds
         )
         Spacer(Modifier.weight(1f))
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
-                .height(42.dp)
-                .aspectRatio(dialAspectRatio)
-                .then(if (onClick == null) Modifier else Modifier.clickable(onClick = onClick))
+                .height(dialHeight)
+                .aspectRatio(477f / 190f)
         ) {
             Image(
-                painter = painterResource(dialRes),
+                painter = painterResource(R.drawable.retro_dashboard_dial_temperature),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.FillBounds
@@ -320,9 +366,10 @@ private fun RetroOverviewTelemetryRow(
                 unit = "",
                 color = RetroSage,
                 modifier = Modifier
-                    .offset(x = valueOffsetX, y = 6.dp)
-                    .width(valueWidth)
-                    .height(28.dp),
+                    .align(Alignment.CenterStart)
+                    .offset(x = maxWidth * 0.10f)
+                    .width(maxWidth * 0.64f)
+                    .height(maxHeight * 0.66f),
                 embedded = true,
                 description = description
             )
@@ -1086,7 +1133,7 @@ private fun RetroFlowPanel(
         }
 
         RetroArtworkFlowValue(
-            value = "${retroWhole(data?.pv)} W",
+            number = retroWhole(data?.pv),
             color = RetroSage,
             description = "Panouri ${retroWhole(data?.pv)} W. Deschide graficul Energie.",
             onClick = { onEnergyFieldClick("pv_power") },
@@ -1095,7 +1142,7 @@ private fun RetroFlowPanel(
                 .width(scale * 300f)
         )
         RetroArtworkFlowValue(
-            value = "${retroSigned(data?.batteryDisplay)} W",
+            number = retroSigned(data?.batteryDisplay),
             color = batteryColor,
             description = "Baterie ${retroSigned(data?.batteryDisplay)} W, $batteryAction. Deschide graficul Energie.",
             onClick = { onEnergyFieldClick("battery_voltage") },
@@ -1104,7 +1151,7 @@ private fun RetroFlowPanel(
                 .width(scale * 300f)
         )
         RetroArtworkFlowValue(
-            value = "${retroWhole(data?.house)} W",
+            number = retroWhole(data?.house),
             color = RetroHouseBlue,
             description = "Casa ${retroWhole(data?.house)} W. Deschide graficul Energie.",
             onClick = { onEnergyFieldClick("output_power") },
@@ -1113,7 +1160,7 @@ private fun RetroFlowPanel(
                 .width(scale * 290f)
         )
         RetroArtworkFlowValue(
-            value = "${retroWhole(if (data == null) null else grid)} W",
+            number = retroWhole(if (data == null) null else grid),
             color = RetroRed,
             description = "Retea ${retroWhole(if (data == null) null else grid)} W",
             modifier = Modifier
@@ -1125,26 +1172,28 @@ private fun RetroFlowPanel(
 
 @Composable
 private fun RetroArtworkFlowValue(
-    value: String,
+    number: String,
     color: Color,
     description: String,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null
 ) {
     val clickModifier = if (onClick == null) Modifier else Modifier.clickable(onClick = onClick)
-    Text(
-        text = value,
+    Box(
         modifier = modifier
+            .height(30.dp)
             .then(clickModifier)
-            .semantics { contentDescription = description },
-        color = color,
-        fontFamily = RetroMono,
-        fontSize = 18.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 0.6.sp,
-        textAlign = TextAlign.Center,
-        maxLines = 1
-    )
+            .semantics { contentDescription = description }
+    ) {
+        RetroVfdDisplay(
+            value = number,
+            unit = "W",
+            color = color,
+            modifier = Modifier.fillMaxSize(),
+            embedded = true,
+            description = description
+        )
+    }
 }
 
 @Composable

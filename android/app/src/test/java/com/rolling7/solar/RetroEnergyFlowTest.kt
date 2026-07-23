@@ -46,19 +46,37 @@ class RetroEnergyFlowTest {
     }
 
     @Test
-    fun `idle battery does not animate in either direction`() {
+    fun `small negative battery power still means discharge`() {
         val flow = resolveRetroEnergyFlow(
             pv = 900.0,
             house = 300.0,
-            batteryDisplay = 18.0,
-            batteryCharge = 18.0,
+            batteryDisplay = -44.0,
+            batteryCharge = 0.0,
+            batterySupport = 44.0,
+            gridImport = 0.0,
+            gridCharge = 0.0
+        )
+
+        assertEquals(RetroBatteryFlow.DISCHARGING, flow.battery)
+        assertTrue(flow.solarToHouse)
+        assertFalse(flow.solarToBattery)
+        assertTrue(flow.batteryToHouse)
+        assertEquals(RetroYellow, retroBatteryFlowColor(flow.battery))
+    }
+
+    @Test
+    fun `zero battery power stays idle`() {
+        val flow = resolveRetroEnergyFlow(
+            pv = 900.0,
+            house = 300.0,
+            batteryDisplay = 0.0,
+            batteryCharge = 0.0,
             batterySupport = 0.0,
             gridImport = 0.0,
             gridCharge = 0.0
         )
 
         assertEquals(RetroBatteryFlow.IDLE, flow.battery)
-        assertTrue(flow.solarToHouse)
         assertFalse(flow.solarToBattery)
         assertFalse(flow.batteryToHouse)
         assertEquals(RetroOlive, retroBatteryFlowColor(flow.battery))
