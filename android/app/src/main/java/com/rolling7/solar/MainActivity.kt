@@ -386,49 +386,16 @@ private fun DashboardSheetHandle(retro: Boolean) {
 }
 
 @Composable
+@Suppress("UNUSED_PARAMETER")
 private fun RetroEnergyPage(
     data: SolarData?,
     selectedMetric: HistoryMetric,
     onMetricSelected: (HistoryMetric) -> Unit
 ) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        RetroPageHeader(
-            title = "ENERGIE",
-            subtitle = "PRODUCTIE · CONSUM · ISTORIC",
-            statusColor = RetroSage
-        )
-        RetroDailyPanel(
-            data = data,
-            onHistoryFieldClick = { field -> onMetricSelected(historyMetric(field)) },
-            modifier = Modifier.height(126.dp)
-        )
-        RetroEnergyMetricSelector(
-            selectedMetric = selectedMetric,
-            onMetricSelected = onMetricSelected,
-            modifier = Modifier.height(106.dp)
-        )
-        HistorySheet(
-            metric = selectedMetric,
-            retro = true,
-            embedded = true,
-            compact = true,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            "DATE CITITE PRIN API  ·  FARA COMENZI CATRE INVERTOR",
-            modifier = Modifier.fillMaxWidth(),
-            color = RetroOlive,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 7.sp,
-            letterSpacing = 0.6.sp,
-            textAlign = TextAlign.Center
-        )
-    }
+    RetroEnergyArtworkPage(
+        data = data,
+        onHistoryFieldClick = { field -> onMetricSelected(historyMetric(field)) }
+    )
 }
 
 @Composable

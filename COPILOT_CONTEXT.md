@@ -170,7 +170,7 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 ✅ Stack Docker complet pornit pe HP: `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy`.
 ✅ Monitorizare live 1s + istoric 60s/31 zile, verificate după cutover.
 ✅ API Android: `/solar/latest` + `/solar/history`, acces prin `https://vyra.go.ro:31443`.
-✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 15 / versionName 3.02**.
+✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 16 / versionName 3.03**.
 ✅ Alerte protecție în collector + ntfy; alarmă locală în Android pentru consum mare.
 ✅ 100% local/self-hosted pentru datele invertorului, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
@@ -717,4 +717,36 @@ collectorul, API-ul sau regula READ-ONLY.
   verificarea automată fără crash și fără container scrollabil.
 - Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **50**, nume
   `SolarMonitor-v3.02.apk`, dimensiune 2.751.499 bytes.
+- Release-ul rămâne READ-ONLY; nu necesită rebuild pentru API sau containerele serverului.
+
+### 13.35 ENERGIE Retro — structură fotografică, etapa 1 (2026-07-23)
+
+- Pagina ENERGIE folosește primele trei exporturi Photoshop din
+  `android/build/emulator-artifacts/design/Pag-Energie/`: top-card, ENERGIE ASTĂZI și blocul
+  CASA/PANOURI/BATERIE cu rama viitorului grafic.
+- Resursele Android optimizate sunt `retro_energy_top_artwork.webp`,
+  `retro_energy_today_artwork.webp` și `retro_energy_controls_chart_artwork.webp`.
+- Valorile PRODUS și CONSUM rămân live, randate nativ prin `RetroVfdDisplay`; imaginile conțin numai
+  rama, textura și etichetele statice.
+- Al treilea card primește numai înălțimea rămasă. Pagina rămâne fixă, fără scroll, iar NAV-ul nu este
+  duplicat: toate taburile folosesc aceeași instanță `RetroBottomNavigation`, ancorată identic jos.
+- Butoanele și zona graficului sunt încă strict vizuale. Interacțiunile, selecțiile și graficele vor fi
+  adăugate după validarea release-ului pe telefon.
+- Pe TABLOU, `Versiune V...`, LED-ul de sursă și textul `CASA DIN ...` au fost mutate exact 7 px în sus.
+- Versiunea asociată este **versionCode 16 / versionName 3.03**. Aplicația rămâne READ-ONLY.
+
+### 13.36 Release Android v3.03 — ENERGIE etapa 1 (2026-07-23)
+
+- **versionCode 16 / versionName 3.03**; APK semnat:
+  `/opt/solar-monitor/SolarMonitor-v3.03.apk`.
+- Dimensiune: **3.151.846 bytes**; SHA-256:
+  `c5cc21132c830b43fa9608338e637634fe4ebd90bd69d0d744d93bf9f11df42b`.
+- `aapt` confirmă pachetul `com.rolling7.solar`, target/compile SDK 34 și versiunea 3.03 (16).
+  `apksigner` confirmă APK Signature Scheme v2 și certificatul permanent Borealis Media, SHA-256
+  `b892e453841228510aa4c08f9a164652baa0005638279cc18572dde677d293f6`.
+- APK-ul final semnat a fost instalat și randat pe emulatorul Android 14, 1080×2400. Captura ENERGIE este
+  `android/build/emulator-artifacts/release-v3.03-energie-signed.png`; toate cele patru taburi au trecut
+  verificarea automată fără crash și fără container scrollabil.
+- Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **51**, nume
+  `SolarMonitor-v3.03.apk`, dimensiune 3.151.846 bytes.
 - Release-ul rămâne READ-ONLY; nu necesită rebuild pentru API sau containerele serverului.

@@ -378,6 +378,85 @@ private fun RetroTemperatureTelemetryRow(
 }
 
 @Composable
+internal fun RetroEnergyArtworkPage(
+    data: SolarData?,
+    onHistoryFieldClick: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(start = 7.dp, top = 4.dp, end = 7.dp, bottom = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Image(
+            painter = painterResource(R.drawable.retro_energy_top_artwork),
+            contentDescription = "Energie: Productie, Consum, Istoric",
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .aspectRatio(1_400f / 298f),
+            contentScale = ContentScale.FillBounds
+        )
+        RetroEnergyTodayArtwork(
+            data = data,
+            onHistoryFieldClick = onHistoryFieldClick,
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .aspectRatio(1_400f / 607f)
+        )
+        Image(
+            painter = painterResource(R.drawable.retro_energy_controls_chart_artwork),
+            contentDescription = "Selectii Casa, Panouri, Baterie si zona istoricului energetic",
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .weight(1f),
+            contentScale = ContentScale.FillBounds
+        )
+    }
+}
+
+@Composable
+private fun RetroEnergyTodayArtwork(
+    data: SolarData?,
+    onHistoryFieldClick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    BoxWithConstraints(modifier = modifier) {
+        val scale = maxWidth / 1_400f
+        Image(
+            painter = painterResource(R.drawable.retro_energy_today_artwork),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.FillBounds
+        )
+        RetroVfdDisplay(
+            value = retroDecimal(data?.energyPvToday),
+            unit = "kWh",
+            color = RetroSage,
+            modifier = Modifier
+                .offset(x = scale * 112f, y = scale * 278f)
+                .width(scale * 528f)
+                .height(scale * 201f)
+                .clickable { onHistoryFieldClick("energy_pv_today") },
+            embedded = true,
+            description = "Energie produsa astazi ${retroDecimal(data?.energyPvToday)} kWh"
+        )
+        RetroVfdDisplay(
+            value = retroDecimal(data?.energyLoadToday),
+            unit = "kWh",
+            color = RetroHouseBlue,
+            modifier = Modifier
+                .offset(x = scale * 766f, y = scale * 278f)
+                .width(scale * 528f)
+                .height(scale * 201f)
+                .clickable { onHistoryFieldClick("energy_load_today") },
+            embedded = true,
+            description = "Energie consumata astazi ${retroDecimal(data?.energyLoadToday)} kWh"
+        )
+    }
+}
+
+@Composable
 private fun RetroSystemPage(data: SolarData?, onEnergyFieldClick: (String) -> Unit) {
     Column(
         Modifier
@@ -545,7 +624,9 @@ private fun RetroLivePanel(
 
         Text(
             text = "Versiune V${BuildConfig.VERSION_NAME}",
-            modifier = Modifier.offset(x = scale * 88f, y = scale * 23f),
+            modifier = Modifier
+                .offset(x = scale * 88f, y = scale * 23f)
+                .offset { IntOffset(x = 0, y = -7) },
             color = Color(0xFFC9BC93),
             fontFamily = RetroMono,
             fontSize = 12.sp,
@@ -555,7 +636,8 @@ private fun RetroLivePanel(
         Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = scale * 23f, end = scale * 111f),
+                .padding(top = scale * 23f, end = scale * 111f)
+                .offset { IntOffset(x = 0, y = -7) },
             verticalAlignment = Alignment.CenterVertically
         ) {
             RetroLed(sourceColor, Modifier.size(16.dp), active = data != null)
