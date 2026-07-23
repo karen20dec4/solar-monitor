@@ -170,7 +170,7 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 ✅ Stack Docker complet pornit pe HP: `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy`.
 ✅ Monitorizare live 1s + istoric 60s/31 zile, verificate după cutover.
 ✅ API Android: `/solar/latest` + `/solar/history`, acces prin `https://vyra.go.ro:31443`.
-✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 16 / versionName 3.03**.
+✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 17 / versionName 3.04**.
 ✅ Alerte protecție în collector + ntfy; alarmă locală în Android pentru consum mare.
 ✅ 100% local/self-hosted pentru datele invertorului, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
@@ -750,3 +750,27 @@ collectorul, API-ul sau regula READ-ONLY.
 - Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **51**, nume
   `SolarMonitor-v3.03.apk`, dimensiune 3.151.846 bytes.
 - Release-ul rămâne READ-ONLY; nu necesită rebuild pentru API sau containerele serverului.
+
+### 13.37 ENERGIE Retro funcțională (v3.04, 2026-07-24)
+
+- Cele trei exporturi Photoshop rămân stratul fotografic. Compose adaugă numai zone tactile, selecții
+  luminoase discrete, titlul dinamic și graficul; nu desenează un card nou peste rama aprobată.
+- Sunt funcționale toate cele cinci selecții: Casa (`output_power`), Panouri (`pv_power`), Baterie
+  (`battery_voltage`), Producție zilnică (`energy_pv_today`) și Consum zilnic (`energy_load_today`).
+  Atingerea celor două afișaje „ENERGIE ASTĂZI” selectează același istoric zilnic.
+- Bara de sus are logică distinctă: PRODUCTIE selectează energia PV zilnică, CONSUM selectează energia
+  consumată zilnic, iar ISTORIC restaurează ultimul grafic tehnic Casa/Panouri/Baterie (implicit Panouri).
+- Selectoarele `7d` și `30d` funcționează pentru toate cele cinci grafice. API-ul READ-ONLY acceptă acum
+  aceste intervale și pentru putere/tensiune: 7d = medie la 30 minute, 30d = medie la 2 ore, din bucket-ul
+  `history`. Graficele zilnice păstrează agregarea `max` la 1 zi.
+- Bar chart-ul este folosit pentru producție/consum zilnic; Casa, Panouri și Baterie folosesc line chart.
+  Bateria are axă fixă 48–58 V și praguri roșii la 48 V și 57 V. Titlul, unitatea, culoarea și datele axei
+  se schimbă dinamic; verde = solar, albastru = casă, galben = baterie.
+- Sunt implementate stări `SE INCARCA`, `NU EXISTA DATE` și eroare cu atingere pentru reîncercare. Zonele
+  tactile au descrieri semantice, iar pagina rămâne complet fixă, fără scroll.
+- Contractele sunt acoperite de `RetroEnergyInteractionTest` și `api/test_app.py`. În emulator Android 14
+  au fost apăsate și validate 11 trasee de interacțiune; cele patru taburi rămân fără container scrollabil.
+  Capturile principale sunt `energie-functionala-final.png` și `energie-functionala-baterie-30d.png`.
+- API-ul de producție a fost reconstruit și verificat: Casa/Panouri/Baterie întorc 337 puncte pe 7d și
+  361 pe 30d; graficele zilnice întorc 8, respectiv 31 puncte.
+- Versiunea asociată este **versionCode 17 / versionName 3.04**. Toate operațiile rămân READ-ONLY.

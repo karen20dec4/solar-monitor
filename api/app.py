@@ -36,6 +36,8 @@ HISTORY_FIELDS = {
             "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
             "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
             "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
+            "7d": {"start": "-7d", "window": "30m", "bucket": "history", "fn": "mean"},
+            "30d": {"start": "-30d", "window": "2h", "bucket": "history", "fn": "mean"},
         },
     },
     "output_power": {
@@ -44,6 +46,8 @@ HISTORY_FIELDS = {
             "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
             "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
             "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
+            "7d": {"start": "-7d", "window": "30m", "bucket": "history", "fn": "mean"},
+            "30d": {"start": "-30d", "window": "2h", "bucket": "history", "fn": "mean"},
         },
     },
     "pv_power": {
@@ -52,6 +56,8 @@ HISTORY_FIELDS = {
             "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
             "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
             "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
+            "7d": {"start": "-7d", "window": "30m", "bucket": "history", "fn": "mean"},
+            "30d": {"start": "-30d", "window": "2h", "bucket": "history", "fn": "mean"},
         },
     },
     "energy_pv_today": {

@@ -104,6 +104,33 @@ Implementarea este impartita astfel:
 - `RetroIndustrialIcons.kt` — miniaturi si iconografie modulara;
 - `MainActivity.kt` — starea comuna, ENERGIE, SETARI, graficele si tema Simple.
 
+### Pagina ENERGIE: interacțiuni și grafice native
+
+Cele trei plăci Photoshop ale paginii ENERGIE rămân fundalul fotografic. Peste ele, Compose definește
+zone tactile proporționale cu dimensiunea plăcii, folosind `BoxWithConstraints`. Coordonatele sursă sunt
+înmulțite separat cu `scaleX` și `scaleY`, deci butoanele rămân aliniate chiar când ultimul card primește
+numai înălțimea disponibilă.
+
+Controalele aleg una dintre cele cinci serii:
+
+- CASA — consumul casei în W;
+- PANOURI — producția PV în W;
+- BATERIE — tensiunea în V;
+- PRODUCTIE ZILNICĂ — kWh produși pe zi;
+- CONSUM ZILNIC — kWh consumați pe zi.
+
+`7d` și `30d` pornesc o citire nouă prin `SolarRepository.fetchHistory`. Schimbarea seriei sau a
+intervalului activează `LaunchedEffect`, afișează starea de încărcare și înlocuiește graficul numai după
+răspuns. Dacă API-ul nu răspunde, mesajul din rama graficului poate fi apăsat pentru reîncercare.
+
+Graficele sunt desenate nativ cu `Canvas`, direct în fereastra goală a ramei: bare pentru valorile zilnice,
+linie cu umplere discretă pentru putere și tensiune, grilă, axe și pragurile bateriei. Datele, titlul,
+unitatea și selecțiile nu sunt lipite în bitmap. Pagina nu folosește `verticalScroll`.
+
+API-ul rămâne READ-ONLY și citește numai InfluxDB. Pentru seriile Casa/Panouri/Baterie, 7 zile folosesc
+agregare medie la 30 minute, iar 30 zile agregare medie la 2 ore. Seria zilnică folosește în continuare
+maximul fiecărei zile, pentru că registrele `*_today` se resetează la miezul nopții.
+
 ## Tema Simple — explicatia redesignului initial
 
 ## 1. Ce pastreaza noul ecran

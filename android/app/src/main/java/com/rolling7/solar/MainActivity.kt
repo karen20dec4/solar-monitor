@@ -175,7 +175,7 @@ fun App() {
     var showHistoryMenu by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var retroTabName by rememberSaveable { mutableStateOf(RetroTab.DASHBOARD.name) }
-    var selectedEnergyField by rememberSaveable { mutableStateOf("output_power") }
+    var selectedEnergyField by rememberSaveable { mutableStateOf("energy_pv_today") }
     var alarmSettings by remember { mutableStateOf(AlarmSettingsStore.read(context)) }
     var dashboardStyle by remember { mutableStateOf(DashboardStyleStore.read(context)) }
     var enableAfterNotificationPermission by remember { mutableStateOf(false) }
@@ -386,17 +386,337 @@ private fun DashboardSheetHandle(retro: Boolean) {
 }
 
 @Composable
-@Suppress("UNUSED_PARAMETER")
 private fun RetroEnergyPage(
     data: SolarData?,
     selectedMetric: HistoryMetric,
     onMetricSelected: (HistoryMetric) -> Unit
 ) {
+    var selectedRange by rememberSaveable { mutableStateOf(RetroEnergyRanges.first()) }
+    var topSectionName by rememberSaveable(selectedMetric.field) {
+        mutableStateOf(retroEnergyTopSectionForField(selectedMetric.field).name)
+    }
+    var selectedHistoryField by rememberSaveable {
+        mutableStateOf(
+            selectedMetric.field.takeIf(::isRetroEnergyDetailedHistoryField) ?: "pv_power"
+        )
+    }
+    var reloadKey by rememberSaveable { mutableStateOf(0) }
+    var series by remember(selectedMetric.field, selectedRange, reloadKey) {
+        mutableStateOf<HistorySeries?>(null)
+    }
+    var loading by remember(selectedMetric.field, selectedRange, reloadKey) { mutableStateOf(true) }
+    var error by remember(selectedMetric.field, selectedRange, reloadKey) { mutableStateOf<String?>(null) }
+    val topSection = runCatching { RetroEnergyTopSection.valueOf(topSectionName) }
+        .getOrDefault(retroEnergyTopSectionForField(selectedMetric.field))
+
+    LaunchedEffect(selectedMetric.field) {
+        if (isRetroEnergyDetailedHistoryField(selectedMetric.field)) {
+            selectedHistoryField = selectedMetric.field
+        }
+    }
+
+    LaunchedEffect(selectedMetric.field, selectedRange, reloadKey) {
+        loading = true
+        error = null
+        series = null
+        val result = withContext(Dispatchers.IO) {
+            SolarRepository.fetchHistory(selectedMetric.field, selectedRange)
+        }
+        if (result == null) {
+            error = "ISTORIC INDISPONIBIL"
+        } else {
+            series = result
+        }
+        loading = false
+    }
+
+    val selectField: (String) -> Unit = { field ->
+        if (isRetroEnergyDetailedHistoryField(field)) {
+            selectedHistoryField = field
+        }
+        topSectionName = retroEnergyTopSectionForField(field).name
+        onMetricSelected(historyMetric(field))
+    }
+
     RetroEnergyArtworkPage(
         data = data,
-        onHistoryFieldClick = { field -> onMetricSelected(historyMetric(field)) }
+        selectedTopSection = topSection,
+        selectedField = selectedMetric.field,
+        selectedRange = selectedRange,
+        chartTitle = retroEnergyChartTitle(selectedMetric.field),
+        onTopSectionClick = { section ->
+            topSectionName = section.name
+            val field = retroEnergyFieldForTopSection(section, selectedHistoryField)
+            if (field != selectedMetric.field) {
+                onMetricSelected(historyMetric(field))
+            }
+        },
+        onHistoryFieldClick = selectField,
+        onRangeClick = { selectedRange = normalizedRetroEnergyRange(it) },
+        chartContent = { modifier ->
+            RetroEnergyEmbeddedHistoryChart(
+                metric = selectedMetric,
+                series = series,
+                loading = loading,
+                error = error,
+                onRetry = { reloadKey += 1 },
+                modifier = modifier
+            )
+        }
     )
 }
+
+@Composable
+private fun RetroEnergyEmbeddedHistoryChart(
+    metric: HistoryMetric,
+    series: HistorySeries?,
+    loading: Boolean,
+    error: String?,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val accent = historyAccent(metric.field, metric.color, retro = true)
+    Box(
+        modifier = modifier.semantics {
+            contentDescription = when {
+                loading -> "Grafic ${metric.title}, se incarca"
+                error != null -> "Grafic ${metric.title}, eroare. Apasa pentru reincercare"
+                series?.points.isNullOrEmpty() -> "Grafic ${metric.title}, fara date"
+                else -> "Grafic ${metric.title}, ${series?.points?.size ?: 0} puncte"
+            }
+        },
+        contentAlignment = Alignment.Center
+    ) {
+        when {
+            loading -> RetroEnergyChartMessage(
+                text = "SE INCARCA...",
+                color = accent
+            )
+
+            error != null -> RetroEnergyChartMessage(
+                text = "$error\nAPASA PENTRU REINCERCARE",
+                color = RetroRed,
+                modifier = Modifier.clickable(onClick = onRetry)
+            )
+
+            series == null || series.points.isEmpty() -> RetroEnergyChartMessage(
+                text = "NU EXISTA DATE PENTRU ACEST INTERVAL",
+                color = RetroMuted
+            )
+
+            else -> RetroEnergyChartCanvas(
+                series = series,
+                metric = metric,
+                accent = accent,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+@Composable
+private fun RetroEnergyChartMessage(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Text(
+        text = text,
+        color = color,
+        fontFamily = RetroMono,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        lineHeight = 16.sp,
+        textAlign = TextAlign.Center,
+        modifier = modifier.padding(18.dp)
+    )
+}
+
+@Composable
+private fun RetroEnergyChartCanvas(
+    series: HistorySeries,
+    metric: HistoryMetric,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    val values = series.points.map { point ->
+        if (metric.chartStyle == ChartStyle.Bar) point.value.coerceAtLeast(0.0) else point.value
+    }
+    val axis = if (metric.chartStyle == ChartStyle.Bar) {
+        val maxValue = max(values.maxOrNull() ?: 1.0, 1.0)
+        val step = niceStep(maxValue / 4.0)
+        val top = max(step * 4.0, ceil(maxValue / step) * step)
+        LineAxis(
+            min = 0.0,
+            max = top,
+            gridValues = (4 downTo 0).map { top * it / 4.0 },
+            title = "0-${formatAxisValue(top, metric.unit)}"
+        )
+    } else {
+        lineAxis(metric, values)
+    }
+    val labelIndices = retroEnergyLabelIndices(series.points.size)
+
+    Canvas(modifier.padding(horizontal = 3.dp, vertical = 2.dp)) {
+        val leftPad = 45.dp.toPx()
+        // Tinem ultima data departe de surubul fotografic din coltul ramei.
+        val rightPad = 24.dp.toPx()
+        val topPad = 8.dp.toPx()
+        val bottomPad = 24.dp.toPx()
+        val plotLeft = leftPad
+        val plotRight = size.width - rightPad
+        val plotTop = topPad
+        val plotBottom = size.height - bottomPad
+        val plotWidth = (plotRight - plotLeft).coerceAtLeast(1f)
+        val plotHeight = (plotBottom - plotTop).coerceAtLeast(1f)
+
+        val yPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = RetroMuted.copy(alpha = 0.92f).toArgb()
+            textSize = 8.5.sp.toPx()
+            textAlign = Paint.Align.LEFT
+        }
+        val xPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = RetroMuted.copy(alpha = 0.92f).toArgb()
+            textSize = 8.sp.toPx()
+            textAlign = Paint.Align.CENTER
+        }
+
+        fun yFor(value: Double): Float {
+            val span = (axis.max - axis.min).coerceAtLeast(0.0001)
+            val normalized = ((value - axis.min) / span).toFloat().coerceIn(0f, 1f)
+            return plotBottom - normalized * plotHeight
+        }
+
+        fun xFor(index: Int): Float {
+            if (series.points.size <= 1) return plotLeft + plotWidth / 2f
+            return plotLeft + plotWidth * index / series.points.lastIndex.toFloat()
+        }
+
+        axis.gridValues.forEach { value ->
+            val y = yFor(value)
+            drawLine(
+                color = RetroOlive.copy(alpha = 0.30f),
+                start = Offset(plotLeft, y),
+                end = Offset(plotRight, y),
+                strokeWidth = 1.dp.toPx()
+            )
+            drawContext.canvas.nativeCanvas.drawText(
+                formatAxisValue(value, metric.unit),
+                1.dp.toPx(),
+                y - 2.dp.toPx(),
+                yPaint
+            )
+        }
+
+        labelIndices.forEach { index ->
+            val x = xFor(index)
+            drawLine(
+                color = RetroOlive.copy(alpha = 0.15f),
+                start = Offset(x, plotTop),
+                end = Offset(x, plotBottom),
+                strokeWidth = 0.8.dp.toPx()
+            )
+            drawContext.canvas.nativeCanvas.drawText(
+                retroEnergyDateLabel(series.points[index].time),
+                x,
+                size.height - 3.dp.toPx(),
+                xPaint
+            )
+        }
+
+        metric.thresholds.forEach { threshold ->
+            if (threshold.value in axis.min..axis.max) {
+                val y = yFor(threshold.value)
+                drawLine(
+                    color = RetroRed.copy(alpha = 0.76f),
+                    start = Offset(plotLeft, y),
+                    end = Offset(plotRight, y),
+                    strokeWidth = 1.3.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(
+                        floatArrayOf(6.dp.toPx(), 4.dp.toPx())
+                    )
+                )
+            }
+        }
+
+        if (metric.chartStyle == ChartStyle.Bar) {
+            val slot = plotWidth / values.size.coerceAtLeast(1)
+            val barWidth = (slot * 0.62f).coerceAtLeast(2.dp.toPx())
+            values.forEachIndexed { index, value ->
+                val x = plotLeft + slot * index + slot / 2f
+                val top = yFor(value)
+                drawLine(
+                    color = accent.copy(alpha = 0.20f),
+                    start = Offset(x, plotBottom),
+                    end = Offset(x, top),
+                    strokeWidth = (barWidth + 3.dp.toPx()).coerceAtMost(slot * 0.90f),
+                    cap = StrokeCap.Butt
+                )
+                drawLine(
+                    color = accent.copy(alpha = 0.92f),
+                    start = Offset(x, plotBottom),
+                    end = Offset(x, top),
+                    strokeWidth = barWidth,
+                    cap = StrokeCap.Butt
+                )
+            }
+        } else {
+            val line = Path()
+            val fill = Path()
+            series.points.forEachIndexed { index, point ->
+                val x = xFor(index)
+                val y = yFor(point.value)
+                if (index == 0) {
+                    line.moveTo(x, y)
+                    fill.moveTo(x, plotBottom)
+                    fill.lineTo(x, y)
+                } else {
+                    line.lineTo(x, y)
+                    fill.lineTo(x, y)
+                }
+            }
+            fill.lineTo(xFor(series.points.lastIndex), plotBottom)
+            fill.close()
+            drawPath(fill, color = accent.copy(alpha = 0.08f))
+            drawPath(
+                path = line,
+                color = accent.copy(alpha = 0.22f),
+                style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
+            )
+            drawPath(
+                path = line,
+                color = accent,
+                style = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round)
+            )
+            drawCircle(
+                color = accent.copy(alpha = 0.25f),
+                radius = 5.dp.toPx(),
+                center = Offset(xFor(series.points.lastIndex), yFor(values.last()))
+            )
+            drawCircle(
+                color = accent,
+                radius = 2.2.dp.toPx(),
+                center = Offset(xFor(series.points.lastIndex), yFor(values.last()))
+            )
+        }
+    }
+}
+
+private fun retroEnergyLabelIndices(pointCount: Int): List<Int> {
+    if (pointCount <= 0) return emptyList()
+    if (pointCount <= 4) return (0 until pointCount).toList()
+    val last = pointCount - 1
+    return listOf(0, last / 3, last * 2 / 3, last).distinct()
+}
+
+private fun retroEnergyDateLabel(value: String): String =
+    try {
+        OffsetDateTime.parse(value)
+            .atZoneSameInstant(LocalZone)
+            .format(DateTimeFormatter.ofPattern("dd.MM"))
+    } catch (e: Exception) {
+        ""
+    }
 
 @Composable
 private fun RetroEnergyMetricSelector(
