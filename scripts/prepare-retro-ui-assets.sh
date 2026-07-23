@@ -47,18 +47,59 @@ has_real_transparency() {
     awk -v alpha="$minimum_alpha" 'BEGIN { exit !(alpha < 0.999) }'
 }
 
+base_sources=(
+    background-v1-optimized.png
+    pag-tablou-card-ACUM-optimized.png
+    pag-tablou-card-FLUX-ENERGETIC-optimized.png
+    pag-tablou-card-NAV-optimized.png
+)
+base_source_count=0
+for source in "${base_sources[@]}"; do
+    [[ -f "$DESIGN_DIR/$source" ]] && base_source_count=$((base_source_count + 1))
+done
+
+if (( base_source_count != 0 && base_source_count != ${#base_sources[@]} )); then
+    printf 'Set incomplet de surse pentru fundal/carduri: %d din %d fisiere.\n' \
+        "$base_source_count" "${#base_sources[@]}" >&2
+    exit 1
+fi
+
 for source in \
-    background-v1-optimized.png \
-    pag-tablou-card-ACUM-optimized.png \
-    pag-tablou-card-FLUX-ENERGETIC-optimized.png \
-    pag-tablou-card-NAV-optimized.png; do
+    text-display/cadran-baterie-optimized.png \
+    text-display/cadran-invertor-optimized.png \
+    text-display/cadran-temperatura-optimized.png \
+    text-display/text-baterie-optimized.png \
+    text-display/text-Invertor-optimized.png \
+    text-display/text-temperatura-optimized.png; do
     require_source "$source"
 done
 
-require_dimensions background-v1-optimized.png 937x1666
-require_dimensions pag-tablou-card-ACUM-optimized.png 1386x1011
-require_dimensions pag-tablou-card-FLUX-ENERGETIC-optimized.png 1405x939
-require_dimensions pag-tablou-card-NAV-optimized.png 1835x321
+if (( base_source_count == ${#base_sources[@]} )); then
+    require_dimensions background-v1-optimized.png 937x1666
+    require_dimensions pag-tablou-card-ACUM-optimized.png 1386x1011
+    require_dimensions pag-tablou-card-FLUX-ENERGETIC-optimized.png 1405x939
+    require_dimensions pag-tablou-card-NAV-optimized.png 1835x321
+else
+    printf 'Sursele vechi pentru fundal/carduri au fost eliminate intentionat; pastrez WebP-urile existente.\n'
+    for output in \
+        retro_dashboard_background_artwork.webp \
+        retro_page_background_artwork.webp \
+        retro_dashboard_live_artwork.webp \
+        retro_dashboard_flow_artwork.webp \
+        retro_bottom_navigation_artwork.webp; do
+        if [[ ! -f "$OUTPUT_DIR/$output" ]]; then
+            printf 'Lipseste resursa finala %s si nu exista sursa pentru regenerare.\n' "$OUTPUT_DIR/$output" >&2
+            exit 1
+        fi
+    done
+fi
+
+require_dimensions text-display/cadran-baterie-optimized.png 600x190
+require_dimensions text-display/cadran-invertor-optimized.png 600x190
+require_dimensions text-display/cadran-temperatura-optimized.png 477x190
+require_dimensions text-display/text-baterie-optimized.png 200x55
+require_dimensions text-display/text-Invertor-optimized.png 220x55
+require_dimensions text-display/text-temperatura-optimized.png 271x55
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -137,11 +178,26 @@ make_navigation() {
     install -m 0644 "$WORK_DIR/$output" "$OUTPUT_DIR/$output"
 }
 
-make_background background-v1-optimized.png retro_dashboard_background_artwork.webp
-make_background background-v1-optimized.png retro_page_background_artwork.webp
-make_card pag-tablou-card-ACUM-optimized.png retro_dashboard_live_artwork.webp
-make_card pag-tablou-card-FLUX-ENERGETIC-optimized.png retro_dashboard_flow_artwork.webp
-make_navigation pag-tablou-card-NAV-optimized.png retro_bottom_navigation_artwork.webp
+if (( base_source_count == ${#base_sources[@]} )); then
+    make_background background-v1-optimized.png retro_dashboard_background_artwork.webp
+    make_background background-v1-optimized.png retro_page_background_artwork.webp
+    make_card pag-tablou-card-ACUM-optimized.png retro_dashboard_live_artwork.webp
+    make_card pag-tablou-card-FLUX-ENERGETIC-optimized.png retro_dashboard_flow_artwork.webp
+    make_navigation pag-tablou-card-NAV-optimized.png retro_bottom_navigation_artwork.webp
+fi
+
+install -m 0644 "$DESIGN_DIR/text-display/cadran-baterie-optimized.png" \
+    "$OUTPUT_DIR/retro_dashboard_dial_battery.png"
+install -m 0644 "$DESIGN_DIR/text-display/cadran-invertor-optimized.png" \
+    "$OUTPUT_DIR/retro_dashboard_dial_inverter.png"
+install -m 0644 "$DESIGN_DIR/text-display/cadran-temperatura-optimized.png" \
+    "$OUTPUT_DIR/retro_dashboard_dial_temperature.png"
+install -m 0644 "$DESIGN_DIR/text-display/text-baterie-optimized.png" \
+    "$OUTPUT_DIR/retro_dashboard_label_battery.png"
+install -m 0644 "$DESIGN_DIR/text-display/text-Invertor-optimized.png" \
+    "$OUTPUT_DIR/retro_dashboard_label_inverter.png"
+install -m 0644 "$DESIGN_DIR/text-display/text-temperatura-optimized.png" \
+    "$OUTPUT_DIR/retro_dashboard_label_temperature.png"
 
 printf 'Resurse Retro pregatite in %s:\n' "$OUTPUT_DIR"
 printf '  %s\n' \
@@ -149,4 +205,10 @@ printf '  %s\n' \
     retro_page_background_artwork.webp \
     retro_dashboard_live_artwork.webp \
     retro_dashboard_flow_artwork.webp \
-    retro_bottom_navigation_artwork.webp
+    retro_bottom_navigation_artwork.webp \
+    retro_dashboard_dial_battery.png \
+    retro_dashboard_dial_inverter.png \
+    retro_dashboard_dial_temperature.png \
+    retro_dashboard_label_battery.png \
+    retro_dashboard_label_inverter.png \
+    retro_dashboard_label_temperature.png

@@ -43,7 +43,7 @@ check_file() {
         printf 'OK CULOARE: %s (sRGB)\n' "$name"
     fi
 
-    if [[ "$transparent" != "yes" ]]; then
+    if [[ "$transparent" == "no" ]]; then
         return
     fi
 
@@ -56,6 +56,11 @@ check_file() {
     minimum_alpha="$(magick "$path" -alpha extract -format '%[fx:minima]' info:)"
     if ! awk -v alpha="$minimum_alpha" 'BEGIN { exit !(alpha < 0.999) }'; then
         report_issue "$name are canal alpha, dar niciun pixel transparent"
+        return
+    fi
+
+    if [[ "$transparent" == "alpha" ]]; then
+        printf 'OK ALPHA: %s (canal transparent)\n' "$name"
         return
     fi
 
@@ -77,10 +82,34 @@ if ! command -v magick >/dev/null 2>&1; then
     exit 1
 fi
 
-check_file pag-tablou-card-ACUM-optimized.png 1386x1011 yes
-check_file pag-tablou-card-FLUX-ENERGETIC-optimized.png 1405x939 yes
-check_file pag-tablou-card-NAV-optimized.png 1835x321 yes
-check_file background-v1-optimized.png 937x1666 yes
+base_sources=(
+    pag-tablou-card-ACUM-optimized.png
+    pag-tablou-card-FLUX-ENERGETIC-optimized.png
+    pag-tablou-card-NAV-optimized.png
+    background-v1-optimized.png
+)
+base_source_count=0
+for source in "${base_sources[@]}"; do
+    [[ -f "$DESIGN_DIR/$source" ]] && base_source_count=$((base_source_count + 1))
+done
+
+if (( base_source_count == ${#base_sources[@]} )); then
+    check_file pag-tablou-card-ACUM-optimized.png 1386x1011 yes
+    check_file pag-tablou-card-FLUX-ENERGETIC-optimized.png 1405x939 yes
+    check_file pag-tablou-card-NAV-optimized.png 1835x321 yes
+    check_file background-v1-optimized.png 937x1666 yes
+elif (( base_source_count == 0 )); then
+    printf 'INFO: sursele vechi pentru fundal/carduri au fost eliminate intentionat; audit omis.\n'
+else
+    report_issue "set incomplet de surse pentru fundal/carduri ($base_source_count din ${#base_sources[@]})"
+fi
+
+check_file text-display/cadran-baterie-optimized.png 600x190 yes
+check_file text-display/cadran-invertor-optimized.png 600x190 yes
+check_file text-display/cadran-temperatura-optimized.png 477x190 yes
+check_file text-display/text-baterie-optimized.png 200x55 alpha
+check_file text-display/text-Invertor-optimized.png 220x55 alpha
+check_file text-display/text-temperatura-optimized.png 271x55 alpha
 
 printf '\nRezultat: %d problema(e) detectata(e).\n' "$ISSUES"
 printf 'Franjurii negri de 1-2 px de pe muchii necesita in continuare inspectie vizuala la 200-400%%.\n'

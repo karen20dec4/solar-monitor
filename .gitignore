@@ -20,10 +20,13 @@ android/.gradle/
 android/build/*
 !android/build/emulator-artifacts/
 android/build/emulator-artifacts/*
+!android/build/emulator-artifacts/design-v5.png
 !android/build/emulator-artifacts/design/
 android/build/emulator-artifacts/design/*
 !android/build/emulator-artifacts/design/optimized/
 !android/build/emulator-artifacts/design/optimized/*.png
+!android/build/emulator-artifacts/design/optimized/text-display/
+!android/build/emulator-artifacts/design/optimized/text-display/*.png
 android/app/build/
 android/app/release/
 android/local.properties

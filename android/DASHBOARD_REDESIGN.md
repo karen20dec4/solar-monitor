@@ -18,37 +18,36 @@ API-ul sau logica, iar datele continua sa se actualizeze la fiecare raspuns de l
 
 Resursele principale sunt in `app/src/main/res/drawable-nodpi/`:
 
-- `retro_dashboard_background_artwork.webp` si `retro_page_background_artwork.webp` — doua iesiri identice
-  generate din `background-v1-optimized.png`; acelasi metal continuu este folosit pe toate cele patru pagini;
+- `retro_dashboard_background_artwork.webp` si `retro_page_background_artwork.webp` — fundalul metalic
+  finalizat folosit pe toate cele patru pagini;
 - `retro_dashboard_live_artwork.webp` — placa ACUM/PANOURI, cu ferestre goale pentru valori dinamice;
 - `retro_dashboard_flow_artwork.webp` — placa FLUX ENERGETIC cu miniaturi fotografice;
+- `retro_dashboard_{label,dial}_{battery,inverter,temperature}.png` — cele trei etichete gravate si
+  cadranele VFD din zona esentiala de sub FLUX;
 - `retro_bottom_navigation_artwork.webp` — bara comuna cu cele patru instrumente de navigare.
 
-Sursele Photoshop aprobate sunt versionate in `android/build/emulator-artifacts/design/optimized/`.
-Doar aceste patru PNG-uri sunt exceptate explicit din directorul `android/build/`; toate celelalte
-artefacte generate raman ignorate. Conversia reproductibila in resurse Android se face cu:
+Sursele Photoshop active sunt versionate in `android/build/emulator-artifacts/design/optimized/text-display/`.
+Cele patru exporturi mari folosite anterior pentru fundal, ACUM, FLUX si NAV au fost eliminate intentionat
+dupa import; resursele WebP finale raman versionate. Importul reproductibil al instrumentelor v5 se face cu:
 
 ```bash
 scripts/audit-retro-ui-assets.sh
 scripts/prepare-retro-ui-assets.sh
 ```
 
-Primul script verifica dimensiunile, spatiul sRGB si alpha-ul cardurilor fara sa modifice imaginile. Cu
-`--strict`, acesta esueaza pana cand exporturile respecta contractul. Al doilea script necesita ImageMagick
-(`magick`), pastreaza direct alpha-ul Photoshop si optimizeaza rezultatul ca WebP. Cardurile sunt scalate
-la latimea Android de 1024 px cu raportul lor natural de aspect; nu mai sunt deformate intr-un canvas
-comun. Nu se editeaza manual fisierele WebP rezultate.
+Primul script verifica dimensiunile, spatiul sRGB si alpha-ul fara sa modifice imaginile. Cu `--strict`,
+acesta esueaza pana cand exporturile active respecta contractul. Al doilea script copiază exact cele sase
+PNG-uri v5 in resursele Android. Daca setul vechi complet este reintrodus, scriptul poate regenera si
+WebP-urile; daca lipseste complet, pastreaza resursele finale existente.
 
 ### Contract pentru exporturile Photoshop finale
 
-Contractul curent foloseste exact aceste exporturi PNG-32 sRGB, toate cu alpha real:
+Contractul activ foloseste exact aceste exporturi PNG-32 sRGB cu alpha real:
 
-- `pag-tablou-card-ACUM-optimized.png`: 1386×1011;
-- `pag-tablou-card-FLUX-ENERGETIC-optimized.png`: 1405×939;
-- `pag-tablou-card-NAV-optimized.png`: 1835×321;
-- `background-v1-optimized.png`: 937×1666.
+- `text-display/`: cadrane 600×190, 600×190 si 477×190;
+- `text-display/`: etichete 200×55, 220×55 si 271×55.
 
-Exporta cu `Transparency` activ si `Matte: None` (alpha ne-premultiplicat). Nu include cifre, unitati,
+Exporta cu `Transparency` activ si `Matte: None` (alpha ne-premultiplicat). Nu include cifre dinamice,
 acul cadranului, LED-uri animate sau starea selectata; acestea sunt desenate de Compose. Dupa inlocuire,
 ruleaza `scripts/audit-retro-ui-assets.sh --strict`, apoi `scripts/prepare-retro-ui-assets.sh` si verificarea
 in emulator.
@@ -92,6 +91,11 @@ PV este plasata la dreapta miniaturii panourilor, nu peste traseul direct Panour
 Valorile din FLUX folosesc 18 sp bold (cu 20% peste vechiul 15 sp). Eticheta din stanga sus este
 `Versiune V${BuildConfig.VERSION_NAME}`, astfel incat afisajul urmeaza automat versiunea reala a APK-ului,
 fara text duplicat in layout.
+
+Sub FLUX, TABLOU afiseaza trei instrumente esentiale fara card suplimentar: Baterie, Invertor si
+Temperatura. Cadranele au exact 42 dp inaltime si aceeasi margine dreapta; cadrul de temperatura isi
+pastraza raportul mai ingust 477:190. Etichetele au 30 dp, 29 dp si 34 dp. Ramele si textele sunt PNG
+fotografice, iar tensiunea bateriei, pierderea invertorului si temperatura raman valori VFD dinamice Compose.
 
 Implementarea este impartita astfel:
 

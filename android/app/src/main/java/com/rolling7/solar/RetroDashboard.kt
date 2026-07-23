@@ -52,6 +52,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -212,6 +213,118 @@ private fun RetroOverviewPage(
                 .aspectRatio(1_405f / 939f)
                 .offset { IntOffset(x = 0, y = flowTopPx) }
         )
+        RetroOverviewTelemetry(
+            data = data,
+            onBatteryClick = { onEnergyFieldClick("battery_voltage") },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
+    }
+}
+
+@Composable
+private fun RetroOverviewTelemetry(
+    data: SolarData?,
+    onBatteryClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val batteryVoltage = data?.let { String.format(Locale.US, "%.1f", it.batteryVoltage) } ?: "—"
+    val inverterLoss = data?.let { it.inverterLoss.roundToInt().toString() } ?: "—"
+    val inverterTemperature = data?.let { String.format(Locale.US, "%.1f", it.inverterTemp) } ?: "—"
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 34.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        RetroOverviewTelemetryRow(
+            labelRes = R.drawable.retro_dashboard_label_battery,
+            labelHeight = 30.dp,
+            labelAspectRatio = 200f / 55f,
+            dialRes = R.drawable.retro_dashboard_dial_battery,
+            dialAspectRatio = 600f / 190f,
+            value = batteryVoltage,
+            valueWidth = 92.dp,
+            description = "Baterie $batteryVoltage V",
+            onClick = onBatteryClick
+        )
+        RetroOverviewTelemetryRow(
+            labelRes = R.drawable.retro_dashboard_label_inverter,
+            labelHeight = 29.dp,
+            labelAspectRatio = 220f / 55f,
+            dialRes = R.drawable.retro_dashboard_dial_inverter,
+            dialAspectRatio = 600f / 190f,
+            value = inverterLoss,
+            valueWidth = 92.dp,
+            description = "Consum propriu invertor $inverterLoss W"
+        )
+        RetroOverviewTelemetryRow(
+            labelRes = R.drawable.retro_dashboard_label_temperature,
+            labelHeight = 34.dp,
+            labelAspectRatio = 271f / 55f,
+            dialRes = R.drawable.retro_dashboard_dial_temperature,
+            dialAspectRatio = 477f / 190f,
+            value = inverterTemperature,
+            valueWidth = 64.dp,
+            valueOffsetX = 10.dp,
+            description = "Temperatura invertor $inverterTemperature grade Celsius"
+        )
+    }
+}
+
+@Composable
+private fun RetroOverviewTelemetryRow(
+    labelRes: Int,
+    labelHeight: Dp,
+    labelAspectRatio: Float,
+    dialRes: Int,
+    dialAspectRatio: Float,
+    value: String,
+    valueWidth: Dp,
+    description: String,
+    valueOffsetX: Dp = 11.dp,
+    onClick: (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .semantics { contentDescription = description },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Image(
+            painter = painterResource(labelRes),
+            contentDescription = null,
+            modifier = Modifier
+                .height(labelHeight)
+                .aspectRatio(labelAspectRatio),
+            contentScale = ContentScale.FillBounds
+        )
+        Spacer(Modifier.weight(1f))
+        Box(
+            modifier = Modifier
+                .height(42.dp)
+                .aspectRatio(dialAspectRatio)
+                .then(if (onClick == null) Modifier else Modifier.clickable(onClick = onClick))
+        ) {
+            Image(
+                painter = painterResource(dialRes),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.FillBounds
+            )
+            RetroVfdDisplay(
+                value = value,
+                unit = "",
+                color = RetroSage,
+                modifier = Modifier
+                    .offset(x = valueOffsetX, y = 7.dp)
+                    .width(valueWidth)
+                    .height(28.dp),
+                embedded = true,
+                description = description
+            )
+        }
     }
 }
 

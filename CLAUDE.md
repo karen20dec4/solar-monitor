@@ -102,9 +102,10 @@ The host has a working, KVM-accelerated, headless Android emulator for UI verifi
 - Stable headless renderer: `swangle`. The helper starts the AVD in the transient
   `solar-monitor-emulator.service`; do not use `swiftshader_indirect` on Emulator 36.6.11 because it has
   repeatedly crashed with `SIGSEGV` on this host.
-- UI asset tooling: ImageMagick 7.1.1-43 and WebP 1.5.0. Photoshop sources are staged in
-  `android/build/emulator-artifacts/design/optimized/`; run `scripts/audit-retro-ui-assets.sh --strict`
-  before `scripts/prepare-retro-ui-assets.sh` to regenerate the tracked WebP resources.
+- UI asset tooling: ImageMagick 7.1.1-43 and WebP 1.5.0. Active Photoshop exports are in
+  `android/build/emulator-artifacts/design/optimized/text-display/`; run
+  `scripts/audit-retro-ui-assets.sh --strict` before `scripts/prepare-retro-ui-assets.sh`.
+  The four old large PNG sources were intentionally deleted; their finalized WebP resources stay tracked.
 
 Run the complete build/install/render/crash check with:
 

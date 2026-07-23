@@ -576,9 +576,9 @@ collectorul, API-ul sau regula READ-ONLY.
   pentru carduri. TABLOU suprapune resursele optimizate `pag-tablou-card-ACUM-optimized.png`,
   `pag-tablou-card-FLUX-ENERGETIC-optimized.png` și `pag-tablou-card-NAV-optimized.png`; alpha-ul lor curat
   elimină vechile margini negre.
-- Resursele optimizate sunt în `android/app/src/main/res/drawable-nodpi/`. Scriptul
-  `scripts/prepare-retro-ui-assets.sh` regenerează determinist cele cinci resurse WebP din sursele aflate
-  în `android/build/emulator-artifacts/design/optimized/`. Sunt instalate ImageMagick 7.1.1-43 și WebP 1.5.0.
+- Resursele finale sunt în `android/app/src/main/res/drawable-nodpi/`. Cele cinci resurse WebP fotografice
+  rămân versionate; sursele lor PNG mari au fost eliminate intenționat ulterior. Scriptul
+  `scripts/prepare-retro-ui-assets.sh` importă acum separat instrumentele active din `text-display/`.
 - Toate cele patru pagini Retro ocupă ecranul disponibil și nu folosesc scroll vertical. NAV-ul comun este
   fix jos, iar conținutul se măsoară în spațiul rămas. Tema Simple nu este modificată de această regulă.
 - Pe TABLOU, ACUM și FLUX sunt ancorate în partea de sus și folosesc raportul natural de aspect al
@@ -645,8 +645,42 @@ collectorul, API-ul sau regula READ-ONLY.
 
 - Instrucțiunile autonome pentru agentul Windows sunt în `deploy-windows.md`. Proiectul Android trebuie
   deschis din `H:\__Proiecte\_Growatt\solar-monitor\android`, nu din rădăcina repository-ului.
-- Clona Windows păstrează istoricul Git, sursele curente și cele patru exporturi Photoshop versionate din
-  `android/build/emulator-artifacts/design/optimized/`, dar exclude `.env`, cheia de semnare, parolele,
+- Clona Windows păstrează istoricul Git, referința `design-v5.png` și cele șase exporturi Photoshop din
+  `android/build/emulator-artifacts/design/optimized/text-display/`, dar exclude `.env`, cheia de semnare, parolele,
   `local.properties`, APK-urile, cache-urile și restul build-urilor generate.
 - Build-ul debug nu necesită cheia de release. Agentul Windows nu trebuie să genereze o cheie nouă și nu
   trebuie să reseteze schimbările locale livrate în snapshot.
+
+### 13.31 TABLOU v5 — instrumente esențiale sub FLUX (2026-07-23)
+
+- Referința aprobată este `android/build/emulator-artifacts/design-v5.png`; sursele grafice sunt cele șase
+  PNG-uri transparente din `android/build/emulator-artifacts/design/optimized/text-display/`.
+- TABLOU afișează sub FLUX trei rânduri fără card exterior: Baterie, Invertor și Temperatura. Cadranele au
+  exact 42 dp înălțime și aceeași margine dreaptă. Etichetele au exact 30 dp, 29 dp și 34 dp; cadrul
+  temperaturii păstrează raportul mai îngust 477:190.
+- PNG-urile conțin numai etichetele, rama, patina și unitatea. Valorile rămân dinamice: tensiunea bateriei,
+  pierderea/consumul propriu al invertorului și temperatura invertorului sunt desenate prin
+  `RetroVfdDisplay`. Apăsarea cadranului bateriei deschide ENERGIE cu graficul tensiunii.
+- Layout-ul rămâne complet fix, fără scroll. Captura aprobată din emulatorul Pixel 6 1080×2400 este
+  `android/build/emulator-artifacts/design-v5-preview.png`; toate cele patru taburi trec verificarea
+  automată `retro-tabs`.
+- Release-ul asociat folosește **versionCode 14 / versionName 3.01**.
+- Cele patru PNG-uri mari vechi pentru fundal, ACUM, FLUX și NAV au fost șterse manual și intenționat.
+  Nu trebuie restaurate; WebP-urile finale rămân versionate, iar scripturile sar peste regenerarea lor când
+  întregul set sursă lipsește.
+
+### 13.32 Release Android v3.01 — TABLOU v5 (2026-07-23)
+
+- **versionCode 14 / versionName 3.01**; APK semnat:
+  `/opt/solar-monitor/SolarMonitor-v3.01.apk`.
+- Dimensiune: **2.798.679 bytes**; SHA-256:
+  `1ac25cbc8342561758b614c60d8fda9a6d72029e4934a473ff60e796d5480365`.
+- `aapt` confirmă pachetul `com.rolling7.solar`, minSdk 26, target/compile SDK 34 și versiunea 3.01 (14).
+  `apksigner` confirmă APK Signature Scheme v2 și certificatul permanent Borealis Media, SHA-256
+  `b892e453841228510aa4c08f9a164652baa0005638279cc18572dde677d293f6`.
+- APK-ul semnat a fost instalat și lansat pe emulatorul Android 14, 1080×2400. Captura este
+  `android/build/emulator-artifacts/release-v3.01-signed.png`; toate cele patru taburi au fost verificate
+  fără crash și fără container scrollabil.
+- Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **48**, nume
+  `SolarMonitor-v3.01.apk`, dimensiune 2.798.679 bytes.
+- Release-ul rămâne READ-ONLY; nu necesită rebuild pentru API sau containerele serverului.

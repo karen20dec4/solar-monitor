@@ -89,7 +89,7 @@ la JDK-ul integrat compatibil cu Java 17. Nu seta o cale Linux pentru Java sau S
 5. Ruleaza `File > Sync Project with Gradle Files` si asteapta descarcarea dependentelor.
 
 Clona nu contine vechiul `local.properties` de Linux, cache-uri Gradle sau directoare `build`, cu exceptia
-celor patru exporturi Photoshop versionate explicit.
+referintei `design-v5.png` si a celor sase exporturi Photoshop versionate explicit.
 
 ## 5. Verificare din PowerShell
 
@@ -145,12 +145,13 @@ android\app\src\main\res\drawable-nodpi
 Sursele Photoshop/PNG sunt versionate in:
 
 ```text
-android\build\emulator-artifacts\design\optimized
+android\build\emulator-artifacts\design\optimized\text-display
 ```
 
 Un build normal nu necesita ImageMagick. Scripturile `scripts\audit-retro-ui-assets.sh` si
 `scripts\prepare-retro-ui-assets.sh` sunt Bash; pentru regenerarea resurselor pe Windows foloseste Git Bash
-sau WSL si instaleaza ImageMagick cu executabilul `magick`.
+sau WSL si instaleaza ImageMagick cu executabilul `magick`. Cele patru surse PNG vechi pentru fundal,
+ACUM, FLUX si NAV au fost sterse intentionat; nu le recrea. Resursele WebP finale sunt deja versionate.
 
 ## 8. Git si siguranta
 
