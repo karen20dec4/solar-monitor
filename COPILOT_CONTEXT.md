@@ -774,3 +774,20 @@ collectorul, API-ul sau regula READ-ONLY.
 - API-ul de producție a fost reconstruit și verificat: Casa/Panouri/Baterie întorc 337 puncte pe 7d și
   361 pe 30d; graficele zilnice întorc 8, respectiv 31 puncte.
 - Versiunea asociată este **versionCode 17 / versionName 3.04**. Toate operațiile rămân READ-ONLY.
+
+### 13.38 Release Android v3.04 — ENERGIE funcțională (2026-07-24)
+
+- **versionCode 17 / versionName 3.04**; APK semnat:
+  `/opt/solar-monitor/SolarMonitor-v3.04.apk`.
+- Dimensiune: **3.151.846 bytes**; SHA-256:
+  `d88b34450cd8451a572553c55ed4996ec4fad099b4d498b0e88c1c743e57f23f`.
+- `aapt` confirmă pachetul `com.rolling7.solar`, target/compile SDK 34 și versiunea 3.04 (17).
+  `apksigner` confirmă APK Signature Scheme v2 și certificatul permanent Borealis Media, SHA-256
+  `b892e453841228510aa4c08f9a164652baa0005638279cc18572dde677d293f6`.
+- Upgrade real verificat pe emulator Android 14: instalare release semnat 3.03, apoi `adb install -r`
+  pentru 3.04. Cinci scenarii esențiale au fost repetate pe APK-ul R8, inclusiv restaurarea ultimului
+  grafic tehnic prin ISTORIC; toate cele patru taburi au rămas fără crash și fără scroll.
+- Captura release este `android/build/emulator-artifacts/release-v3.04-energie-signed.png`.
+- Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **52**, nume
+  `SolarMonitor-v3.04.apk`, dimensiune 3.151.846 bytes.
+- API-ul a fost reconstruit și este sănătos în producție. Release-ul și endpointurile rămân READ-ONLY.
