@@ -35,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -190,7 +191,7 @@ private fun RetroOverviewPage(
         val cardWidth = maxWidth * 0.95f
         val originalLiveHeight = maxWidth / (1_386f / 1_011f)
         val flowTopPx = with(density) {
-            originalLiveHeight.roundToPx() + (-6).dp.roundToPx() + 60
+            originalLiveHeight.roundToPx() + (-6).dp.roundToPx() + 30
         }
 
         RetroLivePanel(
@@ -235,11 +236,11 @@ private fun RetroOverviewTelemetry(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 34.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         RetroOverviewTelemetryRow(
             labelRes = R.drawable.retro_dashboard_label_battery,
-            labelHeight = 30.dp,
+            labelHeight = 28.dp,
             labelAspectRatio = 200f / 55f,
             dialRes = R.drawable.retro_dashboard_dial_battery,
             dialAspectRatio = 600f / 190f,
@@ -250,7 +251,7 @@ private fun RetroOverviewTelemetry(
         )
         RetroOverviewTelemetryRow(
             labelRes = R.drawable.retro_dashboard_label_inverter,
-            labelHeight = 29.dp,
+            labelHeight = 27.dp,
             labelAspectRatio = 220f / 55f,
             dialRes = R.drawable.retro_dashboard_dial_inverter,
             dialAspectRatio = 600f / 190f,
@@ -260,7 +261,7 @@ private fun RetroOverviewTelemetry(
         )
         RetroOverviewTelemetryRow(
             labelRes = R.drawable.retro_dashboard_label_temperature,
-            labelHeight = 34.dp,
+            labelHeight = 32.dp,
             labelAspectRatio = 271f / 55f,
             dialRes = R.drawable.retro_dashboard_dial_temperature,
             dialAspectRatio = 477f / 190f,
@@ -297,7 +298,8 @@ private fun RetroOverviewTelemetryRow(
             contentDescription = null,
             modifier = Modifier
                 .height(labelHeight)
-                .aspectRatio(labelAspectRatio),
+                .aspectRatio(labelAspectRatio)
+                .alpha(0.7f),
             contentScale = ContentScale.FillBounds
         )
         Spacer(Modifier.weight(1f))
@@ -318,7 +320,7 @@ private fun RetroOverviewTelemetryRow(
                 unit = "",
                 color = RetroSage,
                 modifier = Modifier
-                    .offset(x = valueOffsetX, y = 7.dp)
+                    .offset(x = valueOffsetX, y = 6.dp)
                     .width(valueWidth)
                     .height(28.dp),
                 embedded = true,
