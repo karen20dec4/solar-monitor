@@ -189,7 +189,7 @@ private fun RetroOverviewPage(
         val cardWidth = maxWidth * 0.95f
         val originalLiveHeight = maxWidth / (1_386f / 1_011f)
         val flowTopPx = with(density) {
-            originalLiveHeight.roundToPx() + (-6).dp.roundToPx() + 140
+            originalLiveHeight.roundToPx() + (-6).dp.roundToPx() + 60
         }
 
         RetroLivePanel(
@@ -976,7 +976,7 @@ private fun RetroFlowPanel(
             description = "Panouri ${retroWhole(data?.pv)} W. Deschide graficul Energie.",
             onClick = { onEnergyFieldClick("pv_power") },
             modifier = Modifier
-                .offset(x = scale * 823f, y = scale * 290f)
+                .offset(x = scale * 800f, y = scale * 310f)
                 .width(scale * 300f)
         )
         RetroArtworkFlowValue(
