@@ -7,6 +7,8 @@ SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/opt/android-sdk}}"
 ADB="$SDK_ROOT/platform-tools/adb"
 EMULATOR="$SDK_ROOT/emulator/emulator"
 AVD_NAME="${SOLAR_AVD_NAME:-SolarMonitor_API_34}"
+GPU_MODE="${SOLAR_EMULATOR_GPU:-swangle}"
+SYSTEMD_UNIT="${SOLAR_EMULATOR_SYSTEMD_UNIT:-solar-monitor-emulator}"
 PACKAGE="com.rolling7.solar"
 ACTIVITY="$PACKAGE/.MainActivity"
 APK="$REPO_ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
@@ -15,7 +17,7 @@ EMULATOR_LOG="$ARTIFACT_DIR/emulator.log"
 
 usage() {
     printf '%s\n' \
-        "Usage: $0 doctor|start|wait|build|install|launch|screenshot|status|verify|stop [screenshot.png]" \
+        "Usage: $0 doctor|start|wait|build|install|launch|screenshot|retro-tabs|status|verify|stop [screenshot.png]" \
         "" \
         "  doctor      Verify SDK, emulator, KVM and AVD prerequisites" \
         "  start       Start the configured AVD headlessly" \
@@ -24,6 +26,7 @@ usage() {
         "  install     Install the existing debug APK" \
         "  launch      Force-stop and launch Solar Monitor" \
         "  screenshot  Save a PNG and UI hierarchy under android/build" \
+        "  retro-tabs  Capture and validate all four fixed Retro tabs" \
         "  status      Show AVD, adb, Android, app and saved-theme status" \
         "  verify      Run doctor, start, wait, build, install, launch and capture" \
         "  stop        Shut down the running emulator"
@@ -65,15 +68,42 @@ start_emulator() {
         printf 'Emulator already present: %s\n' "$(emulator_serial)"
         return
     fi
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$SYSTEMD_UNIT.service"; then
+        printf 'Emulator service is already starting: %s.service\n' "$SYSTEMD_UNIT"
+        return
+    fi
+
+    # Emulator 36.6.11 este stabil headless pe acest host cu swangle. Modurile
+    # swiftshader/indirect au produs SIGSEGV dupa cateva secunde de randare.
+    if command -v systemd-run >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        systemctl reset-failed "$SYSTEMD_UNIT.service" 2>/dev/null || true
+        systemd-run \
+            --unit="$SYSTEMD_UNIT" \
+            --collect \
+            --description='Solar Monitor Android Emulator' \
+            --property="StandardOutput=append:$EMULATOR_LOG" \
+            --property="StandardError=append:$EMULATOR_LOG" \
+            "$EMULATOR" \
+            -avd "$AVD_NAME" \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -gpu "$GPU_MODE" \
+            -no-snapshot-save
+        printf 'Started %s as %s.service (GPU: %s; log: %s)\n' \
+            "$AVD_NAME" "$SYSTEMD_UNIT" "$GPU_MODE" "$EMULATOR_LOG"
+        return
+    fi
+
     nohup "$EMULATOR" \
         -avd "$AVD_NAME" \
         -no-window \
         -no-audio \
         -no-boot-anim \
-        -gpu swiftshader_indirect \
-        -no-snapshot \
+        -gpu "$GPU_MODE" \
+        -no-snapshot-save \
         >"$EMULATOR_LOG" 2>&1 &
-    printf 'Started %s (log: %s)\n' "$AVD_NAME" "$EMULATOR_LOG"
+    printf 'Started %s (GPU: %s; log: %s)\n' "$AVD_NAME" "$GPU_MODE" "$EMULATOR_LOG"
 }
 
 wait_for_boot() {
@@ -135,12 +165,45 @@ capture_screen() {
     "$ADB" -s "$serial" shell uiautomator dump /sdcard/solar-window.xml >/dev/null
     "$ADB" -s "$serial" pull /sdcard/solar-window.xml "$hierarchy" >/dev/null
     "$ADB" -s "$serial" logcat -b all -d -t 400 >"$logcat_file"
+    LAST_HIERARCHY="$hierarchy"
     printf 'Screenshot: %s\nUI hierarchy: %s\nLogcat: %s\n' "$screenshot" "$hierarchy" "$logcat_file"
+}
+
+capture_retro_tabs() {
+    local serial physical_size width height nav_y index x label expected output
+    local -a labels=(TABLOU ENERGIE SISTEM SETARI)
+    serial="$(require_online_serial)"
+    physical_size="$($ADB -s "$serial" shell wm size | sed -n 's/.*: \([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' | head -1)"
+    read -r width height <<<"$physical_size"
+    if [[ -z "${width:-}" || -z "${height:-}" ]]; then
+        printf 'Nu pot determina rezolutia emulatorului.\n' >&2
+        exit 1
+    fi
+    nav_y=$((height * 93 / 100))
+
+    for index in 0 1 2 3; do
+        label="${labels[$index]}"
+        x=$((width * (index * 2 + 1) / 8))
+        "$ADB" -s "$serial" shell input tap "$x" "$nav_y"
+        sleep 1
+        output="$ARTIFACT_DIR/retro-tab-${label,,}.png"
+        capture_screen "$output"
+        expected="Tab $label, selectat"
+        if ! grep -Fq "content-desc=\"$expected\"" "$LAST_HIERARCHY"; then
+            printf 'Tabul nu este selectat corect: %s\n' "$label" >&2
+            exit 1
+        fi
+        if grep -Fq 'scrollable="true"' "$LAST_HIERARCHY"; then
+            printf 'A aparut scroll pe tabul Retro %s: %s\n' "$label" "$LAST_HIERARCHY" >&2
+            exit 1
+        fi
+    done
+    printf 'Toate cele patru taburi Retro sunt fixe si au fost capturate in %s.\n' "$ARTIFACT_DIR"
 }
 
 show_status() {
     local serial
-    printf 'Configured AVD: %s\nAvailable AVDs:\n' "$AVD_NAME"
+    printf 'Configured AVD: %s\nConfigured GPU: %s\nAvailable AVDs:\n' "$AVD_NAME" "$GPU_MODE"
     "$EMULATOR" -list-avds | sed 's/^/  /'
     printf 'ADB devices:\n'
     "$ADB" devices -l
@@ -206,6 +269,7 @@ case "$command" in
     install) install_app ;;
     launch) launch_app ;;
     screenshot) capture_screen "${2:-}" ;;
+    retro-tabs) capture_retro_tabs ;;
     status) doctor; show_status ;;
     verify) verify_all "${2:-}" ;;
     stop) stop_emulator ;;

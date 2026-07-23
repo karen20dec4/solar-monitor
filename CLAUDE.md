@@ -99,6 +99,12 @@ The host has a working, KVM-accelerated, headless Android emulator for UI verifi
 - Project skill: `.codex/skills/solar-monitor-emulator/SKILL.md`.
 - Generated screenshots, UI hierarchy and logcat are stored in the gitignored
   `android/build/emulator-artifacts/` directory.
+- Stable headless renderer: `swangle`. The helper starts the AVD in the transient
+  `solar-monitor-emulator.service`; do not use `swiftshader_indirect` on Emulator 36.6.11 because it has
+  repeatedly crashed with `SIGSEGV` on this host.
+- UI asset tooling: ImageMagick 7.1.1-43 and WebP 1.5.0. Photoshop sources are staged in
+  `android/build/emulator-artifacts/design/`; run `scripts/prepare-retro-ui-assets.sh` to regenerate the
+  tracked WebP resources.
 
 Run the complete build/install/render/crash check with:
 
@@ -106,9 +112,14 @@ Run the complete build/install/render/crash check with:
 .codex/skills/solar-monitor-emulator/scripts/emulator-check.sh verify
 ```
 
-Useful subcommands are `doctor`, `start`, `wait`, `build`, `install`, `launch`, `screenshot`, `status`
-and `stop`. The emulator is intentionally started on demand rather than as a boot service. A successful
-Gradle build is not enough for UI work: inspect the captured PNG after `verify`.
+Useful subcommands are `doctor`, `start`, `wait`, `build`, `install`, `launch`, `screenshot`, `retro-tabs`,
+`status` and `stop`. `retro-tabs` captures all four Retro pages and rejects accidental scrolling. The
+emulator is intentionally started on demand rather than as a boot service. A successful Gradle build is
+not enough for UI work: inspect the captured PNG after `verify`.
+
+The Retro UI is a fixed full-screen four-tab instrument panel. It must never gain vertical scrolling:
+the page content fits above the fixed photo navigation bar. Keep photographic chassis assets decorative;
+live values, the gauge needle, LEDs, semantics and click targets must remain native Compose and dynamic.
 
 **Deploy flow:** edit locally → `git push` → on the server `cd /opt/solar-monitor && git pull &&
 docker compose up -d --build`. To debug the Modbus mapping live, set `DEBUG_RAW=1` in `.env`,

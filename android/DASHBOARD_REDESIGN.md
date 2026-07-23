@@ -1,8 +1,92 @@
 # Dashboard Android — teme Simple si Retro
 
-> Din versiunea 2.1, dashboardul descris initial mai jos este tema `Simple`. Aplicatia porneste implicit
-> cu tema `Retro`, implementata separat in `RetroDashboard.kt`. Utilizatorul poate schimba tema din
-> Settings, iar `DashboardStyleStore` pastreaza alegerea local.
+> Din versiunea 2.01, dashboardul descris initial in sectiunile 1–8 este tema `Simple`. Aplicatia porneste
+> implicit cu tema `Retro`, implementata separat in `RetroDashboard.kt`. Utilizatorul poate schimba tema
+> din SETARI, iar `DashboardStyleStore` pastreaza alegerea local.
+
+## Retro v4 — arhitectura hibrida actuala
+
+Tema Retro reproduce referinta `retro-theme-v4.png` prin doua straturi care raman independente:
+
+1. resursele Photoshop/WebP dau materialul fotografic: patina, oxidare, zgarieturi, rame, suruburi,
+   miniaturile industriale si bara de navigare;
+2. Compose deseneaza si actualizeaza toate informatiile functionale: valori live, unitati, acul cadranului,
+   LED-urile animate, selectia tabului si zonele tactile.
+
+Nicio valoare nu este lipita in bitmap. Astfel putem inlocui ulterior o placa Photoshop fara sa schimbam
+API-ul sau logica, iar datele continua sa se actualizeze la fiecare raspuns de la `/solar/latest`.
+
+Resursele principale sunt in `app/src/main/res/drawable-nodpi/`:
+
+- `retro_dashboard_background_artwork.webp` — fundalul cu zonele TABLOU delimitate;
+- `retro_page_background_artwork.webp` — `background-cu-navbar.png`, fara delimitari pentru continut,
+  dar cu placa inferioara rezervata NAV-ului; este folosit de ENERGIE, SISTEM si SETARI;
+- `retro_dashboard_live_artwork.webp` — placa ACUM/PANOURI, cu ferestre goale pentru valori dinamice;
+- `retro_dashboard_flow_artwork.webp` — placa FLUX ENERGETIC cu miniaturi fotografice;
+- `retro_bottom_navigation_artwork.webp` — bara comuna cu cele patru instrumente de navigare.
+
+Sursele de lucru pot ramane in `android/build/emulator-artifacts/design/` (director ignorat de Git).
+Conversia reproductibila in resurse Android se face cu:
+
+```bash
+scripts/audit-retro-ui-assets.sh
+scripts/prepare-retro-ui-assets.sh
+```
+
+Primul script verifica dimensiunile, spatiul sRGB si alpha-ul cardurilor fara sa modifice imaginile. Cu
+`--strict`, acesta esueaza pana cand exporturile respecta contractul. Al doilea script necesita ImageMagick
+(`magick`), pastreaza direct alpha-ul Photoshop si optimizeaza rezultatul ca WebP. Doar pentru sursele
+vechi opace foloseste temporar eliminarea fundalului exterior conectat si afiseaza un avertisment. Nu se
+editeaza manual fisierele WebP rezultate.
+
+### Contract pentru exporturile Photoshop finale
+
+Ca valorile Compose sa ramana perfect aliniate, curata imaginile fara sa muti sau sa redimensionezi
+elementele din interior:
+
+- `pag-tablou-card-ACUM.png` si `pag-tablou-card-FLUX-ENERGETIC.png`: canvas 1448×1086, PNG-32 sRGB,
+  exterior complet transparent, fara matte negru; pastreaza umbra reala a placii, dar elimina franjurii
+  negri de 1–2 px de pe muchiile antialiasate;
+- `pag-tablou-card-NAV.png`: canvas 2172×724, PNG-32 sRGB, transparent in jurul panoului; pastreaza cele
+  patru butoane in aceleasi pozitii si nu adauga glow-ul tabului activ;
+- `pag-tablou-background.png` si `background-cu-navbar.png`: canvas 941×1672, sRGB; acestea pot ramane
+  opace. Negrul din exteriorul ramei rotunjite este fundal intentionat, dar petele/franjurii negri intrati
+  peste metal trebuie curatati.
+
+Exporta cu `Transparency` activ si `Matte: None` (alpha ne-premultiplicat). Nu include cifre, unitati,
+acul cadranului, LED-uri animate sau starea selectata; acestea sunt desenate de Compose. Dupa inlocuire,
+ruleaza `scripts/audit-retro-ui-assets.sh --strict`, apoi `scripts/prepare-retro-ui-assets.sh` si verificarea
+in emulator.
+
+### Structura fixa, fara scroll
+
+Tema Retro este un panou fizic care ocupa intregul spatiu al aplicatiei. `RetroDashboard` foloseste un
+`Column(fillMaxSize())`: continutul paginii primeste `weight(1f)`, iar `RetroBottomNavigation` ramane ultimul
+copil, fix la baza. Niciuna dintre cele patru pagini Retro nu foloseste `verticalScroll` sau `LazyColumn`.
+Pe TABLOU, placile ACUM si FLUX sunt ancorate sus, cu umbrele lor usor suprapuse, nu distribuite cu
+`SpaceEvenly`. Zona metalica ramasa sub FLUX este rezervata intentionat pentru un viitor grup compact de
+informatii esentiale; nu este umpluta automat cu decor sau carduri provizorii.
+
+- TABLOU — consum live, PV si flux energetic;
+- ENERGIE — productie/consum zilnic, totaluri, cinci selectoare si graficul ales;
+- SISTEM — stare invertor, baterie, retea, temperatura si pierderi;
+- SETARI — tema, alarma, cooldown, vibratie, sunet si informatii aplicatie.
+
+Nu exista tab CONTROL. Aplicatia ramane READ-ONLY. Atingerea cadranului, a valorilor PV sau a unei valori
+zilnice schimba direct tabul pe ENERGIE si selecteaza graficul potrivit; nu exista un buton separat Istoric
+in tema Retro.
+
+Codul semantic ramane: verde `#accc78` = solar/normal, albastru = casa/consum, galben `#f1e169` = baterie
+sau atentie si rosu = retea/alarma. Olive `#81795a` este material neutru, nu stare energetica.
+
+Implementarea este impartita astfel:
+
+- `RetroDashboard.kt` — layout TABLOU/SISTEM, cardurile fotografice, acul si fluxul animat;
+- `RetroIndustrialTheme.kt` — culori, VFD, panouri, relief, suruburi si LED-uri;
+- `RetroIndustrialIcons.kt` — miniaturi si iconografie modulara;
+- `MainActivity.kt` — starea comuna, ENERGIE, SETARI, graficele si tema Simple.
+
+## Tema Simple — explicatia redesignului initial
 
 ## 1. Ce pastreaza noul ecran
 
@@ -84,7 +168,7 @@ Modifierii folositi pe ecran:
 - `padding(...)` creeaza spatiu interior sau exterior, in functie de pozitia lui in lant.
 - `background(...)` deseneaza o culoare in spatele continutului.
 - `clip(...)` limiteaza desenul la o forma.
-- `verticalScroll(rememberScrollState())` permite derularea ecranului pe telefoane mai mici.
+- `verticalScroll(rememberScrollState())` permite derularea numai in tema Simple; Retro este intentionat fix.
 - `weight(1f)` imparte spatiul liber intre copiii unui `Row` sau `Column`.
 - `align(...)` pozitioneaza un copil in interiorul unui `Box`.
 - `then(...)` adauga un modifier calculat conditionat; aici este folosit pentru click doar cand exista
@@ -172,7 +256,7 @@ Liniile inactive raman foarte subtiri si neutre, ca topologia sistemului sa fie 
 atentia. Pentru o animatie mai lenta se mareste `durationMillis`; pentru mai putine particule se schimba
 `repeat(3)` in `repeat(2)`.
 
-## 7. Istoricul
+## 7. Istoricul in tema Simple
 
 Lista unica `DashboardHistoryMetrics` defineste cele cinci grafice disponibile. Butonul `Istoric` deschide
 `HistoryMenuSheet`; atingerea unei intrari seteaza `selectedHistory`, iar `App` deschide `HistorySheet`.

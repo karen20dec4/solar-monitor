@@ -25,8 +25,12 @@ Artifacts go to the gitignored `android/build/emulator-artifacts/` directory.
 - Image: `system-images;android-34;google_apis;x86_64`
 - Package/activity: `com.rolling7.solar/.MainActivity`
 - Acceleration: `/dev/kvm`
+- Headless renderer: `swangle` (stable with Emulator 36.6.11 on this host)
+- Process lifetime: transient `solar-monitor-emulator.service` created by `systemd-run`
 
 Use `ANDROID_SDK_ROOT` or `ANDROID_HOME` to override the SDK and `SOLAR_AVD_NAME` to override the AVD.
+Use `SOLAR_EMULATOR_GPU` only for diagnosis; the verified default is `swangle`. Do not switch back to
+`swiftshader_indirect`: on this host it has repeatedly terminated Emulator 36.6.11 with `SIGSEGV`.
 
 ## Commands
 
@@ -39,6 +43,7 @@ $SCRIPT build
 $SCRIPT install
 $SCRIPT launch
 $SCRIPT screenshot
+$SCRIPT retro-tabs
 $SCRIPT status
 $SCRIPT stop
 ```
@@ -55,6 +60,10 @@ Pass a PNG path as the second argument to `screenshot` or `verify` when a stable
 5. Inspect logcat for `AndroidRuntime`, `FATAL EXCEPTION`, layout symptoms, or networking failures when the
    screenshot does not show live data.
 6. Leave the emulator running while iterating; use `stop` when work is finished or resources are needed.
+
+For the fixed Retro layout, run `retro-tabs` after any Compose or Photoshop-asset change. It taps all four
+navigation regions on the pinned Pixel 6 AVD, saves `retro-tab-{tablou,energie,sistem,setari}.png`, confirms
+the selected-tab semantics, and fails if Android exposes a scrollable container on any Retro page.
 
 The emulator uses the app's existing read-only HTTPS API. Do not add inverter writes or direct serial access.
 

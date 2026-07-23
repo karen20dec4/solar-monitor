@@ -170,7 +170,7 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 ✅ Stack Docker complet pornit pe HP: `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy`.
 ✅ Monitorizare live 1s + istoric 60s/31 zile, verificate după cutover.
 ✅ API Android: `/solar/latest` + `/solar/history`, acces prin `https://vyra.go.ro:31443`.
-✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 11 / versionName 2.0**.
+✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 13 / versionName 3.0**.
 ✅ Alerte protecție în collector + ntfy; alarmă locală în Android pentru consum mare.
 ✅ 100% local/self-hosted pentru datele invertorului, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
@@ -566,3 +566,50 @@ collectorul, API-ul sau regula READ-ONLY.
 - Skill-ul `solar-monitor-release` cere acum această livrare după ce build-ul, semnătura și upgrade-ul au
   fost validate. O eroare Telegram nu invalidează și nu șterge APK-ul local.
 - Prima livrare verificată: `SolarMonitor-v2.01.apk`, 1.018.031 bytes, mesaj Telegram ID 45.
+
+### 13.26 Retro v4 fotografic hibrid + fundaluri Photoshop (2026-07-23)
+
+- Referința vizuală este `/opt/delete/retro-theme-v4.png`. Pentru fidelitate, tema Retro folosește acum
+  un sistem hibrid: șasiul, patina, miniaturile și NAV-ul sunt resurse WebP fotografice, iar valorile live,
+  unitățile, acul cadranului, LED-urile, animațiile și zonele tactile rămân native Compose.
+- TABLOU folosește `pag-tablou-background.png`, `pag-tablou-card-ACUM.png`,
+  `pag-tablou-card-FLUX-ENERGETIC.png` și `pag-tablou-card-NAV.png`. ENERGIE, SISTEM și SETARI folosesc
+  noul `background-cu-navbar.png`: zona de conținut nu are delimitări prestabilite, iar placa inferioară
+  rezervă vizual locul NAV-ului, astfel încât layouturile nu lasă goluri negre.
+- Resursele optimizate sunt în `android/app/src/main/res/drawable-nodpi/`. Scriptul
+  `scripts/prepare-retro-ui-assets.sh` regenerează determinist cele cinci resurse WebP din sursele aflate
+  în `android/build/emulator-artifacts/design/`. Sunt instalate ImageMagick 7.1.1-43 și WebP 1.5.0.
+- Toate cele patru pagini Retro ocupă ecranul disponibil și nu folosesc scroll vertical. NAV-ul comun este
+  fix jos, iar conținutul se măsoară în spațiul rămas. Tema Simple nu este modificată de această regulă.
+- Pe TABLOU, ACUM și FLUX sunt ancorate în partea de sus; FLUX este ridicat cu 14 dp pentru a compensa
+  marginile transparente ale resurselor. Zona rămasă sub ele este rezervată pentru viitoare informații
+  esențiale și trebuie păstrată liberă până la aprobarea conținutului.
+- Codul de culoare rămâne: verde = solar/normal, albastru = casă/consum, galben = baterie/atenție,
+  roșu = rețea/alarmă. Nu există CONTROL și nu s-a adăugat nicio operație de scriere spre invertor.
+- Textura fotografică `retro_metal_texture.png` este activă și pe panourile Compose din paginile adiacente;
+  testul cu rendererul `swangle` a rămas stabil și reduce clar aspectul flat-vector.
+- Emulatorul 36.6.11 este pornit stabil headless cu `-gpu swangle` într-un serviciu tranzitoriu systemd.
+  Skill-ul `.codex/skills/solar-monitor-emulator/` și copia instalată în `/root/.codex/skills/` au fost
+  actualizate; vechiul `swiftshader_indirect` a produs repetat `SIGSEGV` pe acest host.
+- Subcomanda `retro-tabs` deschide și capturează automat toate cele patru taburi, verifică semantica tabului
+  activ și eșuează dacă arborele Android expune vreun container cu `scrollable=true`.
+- `scripts/audit-retro-ui-assets.sh` verifică fără modificări dimensiunile, sRGB și transparența exporturilor
+  Photoshop. Importerul păstrează alpha-ul curat; flood-fill-ul rămâne doar fallback temporar pentru PNG-urile
+  opace existente, ca să nu afecteze umbrele și patina viitoarelor exporturi finale.
+- Capturile finale de lucru sunt `retro-v4-final-tablou.png`, `retro-v4-final-energie.png`,
+  `retro-v4-final-sistem.png` și `retro-v4-final-setari.png` în directorul ignorat
+  `android/build/emulator-artifacts/`. Aceste schimbări sunt incluse în release-ul Android 3.0.
+
+### 13.27 Release Android v3.0 — Retro v4 fotografic (2026-07-23)
+
+- **versionCode 13 / versionName 3.0**; APK semnat: `/opt/solar-monitor/SolarMonitor-v3.0.apk`.
+- Dimensiune: 2.539.180 bytes; SHA-256:
+  `aa7114e69b32f1d237584665d25faa6575aacb9c85173c0e69b38fa7a0832a2d`.
+- `aapt` confirmă pachetul `com.rolling7.solar`, minSdk 26, target/compile SDK 34 și versiunea 3.0 (13).
+  `apksigner` confirmă APK Signature Scheme v2 și certificatul permanent Borealis Media, SHA-256
+  `b892e453841228510aa4c08f9a164652baa0005638279cc18572dde677d293f6`.
+- APK-ul semnat a fost instalat și lansat pe emulatorul Android 14. Toate cele patru taburi au fost
+  deschise automat fără crash și fără container scrollabil; atingerea cadranului a selectat ENERGIE/CASA.
+  Captura release este `android/build/emulator-artifacts/release-v3.0-signed.png`.
+- Livrare Telegram reușită prin `@sun_tattva_access_bot`: mesaj ID 47, nume și dimensiune confirmate de API.
+- Release-ul rămâne READ-ONLY; nu s-au adăugat endpointuri sau operații de scriere către invertor.
