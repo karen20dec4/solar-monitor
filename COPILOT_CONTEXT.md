@@ -902,3 +902,29 @@ collectorul, API-ul sau regula READ-ONLY.
   `SolarMonitor-v3.06.apk`, dimensiune 3.573.257 bytes.
 - Release-ul include monitorul SISTEM și extensiile API documentate la 13.42. API-ul de producție a fost
   deja reconstruit și verificat; accesul la invertor rămâne strict READ-ONLY.
+
+### 13.44 Rebuild v3.06 — layout SISTEM pentru Samsung Note 9 (2026-07-24)
+
+- Versiunea rămâne intenționat **versionCode 19 / versionName 3.06**, la cererea utilizatorului. APK-ul
+  semnat actual suprascrie buildul anterior la `/opt/solar-monitor/SolarMonitor-v3.06.apk`.
+- Cardul „INFORMAȚII SISTEM” este mutat fizic cu 10 px în sus. Cardul monitorului rămâne ancorat de NAV,
+  dar înălțimea lui este calculată adaptiv și comprimată numai pe axa Y când ecranul este mai scurt.
+  Layout-ul rezervă minimum 20 px fizici între cele două carduri, fără scroll.
+- Titlul Compose „MONITOR SISTEM”, care ieșea din artwork și se suprapunea pe telefoanele 18.5:9, a fost
+  eliminat complet.
+- Linia vizibilă `BATERIE · 60 MIN ... | TEMP · 60 MIN ...` a fost eliminată. Mini-graficele dinamice
+  rămân, iar spațiul eliberat este folosit de consola live.
+- Fontul consolei a fost dublat de la 5sp la 10sp; titlul consolei a fost dublat de la 5,5sp la 11sp.
+  Coloanele pentru oră, etichetă și valoare au spațiere explicită și păstrează toate cele cinci linii.
+- Eticheta `V3.06` din TABLOU a crescut exact cu 25%, de la 7sp la 8,75sp, și rămâne bold.
+- Verificare vizuală făcută atât la 1080×2400, cât și pe profil Samsung Note 9 1440×2960 / densitate 560.
+  Captura Note 9 este
+  `android/build/emulator-artifacts/v3.06-layout2-sistem-note9-final-1440x2960.png`; captura release
+  semnată la etalon este
+  `android/build/emulator-artifacts/release-v3.06-layout2-sistem-signed-1080x2400.png`.
+- `testDebugUnitTest`, `lintDebug`, `assembleDebug`, verificarea semnăturii și reinstalarea peste aceeași
+  versiune au trecut. Toate cele patru taburi rămân fixe, fără crash și fără container scrollabil.
+- APK: **3.573.257 bytes**; SHA-256:
+  `274f40c81567fe6b00bfb6c18a2a82aeb2d849c568fd9043a0b9c40266d4daf6`.
+- Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **58**, nume
+  `SolarMonitor-v3.06.apk`, dimensiune 3.573.257 bytes.

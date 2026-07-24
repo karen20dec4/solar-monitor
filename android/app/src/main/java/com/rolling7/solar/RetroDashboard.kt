@@ -813,12 +813,28 @@ private fun RetroSystemPage(data: SolarData?, onEnergyFieldClick: (String) -> Un
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .padding(start = 7.dp, top = 18.dp, end = 7.dp, bottom = 5.dp)
     ) {
-        val cardGap = with(LocalDensity.current) { 40.toDp() }
+        val density = LocalDensity.current
+        val cardGap = with(density) { 40.toDp() }
+        val infoLift = with(density) { 10.toDp() }
+        val monitorGap = with(density) { 20.toDp() }
+        val topCardHeight = maxWidth * 0.95f / (1_024f / 301f)
+        val infoCardHeight = maxWidth * 0.95f / (971f / 942f)
+        val infoCardBottom = cardGap + topCardHeight + cardGap - infoLift + infoCardHeight
+        val monitorWidth = maxWidth * 0.99f
+        val naturalMonitorHeight = monitorWidth / (1_030f / 531f)
+        val monitorBottomOffset = 5.dp
+        val availableMonitorHeight =
+            (maxHeight + monitorBottomOffset - infoCardBottom - monitorGap).coerceAtLeast(1.dp)
+        val monitorHeight = if (availableMonitorHeight < naturalMonitorHeight) {
+            availableMonitorHeight
+        } else {
+            naturalMonitorHeight
+        }
 
         Column(
             modifier = Modifier
@@ -840,6 +856,7 @@ private fun RetroSystemPage(data: SolarData?, onEnergyFieldClick: (String) -> Un
                 modifier = Modifier
                     .fillMaxWidth(0.95f)
                     .aspectRatio(971f / 942f)
+                    .offset { IntOffset(x = 0, y = -10) }
             )
         }
         RetroSystemMonitorArtwork(
@@ -849,9 +866,9 @@ private fun RetroSystemPage(data: SolarData?, onEnergyFieldClick: (String) -> Un
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth(0.99f)
-                .aspectRatio(1_030f / 531f)
+                .height(monitorHeight)
                 // Compenseaza padding-ul paginii: rama se lipeste vizual de NAV.
-                .offset(y = 5.dp)
+                .offset(y = monitorBottomOffset)
         )
     }
 }
@@ -1059,33 +1076,8 @@ private fun RetroSystemMonitorArtwork(
             painter = painterResource(R.drawable.retro_system_monitor_artwork),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Fit
+            contentScale = ContentScale.FillBounds
         )
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .offset(y = (-34).dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                "MONITOR SISTEM",
-                color = Color.Black.copy(alpha = 0.72f),
-                fontFamily = RetroSerif,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 2.sp,
-                modifier = Modifier.offset(x = 1.dp, y = 2.dp)
-            )
-            Text(
-                "MONITOR SISTEM",
-                color = RetroText.copy(alpha = 0.78f),
-                fontFamily = RetroSerif,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 2.sp
-            )
-        }
 
         Row(
             modifier = Modifier
@@ -1134,7 +1126,7 @@ private fun RetroSystemMonitorArtwork(
             modifier = Modifier
                 .offset(x = scaleX * 74f, y = scaleY * 94f)
                 .width(scaleX * 882f)
-                .height(scaleY * 142f),
+                .height(scaleY * 100f),
             horizontalArrangement = Arrangement.spacedBy(9.dp)
         ) {
             RetroMiniTrend(
@@ -1164,9 +1156,9 @@ private fun RetroSystemMonitorArtwork(
         RetroSystemConsole(
             data = data,
             modifier = Modifier
-                .offset(x = scaleX * 74f, y = scaleY * 252f)
+                .offset(x = scaleX * 74f, y = scaleY * 205f)
                 .width(scaleX * 882f)
-                .height(scaleY * 205f)
+                .height(scaleY * 260f)
         )
     }
 }
@@ -1215,32 +1207,13 @@ private fun RetroMiniTrend(
     color: Color,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = modifier.semantics {
+    Canvas(
+        modifier = modifier
+            .semantics {
             contentDescription = "$label, valoare curenta $currentText"
         }
+            .fillMaxSize()
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                label,
-                color = RetroMuted,
-                fontFamily = RetroMono,
-                fontSize = 5.5.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                modifier = Modifier.weight(1f)
-            )
-            Text(
-                currentText,
-                color = color,
-                fontFamily = RetroMono,
-                fontSize = 6.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1
-            )
-        }
-        Spacer(Modifier.height(2.dp))
-        Canvas(Modifier.fillMaxSize()) {
             drawRoundRect(
                 color = Color.Black.copy(alpha = 0.18f),
                 cornerRadius = CornerRadius(4.dp.toPx())
@@ -1287,7 +1260,6 @@ private fun RetroMiniTrend(
                 drawCircle(color.copy(alpha = 0.20f), 4.dp.toPx(), lastPoint)
                 drawCircle(color, 1.8.dp.toPx(), lastPoint)
             }
-        }
     }
 }
 
@@ -1319,41 +1291,46 @@ private fun RetroSystemConsole(
             "CONSOLE / LIVE",
             color = RetroMuted,
             fontFamily = RetroMono,
-            fontSize = 5.5.sp,
+            fontSize = 11.sp,
+            lineHeight = 13.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.8.sp
         )
-        Spacer(Modifier.height(3.dp))
+        Spacer(Modifier.height(2.dp))
         lines.forEach { (label, value, color) ->
             Row(
-                modifier = Modifier.fillMaxWidth().height(10.dp),
+                modifier = Modifier.fillMaxWidth().height(14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     time,
                     color = RetroOlive,
                     fontFamily = RetroMono,
-                    fontSize = 5.sp,
-                    lineHeight = 6.sp,
+                    fontSize = 10.sp,
+                    lineHeight = 12.sp,
                     maxLines = 1,
-                    modifier = Modifier.width(45.dp)
+                    modifier = Modifier
+                        .width(60.dp)
+                        .padding(end = 4.dp)
                 )
                 Text(
                     "$label:",
                     color = RetroMuted,
                     fontFamily = RetroMono,
-                    fontSize = 5.sp,
-                    lineHeight = 6.sp,
+                    fontSize = 10.sp,
+                    lineHeight = 12.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
-                    modifier = Modifier.width(61.dp)
+                    modifier = Modifier
+                        .width(90.dp)
+                        .padding(end = 4.dp)
                 )
                 Text(
                     value,
                     color = color,
                     fontFamily = RetroMono,
-                    fontSize = 5.sp,
-                    lineHeight = 6.sp,
+                    fontSize = 10.sp,
+                    lineHeight = 12.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -1516,7 +1493,7 @@ private fun RetroLivePanel(
                 .offset { IntOffset(x = 8, y = -12) },
             color = Color(0xFFC9BC93),
             fontFamily = RetroMono,
-            fontSize = 7.sp,
+            fontSize = 8.75.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.35.sp
         )
