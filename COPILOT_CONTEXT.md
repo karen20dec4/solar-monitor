@@ -810,3 +810,21 @@ collectorul, API-ul sau regula READ-ONLY.
   referința finală arată `W`. Imaginea a fost păstrată neschimbată pentru aprobarea vizuală; PNG-ul trebuie
   corectat în Photoshop înaintea etapei funcționale.
 - Versiunea asociată este **versionCode 18 / versionName 3.05**. Aplicația rămâne READ-ONLY.
+
+### 13.40 Release Android v3.05 — SISTEM etapa 1 (2026-07-24)
+
+- **versionCode 18 / versionName 3.05**; APK semnat:
+  `/opt/solar-monitor/SolarMonitor-v3.05.apk`.
+- Dimensiune: **3.514.780 bytes**; SHA-256:
+  `ac95b5e23c66210d7faf24a7094358eae239ebb1234393066cdbcfdc4ca3c8f5`.
+- `aapt` confirmă pachetul `com.rolling7.solar`, target/compile SDK 34 și versiunea 3.05 (18).
+  `apksigner` confirmă APK Signature Scheme v2 și certificatul permanent Borealis Media, SHA-256
+  `b892e453841228510aa4c08f9a164652baa0005638279cc18572dde677d293f6`.
+- Upgrade real verificat pe emulator Android 14: instalare release semnat 3.04, apoi `adb install -r`
+  pentru 3.05. Toate cele patru taburi au trecut verificarea fără crash și fără container scrollabil.
+- Captura release la dimensiunea compoziției este
+  `android/build/emulator-artifacts/release-v3.05-sistem-signed.png`; verificarea suplimentară la
+  1080×2400 este `android/build/emulator-artifacts/release-v3.05-sistem-signed-1080x2400.png`.
+- Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **54**, nume
+  `SolarMonitor-v3.05.apk`, dimensiune 3.514.780 bytes.
+- Modificarea este exclusiv Android și READ-ONLY; API-ul și containerele serverului nu necesită rebuild.
