@@ -13,10 +13,12 @@ Use this skill for Solar Monitor Android release requests. The source of truth f
    - `git status --short`
    - `rg -n "versionCode|versionName" android/app/build.gradle.kts`
    - `rg --files -g "*.apk" -g "!**/build/**"`
-2. Decide whether to increment version:
-   - Increment `versionCode` and `versionName` only when Android app code/resources changed for the release.
-   - Do not increment for docs-only changes or when the user only asks to rebuild the current APK.
-   - If incrementing, update `android/app/build.gradle.kts` and `COPILOT_CONTEXT.md`, then commit.
+2. Increment every delivered release:
+   - Every new APK delivered to the user or sent through Telegram must use `versionCode + 1` and
+     `versionName + 0.01`, even when the user asks to rebuild the current APK.
+   - Never overwrite or resend an APK filename/version that was already delivered.
+   - Only a local diagnostic build that is not delivered may keep the current version.
+   - Update `android/app/build.gradle.kts` and `COPILOT_CONTEXT.md`, then commit.
 3. On HP/Linux, build with:
    ```bash
    cd /opt/solar-monitor
@@ -32,8 +34,8 @@ Use this skill for Solar Monitor Android release requests. The source of truth f
    scripts/send-android-release-telegram.sh /opt/solar-monitor/SolarMonitor-v<versionName>.apk
    ```
    This uses SSH to `root@celestia.go.ro`; the bot token and `ADMIN_CHAT_ID` remain in
-   `/opt/sun-tattva/.env`. First run with `--dry-run` when diagnosing delivery. Confirm the returned
-   filename and file size. A Telegram failure does not invalidate or delete the local APK.
+   `/opt/sun-tattva/.env`. First run with `--dry-run` when diagnosing delivery. Confirm returned filename,
+   size, and Telegram-downloaded SHA-256. A Telegram failure does not invalidate or delete the local APK.
 6. If repo files changed, stage only intended files, commit, and push.
 7. Report final version, local APK path, SHA256, Telegram delivery/message id, commit hash if any, and
    whether server rebuild is needed.

@@ -170,7 +170,7 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 ✅ Stack Docker complet pornit pe HP: `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy`.
 ✅ Monitorizare live 1s + istoric 60s/31 zile, verificate după cutover.
 ✅ API Android: `/solar/latest` + `/solar/history`, acces prin `https://vyra.go.ro:31443`.
-✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 19 / versionName 3.06**.
+✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 20 / versionName 3.07**.
 ✅ Alerte protecție în collector + ntfy; alarmă locală în Android pentru consum mare.
 ✅ 100% local/self-hosted pentru datele invertorului, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
@@ -325,7 +325,9 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
     mkdir -p ~/.codex/skills
     cp -a /opt/solar-monitor/.codex/skills/solar-monitor-release ~/.codex/skills/
     ```
-- Regula de versionare: se incrementează `versionCode` / `versionName` doar când s-a modificat codul/resursele Android. Pentru rebuild al aceleiași versiuni nu se incrementează.
+- Regula de versionare: fiecare APK livrat ca release nou sau trimis pe Telegram primește obligatoriu
+  `versionCode + 1` și `versionName + 0.01`. Nu se mai suprascrie și nu se mai retrimite un nume de APK
+  folosit anterior. Numai buildurile locale de diagnostic, care nu sunt livrate, pot păstra versiunea.
 - APK-urile rămân ignorate de git; release-ul nu cere rebuild API. Pentru API/server/deploy rămâne regula: `docker compose up -d --build api`.
 
 ### 13.13 Sincronizare documentație cu collector.py (2026-07-10)
@@ -928,3 +930,27 @@ collectorul, API-ul sau regula READ-ONLY.
   `274f40c81567fe6b00bfb6c18a2a82aeb2d849c568fd9043a0b9c40266d4daf6`.
 - Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **58**, nume
   `SolarMonitor-v3.06.apk`, dimensiune 3.573.257 bytes.
+
+### 13.45 Release Android v3.07 — identitate unică și verificare Telegram end-to-end (2026-07-24)
+
+- Refolosirea identității v3.06 a creat ambiguitate pe telefon: cele două APK-uri aveau același
+  `versionCode`, `versionName`, nume și aceeași dimensiune, iar un fișier descărcat anterior putea fi
+  redeschis din cache. APK-ul local v3.06 era corect și nu conținea titlul vechi, dar livrarea nu putea fi
+  deosebită sigur de buildul precedent.
+- Corecția folosește **versionCode 20 / versionName 3.07** și fișierul unic
+  `/opt/solar-monitor/SolarMonitor-v3.07.apk`. Eticheta din TABLOU afișează vizibil `V3.07`.
+- Buildul a pornit cu `clean`; `testDebugUnitTest`, `lintDebug`, `assembleDebug`, R8 și semnarea release
+  au trecut. Upgrade real verificat de la release-ul semnat v3.06 (19) la v3.07 (20).
+- Audit direct în `classes.dex`: stringul/titlul învechit `MONITOR SISTEM` este absent. Captura release
+  semnată pe profilul Note 9 1440×2960 este
+  `android/build/emulator-artifacts/release-v3.07-sistem-signed-note9-1440x2960.png`.
+- APK: **3.573.257 bytes**; SHA-256:
+  `3b3c59bad6405f8288b95c42c34ca0bb96ff1478a5388207821539f5fe36857a`.
+- Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **59**, nume
+  `SolarMonitor-v3.07.apk`, `file_unique_id` **AgADzyAAAn_NGFM**. După upload, scriptul a descărcat fișierul
+  înapoi din Telegram prin `getFile`; SHA-256 Telegram este identic:
+  `3b3c59bad6405f8288b95c42c34ca0bb96ff1478a5388207821539f5fe36857a`.
+- Regula permanentă a skill-ului de release: fiecare APK livrat primește obligatoriu
+  `versionCode + 1` și `versionName + 0.01`; nicio versiune/nume livrat anterior nu se reutilizează.
+- Modificările sunt Android, documentație și verificarea transportului Telegram. API-ul și containerele
+  serverului nu necesită rebuild; accesul la invertor rămâne strict READ-ONLY.

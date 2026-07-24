@@ -125,6 +125,7 @@ scp -q -o BatchMode=yes "$apk_path" "$remote_host:$remote_apk"
 ssh -o BatchMode=yes "$remote_host" \
   "cd '$remote_project' && .venv/bin/python - '$remote_apk' '$filename' '$apk_version_name' '$apk_version_code' '$sha256' '$size_bytes' '$expected_bot'" <<'PY'
 import sys
+import hashlib
 import httpx
 from app import config
 
@@ -159,9 +160,29 @@ result = data["result"]
 document = result.get("document", {})
 if int(document.get("file_size", -1)) != int(size_bytes):
     raise SystemExit("Telegram reported an unexpected file size")
+
+file_response = httpx.get(
+    f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/getFile",
+    params={"file_id": document.get("file_id")},
+    timeout=10.0,
+).json()
+if not file_response.get("ok"):
+    raise SystemExit("Telegram getFile verification failed")
+file_path = file_response["result"]["file_path"]
+download = httpx.get(
+    f"https://api.telegram.org/file/bot{config.TELEGRAM_BOT_TOKEN}/{file_path}",
+    timeout=90.0,
+)
+download.raise_for_status()
+telegram_sha256 = hashlib.sha256(download.content).hexdigest()
+if telegram_sha256 != sha256:
+    raise SystemExit("Telegram stored APK SHA-256 does not match local APK")
+
 print("telegram_send_ok: True")
 print("bot_username: @" + expected_bot)
 print("message_id:", result.get("message_id"))
 print("filename:", document.get("file_name"))
 print("file_size:", document.get("file_size"))
+print("file_unique_id:", document.get("file_unique_id"))
+print("telegram_sha256:", telegram_sha256)
 PY
