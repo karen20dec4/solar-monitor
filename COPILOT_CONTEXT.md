@@ -170,7 +170,7 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 ✅ Stack Docker complet pornit pe HP: `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy`.
 ✅ Monitorizare live 1s + istoric 60s/31 zile, verificate după cutover.
 ✅ API Android: `/solar/latest` + `/solar/history`, acces prin `https://vyra.go.ro:31443`.
-✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 17 / versionName 3.04**.
+✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 18 / versionName 3.05**.
 ✅ Alerte protecție în collector + ntfy; alarmă locală în Android pentru consum mare.
 ✅ 100% local/self-hosted pentru datele invertorului, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
@@ -791,3 +791,22 @@ collectorul, API-ul sau regula READ-ONLY.
 - Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **52**, nume
   `SolarMonitor-v3.04.apk`, dimensiune 3.151.846 bytes.
 - API-ul a fost reconstruit și este sănătos în producție. Release-ul și endpointurile rămân READ-ONLY.
+
+### 13.39 SISTEM Retro V5 — structură fotografică, etapa 1 (2026-07-24)
+
+- Referința vizuală este
+  `android/build/emulator-artifacts/design/Pag-Sistem/pag-sistem-Retro-V5.png`.
+- Pagina SISTEM folosește cele două exporturi Photoshop optimizate:
+  `pag-sistem-card-SISTEM-optimized.png` și `pag-sistem-card-INFORMATII-optimized.png`.
+  Resursele Android sunt `retro_system_top_artwork.webp` și `retro_system_info_artwork.webp`.
+- Prima placă conține titlul SISTEM, starea telemetriei și starea conexiunii invertorului. A doua conține
+  șase ferestre goale: Consum casă, Panouri, Baterie, Consum invertor, Temperatură și Rețea.
+- Valorile nu sunt încă desenate din Compose. Această etapă validează exclusiv aspectul, proporțiile și
+  poziționarea; funcționalitatea va fi adăugată numai după aprobarea release-ului pe telefon.
+- Ambele carduri folosesc exact proporțiile din compoziția Retro V5, sunt centrate la 95% din lățime și
+  rămân ancorate sus. NAV-ul este instanța globală comună, deci poziția lui nu diferă între pagini.
+  Pagina rămâne fixă, fără scroll.
+- Exportul primit pentru INFORMATII are unitatea statică `V` în fereastra „CONSUM INVERTOR”, deși
+  referința finală arată `W`. Imaginea a fost păstrată neschimbată pentru aprobarea vizuală; PNG-ul trebuie
+  corectat în Photoshop înaintea etapei funcționale.
+- Versiunea asociată este **versionCode 18 / versionName 3.05**. Aplicația rămâne READ-ONLY.

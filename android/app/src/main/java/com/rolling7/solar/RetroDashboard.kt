@@ -710,25 +710,32 @@ private fun RetroEnergyTodayArtwork(
 }
 
 @Composable
+@Suppress("UNUSED_PARAMETER")
 private fun RetroSystemPage(data: SolarData?, onEnergyFieldClick: (String) -> Unit) {
     Column(
-        Modifier
+        modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(start = 7.dp, top = 4.dp, end = 7.dp, bottom = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        RetroPageHeader(
-            title = "SISTEM",
-            subtitle = if (data == null) "TELEMETRIE INDISPONIBILA" else "TELEMETRIE ACTIVA",
-            statusColor = if (data == null) RetroRed else RetroSage
+        Image(
+            painter = painterResource(R.drawable.retro_system_top_artwork),
+            contentDescription = "Sistem, telemetrie activa, invertor conectat",
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                // Raportul de afisare urmeaza compozitia Retro V5 aprobata.
+                .aspectRatio(1_400f / 523f),
+            contentScale = ContentScale.FillBounds
         )
-        RetroInverterStatusPanel(data)
-        RetroSystemPanel(
-            data = data,
-            onHistoryFieldClick = onEnergyFieldClick,
-            modifier = Modifier.weight(1f)
+        Image(
+            painter = painterResource(R.drawable.retro_system_info_artwork),
+            contentDescription = "Informatii sistem: Consum casa, Panouri, Baterie, Consum invertor, Temperatura si Retea",
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .aspectRatio(971f / 1_021f),
+            contentScale = ContentScale.FillBounds
         )
-        RetroReadOnlyFooter()
     }
 }
 

@@ -131,6 +131,17 @@ API-ul rămâne READ-ONLY și citește numai InfluxDB. Pentru seriile Casa/Panou
 agregare medie la 30 minute, iar 30 zile agregare medie la 2 ore. Seria zilnică folosește în continuare
 maximul fiecărei zile, pentru că registrele `*_today` se resetează la miezul nopții.
 
+### Pagina SISTEM: structură fotografică V5
+
+SISTEM folosește două plăci fotografice independente peste fundalul comun:
+`retro_system_top_artwork.webp` și `retro_system_info_artwork.webp`. Prima etapă afișează numai materialul
+Photoshop, fără valori native. Ferestrele sunt intenționat goale până la aprobarea pe telefon.
+
+Ambele plăci sunt centrate la 95% din lățime și păstrează proporțiile compoziției
+`pag-sistem-Retro-V5.png`. Sunt ancorate sus într-un `Column` fără scroll. Spațiul rămas pe telefoane foarte
+înalte rămâne fundal metalic; cardurile nu sunt întinse automat până la NAV. Bara NAV este componenta
+globală existentă, nu o copie din imaginile paginii.
+
 ## Tema Simple — explicatia redesignului initial
 
 ## 1. Ce pastreaza noul ecran
