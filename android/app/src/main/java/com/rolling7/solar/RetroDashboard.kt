@@ -31,7 +31,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -58,6 +62,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -130,6 +137,86 @@ internal enum class RetroTab(val label: String) {
     ENERGY("ENERGIE"),
     SYSTEM("SISTEM"),
     SETTINGS("SETARI")
+}
+
+internal enum class RetroSystemSlot(val historyField: String?) {
+    HOUSE("output_power"),
+    SOLAR("pv_power"),
+    BATTERY("battery_voltage"),
+    INVERTER_CONSUMPTION(null),
+    TEMPERATURE(null),
+    GRID(null)
+}
+
+internal data class RetroSystemReadings(
+    val house: String,
+    val solar: String,
+    val batteryVoltage: String,
+    val inverterConsumption: String,
+    val temperature: String,
+    val gridVoltage: String
+)
+
+internal fun retroSystemReadings(data: SolarData?): RetroSystemReadings {
+    if (data == null) {
+        return RetroSystemReadings(
+            house = "—",
+            solar = "—",
+            batteryVoltage = "—",
+            inverterConsumption = "—",
+            temperature = "—",
+            gridVoltage = "—"
+        )
+    }
+    return RetroSystemReadings(
+        house = data.house.roundToInt().toString(),
+        solar = data.pv.roundToInt().toString(),
+        batteryVoltage = String.format(Locale.US, "%.2f", data.batteryVoltage),
+        inverterConsumption = data.inverterLoss.roundToInt().toString(),
+        temperature = String.format(Locale.US, "%.1f", data.inverterTemp),
+        gridVoltage = String.format(Locale.US, "%.1f", data.gridVoltage)
+    )
+}
+
+internal fun retroSystemTemperatureColor(value: Double?): Color = when {
+    value == null -> RetroOlive
+    value >= 55.0 -> RetroRed
+    value >= 45.0 -> RetroYellow
+    else -> RetroSage
+}
+
+internal fun retroSystemHealthText(data: SolarData?): String = when {
+    data == null -> "FARA DATE"
+    data.inverterTemp >= 55.0 -> "ATENTIE TEMP · COD ${data.status.roundToInt()}"
+    data.batteryVoltage <= 48.0 || data.batteryVoltage >= 57.0 ->
+        "ATENTIE BATERIE · COD ${data.status.roundToInt()}"
+    else -> "STATUS OPTIM · COD ${data.status.roundToInt()}"
+}
+
+internal fun retroSystemBatteryText(data: SolarData?): String {
+    if (data == null) return "FARA DATE"
+    val voltage = String.format(Locale.US, "%.2f", data.batteryVoltage)
+    return when {
+        data.batteryDisplay > 0.0 ->
+            "INCARCARE ${data.batteryDisplay.roundToInt()}W · ${voltage}V"
+        data.batteryDisplay < 0.0 ->
+            "DESCARCARE ${(-data.batteryDisplay).roundToInt()}W · ${voltage}V"
+        else -> "REPAUS · ${voltage}V"
+    }
+}
+
+internal fun retroSystemGridText(data: SolarData?): String {
+    if (data == null) return "FARA DATE"
+    val voltage = String.format(Locale.US, "%.1f", data.gridVoltage)
+    return if (data.gridVoltage >= 100.0) "CONECTATA · ${voltage}V" else "DECONECTATA · ${voltage}V"
+}
+
+internal fun retroSystemUptimeText(seconds: Double?): String {
+    if (seconds == null) return "UP —"
+    val totalHours = (seconds / 3_600.0).toInt().coerceAtLeast(0)
+    val days = totalHours / 24
+    val hours = totalHours % 24
+    return if (days > 0) "UP ${days}z ${hours}h" else "UP ${hours}h"
 }
 
 @Composable
@@ -710,34 +797,574 @@ private fun RetroEnergyTodayArtwork(
 }
 
 @Composable
-@Suppress("UNUSED_PARAMETER")
 private fun RetroSystemPage(data: SolarData?, onEnergyFieldClick: (String) -> Unit) {
-    Column(
+    var batteryHistory by remember { mutableStateOf<List<HistoryPoint>>(emptyList()) }
+    var temperatureHistory by remember { mutableStateOf<List<HistoryPoint>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            val histories = withContext(Dispatchers.IO) {
+                SolarRepository.fetchHistory("battery_voltage", "1h") to
+                    SolarRepository.fetchHistory("inverter_temp", "1h")
+            }
+            histories.first?.points?.let { batteryHistory = it }
+            histories.second?.points?.let { temperatureHistory = it }
+            delay(60_000)
+        }
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(start = 7.dp, top = 4.dp, end = 7.dp, bottom = 5.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+            .padding(start = 7.dp, top = 18.dp, end = 7.dp, bottom = 5.dp)
     ) {
-        Image(
-            painter = painterResource(R.drawable.retro_system_top_artwork),
-            contentDescription = "Sistem, telemetrie activa, invertor conectat",
+        val cardGap = with(LocalDensity.current) { 40.toDp() }
+
+        Column(
             modifier = Modifier
-                .fillMaxWidth(0.95f)
-                // Raportul de afisare urmeaza compozitia Retro V5 aprobata.
-                .aspectRatio(1_400f / 523f),
-            contentScale = ContentScale.FillBounds
-        )
-        Image(
-            painter = painterResource(R.drawable.retro_system_info_artwork),
-            contentDescription = "Informatii sistem: Consum casa, Panouri, Baterie, Consum invertor, Temperatura si Retea",
+                .fillMaxWidth()
+                // Aceeasi pornire verticala ca primul card din TABLOU.
+                .offset { IntOffset(x = 0, y = 40) },
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(cardGap)
+        ) {
+            RetroSystemTopArtwork(
+                data = data,
+                modifier = Modifier
+                    .fillMaxWidth(0.95f)
+                    .aspectRatio(1_024f / 301f)
+            )
+            RetroSystemInfoArtwork(
+                data = data,
+                onEnergyFieldClick = onEnergyFieldClick,
+                modifier = Modifier
+                    .fillMaxWidth(0.95f)
+                    .aspectRatio(971f / 942f)
+            )
+        }
+        RetroSystemMonitorArtwork(
+            data = data,
+            batteryHistory = batteryHistory,
+            temperatureHistory = temperatureHistory,
             modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .aspectRatio(971f / 1_021f),
-            contentScale = ContentScale.FillBounds
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(0.99f)
+                .aspectRatio(1_030f / 531f)
+                // Compenseaza padding-ul paginii: rama se lipeste vizual de NAV.
+                .offset(y = 5.dp)
         )
     }
 }
+
+@Composable
+private fun RetroSystemTopArtwork(
+    data: SolarData?,
+    modifier: Modifier = Modifier
+) {
+    val connected = data != null
+    val statusDescription = if (connected) {
+        "Sistem, telemetrie activa, invertor conectat, cod ${data.status.roundToInt()}, ultima actualizare ${retroTimestamp(data.timestamp)}"
+    } else {
+        "Sistem fara date de telemetrie"
+    }
+    BoxWithConstraints(
+        modifier = modifier.semantics {
+            contentDescription = statusDescription
+        }
+    ) {
+        val scaleX = maxWidth / 1_400f
+        val scaleY = maxHeight / 411f
+        Image(
+            painter = painterResource(R.drawable.retro_system_top_artwork),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Fit
+        )
+        Text(
+            text = if (connected) retroTimestamp(data.timestamp) else "FARA DATE",
+            color = if (connected) RetroSage else RetroRed,
+            fontFamily = RetroMono,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier
+                .offset(x = scaleX * 930f, y = scaleY * 294f)
+                .width(scaleX * 300f)
+        )
+    }
+}
+
+@Composable
+private fun RetroSystemInfoArtwork(
+    data: SolarData?,
+    onEnergyFieldClick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val values = retroSystemReadings(data)
+    BoxWithConstraints(modifier) {
+        val scaleX = maxWidth / 971f
+        val scaleY = maxHeight / 942f
+        val leftX = scaleX * 66f
+        val rightX = scaleX * 526f
+        val displayWidth = scaleX * 362f
+        val displayHeight = scaleY * 114f
+
+        Image(
+            painter = painterResource(R.drawable.retro_system_info_artwork),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Fit
+        )
+        RetroSystemLiveDisplay(
+            value = values.house,
+            unit = "W",
+            color = RetroHouseBlue,
+            description = "Consum casa ${values.house} W. Deschide graficul Energie.",
+            onClick = { onEnergyFieldClick(RetroSystemSlot.HOUSE.historyField!!) },
+            modifier = Modifier
+                .offset(x = leftX, y = scaleY * 188f)
+                .width(displayWidth)
+                .height(displayHeight)
+        )
+        RetroSystemLiveDisplay(
+            value = values.solar,
+            unit = "W",
+            color = RetroSage,
+            description = "Panouri ${values.solar} W. Deschide graficul Energie.",
+            onClick = { onEnergyFieldClick(RetroSystemSlot.SOLAR.historyField!!) },
+            modifier = Modifier
+                .offset(x = rightX, y = scaleY * 188f)
+                .width(displayWidth)
+                .height(displayHeight)
+        )
+        RetroSystemLiveDisplay(
+            value = values.batteryVoltage,
+            unit = "V",
+            color = RetroYellow,
+            description = "Baterie ${values.batteryVoltage} V. Deschide graficul Energie.",
+            onClick = { onEnergyFieldClick(RetroSystemSlot.BATTERY.historyField!!) },
+            modifier = Modifier
+                .offset(x = leftX, y = scaleY * 451f)
+                .width(displayWidth)
+                .height(displayHeight)
+        )
+        RetroSystemLiveDisplay(
+            value = values.inverterConsumption,
+            unit = "W",
+            color = RetroSage,
+            description = "Consum propriu invertor ${values.inverterConsumption} W",
+            modifier = Modifier
+                .offset(x = rightX, y = scaleY * 451f)
+                .width(displayWidth)
+                .height(displayHeight)
+        )
+        RetroSystemLiveDisplay(
+            value = values.temperature,
+            unit = "°C",
+            color = retroSystemTemperatureColor(data?.inverterTemp),
+            description = "Temperatura invertor ${values.temperature} grade Celsius",
+            modifier = Modifier
+                .offset(x = leftX, y = scaleY * 706f)
+                .width(displayWidth)
+                .height(displayHeight)
+        )
+        RetroSystemLiveDisplay(
+            value = values.gridVoltage,
+            unit = "V",
+            color = RetroRed,
+            description = "Tensiune retea ${values.gridVoltage} V",
+            modifier = Modifier
+                .offset(x = rightX, y = scaleY * 706f)
+                .width(displayWidth)
+                .height(displayHeight)
+        )
+    }
+}
+
+@Composable
+private fun RetroSystemLiveDisplay(
+    value: String,
+    unit: String,
+    color: Color,
+    description: String,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
+) {
+    val actionModifier = if (onClick == null) {
+        Modifier
+    } else {
+        Modifier.clickable(onClick = onClick)
+    }
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .then(actionModifier)
+            .semantics(mergeDescendants = true) {
+                contentDescription = description
+            }
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            drawRoundRect(
+                brush = Brush.verticalGradient(
+                    listOf(
+                        Color(0xFF030503),
+                        Color(0xFF0C1209),
+                        Color(0xFF020302)
+                    )
+                ),
+                cornerRadius = CornerRadius(10.dp.toPx())
+            )
+            repeat(14) { row ->
+                val y = size.height * (row + 1) / 15f
+                drawLine(
+                    color = color.copy(alpha = 0.018f),
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 0.55.dp.toPx()
+                )
+            }
+        }
+        RetroVfdDisplay(
+            value = value,
+            unit = unit,
+            color = color,
+            modifier = Modifier.fillMaxSize(),
+            embedded = true,
+            // Descrierea apartine containerului; evitam anuntarea dubla in TalkBack.
+            description = ""
+        )
+    }
+}
+
+@Composable
+private fun RetroSystemMonitorArtwork(
+    data: SolarData?,
+    batteryHistory: List<HistoryPoint>,
+    temperatureHistory: List<HistoryPoint>,
+    modifier: Modifier = Modifier
+) {
+    BoxWithConstraints(
+        modifier = modifier.semantics {
+            contentDescription =
+                "Monitor sistem, CPU ${retroSystemPercentText(data?.serverCpuPercent)}, " +
+                    "memorie ${retroSystemPercentText(data?.serverMemoryPercent)}, " +
+                    retroSystemUptimeText(data?.serverUptimeSeconds)
+        }
+    ) {
+        val scaleX = maxWidth / 1_030f
+        val scaleY = maxHeight / 531f
+        Image(
+            painter = painterResource(R.drawable.retro_system_monitor_artwork),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Fit
+        )
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = (-34).dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "MONITOR SISTEM",
+                color = Color.Black.copy(alpha = 0.72f),
+                fontFamily = RetroSerif,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 2.sp,
+                modifier = Modifier.offset(x = 1.dp, y = 2.dp)
+            )
+            Text(
+                "MONITOR SISTEM",
+                color = RetroText.copy(alpha = 0.78f),
+                fontFamily = RetroSerif,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 2.sp
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .offset(x = scaleX * 74f, y = scaleY * 24f)
+                .width(scaleX * 882f)
+                .height(scaleY * 58f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RetroServerMetric(
+                label = "CPU",
+                value = retroSystemPercentText(data?.serverCpuPercent),
+                fraction = data?.serverCpuPercent?.div(100.0)?.toFloat(),
+                color = RetroSage,
+                modifier = Modifier.weight(1f)
+            )
+            RetroServerMetric(
+                label = "MEM",
+                value = retroSystemPercentText(data?.serverMemoryPercent),
+                fraction = data?.serverMemoryPercent?.div(100.0)?.toFloat(),
+                color = RetroYellow,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                retroSystemUptimeText(data?.serverUptimeSeconds),
+                color = RetroMuted,
+                fontFamily = RetroMono,
+                fontSize = 6.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                modifier = Modifier.weight(0.82f)
+            )
+            Text(
+                if (data == null) "API OFFLINE" else "API ONLINE",
+                color = if (data == null) RetroRed else RetroSage,
+                fontFamily = RetroMono,
+                fontSize = 6.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                textAlign = TextAlign.End,
+                modifier = Modifier.weight(0.88f)
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .offset(x = scaleX * 74f, y = scaleY * 94f)
+                .width(scaleX * 882f)
+                .height(scaleY * 142f),
+            horizontalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            RetroMiniTrend(
+                label = "BATERIE · 60 MIN",
+                current = data?.batteryVoltage,
+                currentText = data?.let { String.format(Locale.US, "%.2f V", it.batteryVoltage) } ?: "— V",
+                points = batteryHistory,
+                minValue = 48.0,
+                maxValue = 58.0,
+                thresholds = listOf(48.0, 57.0),
+                color = RetroYellow,
+                modifier = Modifier.weight(1f)
+            )
+            RetroMiniTrend(
+                label = "TEMP · 60 MIN",
+                current = data?.inverterTemp,
+                currentText = data?.let { String.format(Locale.US, "%.1f °C", it.inverterTemp) } ?: "— °C",
+                points = temperatureHistory,
+                minValue = 20.0,
+                maxValue = 70.0,
+                thresholds = listOf(45.0, 55.0),
+                color = retroSystemTemperatureColor(data?.inverterTemp),
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        RetroSystemConsole(
+            data = data,
+            modifier = Modifier
+                .offset(x = scaleX * 74f, y = scaleY * 252f)
+                .width(scaleX * 882f)
+                .height(scaleY * 205f)
+        )
+    }
+}
+
+@Composable
+private fun RetroServerMetric(
+    label: String,
+    value: String,
+    fraction: Float?,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier) {
+        Text(
+            "$label  $value",
+            color = color,
+            fontFamily = RetroMono,
+            fontSize = 6.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
+        Spacer(Modifier.height(2.dp))
+        Canvas(Modifier.fillMaxWidth().height(3.dp)) {
+            drawRoundRect(
+                color = RetroOlive.copy(alpha = 0.28f),
+                cornerRadius = CornerRadius(size.height / 2f)
+            )
+            drawRoundRect(
+                color = color.copy(alpha = 0.86f),
+                size = Size(size.width * (fraction ?: 0f).coerceIn(0f, 1f), size.height),
+                cornerRadius = CornerRadius(size.height / 2f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun RetroMiniTrend(
+    label: String,
+    current: Double?,
+    currentText: String,
+    points: List<HistoryPoint>,
+    minValue: Double,
+    maxValue: Double,
+    thresholds: List<Double>,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.semantics {
+            contentDescription = "$label, valoare curenta $currentText"
+        }
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                label,
+                color = RetroMuted,
+                fontFamily = RetroMono,
+                fontSize = 5.5.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                currentText,
+                color = color,
+                fontFamily = RetroMono,
+                fontSize = 6.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        Canvas(Modifier.fillMaxSize()) {
+            drawRoundRect(
+                color = Color.Black.copy(alpha = 0.18f),
+                cornerRadius = CornerRadius(4.dp.toPx())
+            )
+            repeat(3) { index ->
+                val y = size.height * (index + 1) / 4f
+                drawLine(
+                    RetroOlive.copy(alpha = 0.16f),
+                    Offset(0f, y),
+                    Offset(size.width, y),
+                    0.6.dp.toPx()
+                )
+            }
+            thresholds.forEach { threshold ->
+                val normalized = ((threshold - minValue) / (maxValue - minValue)).toFloat().coerceIn(0f, 1f)
+                val y = size.height * (1f - normalized)
+                drawLine(
+                    RetroRed.copy(alpha = 0.20f),
+                    Offset(0f, y),
+                    Offset(size.width, y),
+                    0.7.dp.toPx()
+                )
+            }
+
+            val values = points.takeLast(120).map { it.value }.ifEmpty {
+                current?.let(::listOf) ?: emptyList()
+            }
+            fun point(index: Int, value: Double): Offset {
+                val x = if (values.size <= 1) size.width / 2f else size.width * index / (values.size - 1f)
+                val normalized = ((value - minValue) / (maxValue - minValue)).toFloat().coerceIn(0f, 1f)
+                return Offset(x, size.height * (1f - normalized))
+            }
+            values.zipWithNext().forEachIndexed { index, pair ->
+                drawLine(
+                    color = color.copy(alpha = 0.84f),
+                    start = point(index, pair.first),
+                    end = point(index + 1, pair.second),
+                    strokeWidth = 1.35.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+            values.lastOrNull()?.let { last ->
+                val lastPoint = point(values.lastIndex, last)
+                drawCircle(color.copy(alpha = 0.20f), 4.dp.toPx(), lastPoint)
+                drawCircle(color, 1.8.dp.toPx(), lastPoint)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RetroSystemConsole(
+    data: SolarData?,
+    modifier: Modifier = Modifier
+) {
+    val time = retroTimestamp(data?.timestamp)
+    val upload = data?.serverUploadKbps?.let {
+        String.format(Locale.US, "API ONLINE · %.1f KB/s UP", it)
+    } ?: "ASTEPT METRICI SERVER"
+    val batteryColor = when {
+        data == null -> RetroOlive
+        data.batteryDisplay > 0.0 -> RetroSage
+        data.batteryDisplay < 0.0 -> RetroYellow
+        else -> RetroOlive
+    }
+    val health = retroSystemHealthText(data)
+    val lines = listOf(
+        Triple("TEMPERATURA", data?.let { String.format(Locale.US, "%.1f °C", it.inverterTemp) } ?: "— °C", retroSystemTemperatureColor(data?.inverterTemp)),
+        Triple("TELEMETRIE", upload, RetroHouseBlue),
+        Triple("INVERTOR", health, if (health.startsWith("STATUS OPTIM")) RetroSage else RetroRed),
+        Triple("BATERIE", retroSystemBatteryText(data), batteryColor),
+        Triple("RETEA", retroSystemGridText(data), RetroRed)
+    )
+    Column(modifier) {
+        Text(
+            "CONSOLE / LIVE",
+            color = RetroMuted,
+            fontFamily = RetroMono,
+            fontSize = 5.5.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.8.sp
+        )
+        Spacer(Modifier.height(3.dp))
+        lines.forEach { (label, value, color) ->
+            Row(
+                modifier = Modifier.fillMaxWidth().height(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    time,
+                    color = RetroOlive,
+                    fontFamily = RetroMono,
+                    fontSize = 5.sp,
+                    lineHeight = 6.sp,
+                    maxLines = 1,
+                    modifier = Modifier.width(45.dp)
+                )
+                Text(
+                    "$label:",
+                    color = RetroMuted,
+                    fontFamily = RetroMono,
+                    fontSize = 5.sp,
+                    lineHeight = 6.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    modifier = Modifier.width(61.dp)
+                )
+                Text(
+                    value,
+                    color = color,
+                    fontFamily = RetroMono,
+                    fontSize = 5.sp,
+                    lineHeight = 6.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+private fun retroSystemPercentText(value: Double?): String =
+    value?.let { "${it.roundToInt()}%" } ?: "—"
 
 @Composable
 internal fun RetroPageHeader(
@@ -883,15 +1510,15 @@ private fun RetroLivePanel(
         )
 
         Text(
-            text = "Versiune V${BuildConfig.VERSION_NAME}",
+            text = "V${BuildConfig.VERSION_NAME}",
             modifier = Modifier
                 .offset(x = scale * 88f, y = scale * 23f)
-                .offset { IntOffset(x = 0, y = -7) },
+                .offset { IntOffset(x = 8, y = -12) },
             color = Color(0xFFC9BC93),
             fontFamily = RetroMono,
-            fontSize = 12.sp,
+            fontSize = 7.sp,
             fontWeight = FontWeight.Bold,
-            letterSpacing = 1.5.sp
+            letterSpacing = 0.35.sp
         )
         Row(
             modifier = Modifier

@@ -170,7 +170,7 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 ✅ Stack Docker complet pornit pe HP: `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy`.
 ✅ Monitorizare live 1s + istoric 60s/31 zile, verificate după cutover.
 ✅ API Android: `/solar/latest` + `/solar/history`, acces prin `https://vyra.go.ro:31443`.
-✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 18 / versionName 3.05**.
+✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 19 / versionName 3.06**.
 ✅ Alerte protecție în collector + ntfy; alarmă locală în Android pentru consum mare.
 ✅ 100% local/self-hosted pentru datele invertorului, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
@@ -828,3 +828,77 @@ collectorul, API-ul sau regula READ-ONLY.
 - Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **54**, nume
   `SolarMonitor-v3.05.apk`, dimensiune 3.514.780 bytes.
 - Modificarea este exclusiv Android și READ-ONLY; API-ul și containerele serverului nu necesită rebuild.
+
+### 13.41 SISTEM Retro V5 funcțional (2026-07-24)
+
+- Deformarea observată pe 1080×2400 a fost eliminată: artwork-urile folosesc rapoartele reale
+  `1024/301` și `971/942`, cu `ContentScale.Fit`. Primul card pornește exact la aceeași poziție ca în
+  TABLOU, iar distanța fizică dintre cele două carduri este 40 px.
+- Cele șase afișaje sunt acum randate nativ peste ferestrele fotografice și se actualizează la fiecare
+  răspuns live: Consum casă = `output_power` W, Panouri = `pv_power` W, Baterie =
+  `battery_voltage` V, Consum invertor = `inverter_loss` W, Temperatură = `inverter_temp` °C și
+  Rețea = `grid_voltage` V.
+- Codul cromatic rămâne semantic: casă albastru, solar verde, baterie galben, rețea roșu. Temperatura
+  este verde sub 45 °C, galbenă între 45–54,9 °C și roșie de la 55 °C.
+- Afișajele acoperă inclusiv unitățile statice din bitmap; astfel, eroarea `V` imprimată în sursa
+  „CONSUM INVERTOR” este înlocuită corect în aplicație cu `W`. PNG-ul Photoshop poate fi totuși corectat
+  ulterior pentru a elimina defectul din sursă.
+- Cardul superior afișează ora ultimei telemetrii în fusul Europe/Bucharest. Semantica accesibilă include
+  conexiunea, codul invertorului și ora ultimei actualizări.
+- Atingerea valorilor Casă, Panouri sau Baterie deschide tabul ENERGIE cu graficul potrivit selectat.
+  Traseele au fost apăsate și validate individual în emulator.
+- `RetroSystemReadingsTest` verifică mapările, formatarea, starea fără date, pragurile de temperatură și
+  câmpurile de navigare. `testDebugUnitTest`, `lintDebug` și `assembleDebug` trec.
+- Verificarea Android 14 la etalonul 1080×2400 a trecut pentru toate cele patru taburi, fără crash și fără
+  scroll. Captura este `android/build/emulator-artifacts/pag-sistem-v5-functional-1080x2400.png`.
+- Funcționalitatea este inclusă în release-ul **versionCode 19 / versionName 3.06**.
+
+### 13.42 Monitor SISTEM, mini-grafice și consolă live (2026-07-24)
+
+- Al treilea artwork primit, `pag-sistem-card-monitor-optimized.png`, este importat ca
+  `retro_system_monitor_artwork.webp` la raportul real 1030/531. Cardul este ancorat jos și compensează
+  exact padding-ul paginii, astfel încât rama lui se îmbină vizual cu NAV-ul global fără suprapunere.
+- Monitorul afișează agregate reale ale serverului: CPU %, memorie %, uptime și trafic upload în KB/s.
+  API-ul citește numai `/proc`, montat în container ca `/host/proc:ro`; nu montează Docker socket, nu
+  expune hostname, procese, IP-uri sau nume de interfețe.
+- `/solar/latest` include noile câmpuri nullable `server_cpu_percent`, `server_memory_percent`,
+  `server_memory_used_mb`, `server_memory_total_mb`, `server_upload_kbps` și
+  `server_uptime_seconds`. Aplicația afișează `—` dacă ele lipsesc, nu zero inventat.
+- Mini-graficele BATERIE și TEMP folosesc câte maximum 120 puncte din ultima oră. Bateria folosește
+  istoricul existent `battery_voltage`; API-ul acceptă acum și
+  `/solar/history?field=inverter_temp&range=1h`, cu bucket `live` și fereastră de 30 secunde. Seriile sunt
+  reîncărcate la 60 secunde numai cât pagina SISTEM este vizibilă.
+- Consola nativă are cinci linii live: temperatură, stare API + upload, sănătatea invertorului și codul
+  lui, starea/puterea/tensiunea bateriei și conectarea/tensiunea rețelei. Textele provin numai din date
+  măsurate sau reguli explicite de prag; nu sunt lipite în bitmap.
+- API-ul de producție a fost reconstruit exclusiv pentru serviciul `solar-api`. Verificare: health OK,
+  metrici reale CPU/RAM/upload/uptime și aproximativ 120 puncte de temperatură pe 1h. InfluxDB, collectorul și
+  accesul READ-ONLY la invertor nu au fost modificate.
+- Teste: 6 teste API în container și 16 teste Android trec; `lintDebug` și `assembleDebug` trec. Toate
+  cele patru taburi rămân fixe, iar scurtăturile Casă/Panouri/Baterie au fost reapăsate cu succes.
+- Captura etalon este
+  `android/build/emulator-artifacts/pag-sistem-v5-monitor-functional-1080x2400.png`.
+- Funcționalitatea este inclusă în release-ul **versionCode 19 / versionName 3.06**.
+
+### 13.43 Release Android v3.06 — monitor SISTEM și etichetă TABLOU (2026-07-24)
+
+- **versionCode 19 / versionName 3.06**; APK semnat:
+  `/opt/solar-monitor/SolarMonitor-v3.06.apk`.
+- Eticheta de pe cardul „CONSUM CASĂ” este acum `V3.06`, fără prefixul „Versiune”. Folosește același
+  font RetroMono, aceeași dimensiune de 7sp, aceeași greutate și aceeași spațiere ca textul
+  „CASA DIN SOLAR”; culoarea galben-retro `#C9BC93` este păstrată. Față de poziția anterioară,
+  eticheta este mutată fizic cu 8 px spre dreapta și încă 5 px în sus.
+- Dimensiune: **3.573.257 bytes**; SHA-256:
+  `40c79176b958e3f363df37e5b5b15b1030074e0da813ef373c78bcc1be0a0616`.
+- `aapt` confirmă pachetul `com.rolling7.solar`, target/compile SDK 34 și versiunea 3.06 (19).
+  `apksigner` confirmă APK Signature Scheme v2 și certificatul permanent Borealis Media, SHA-256
+  `b892e453841228510aa4c08f9a164652baa0005638279cc18572dde677d293f6`.
+- Upgrade real verificat pe emulator Android 14: instalare release semnat 3.05, apoi `adb install -r`
+  pentru 3.06. Release-ul semnat a trecut verificarea tuturor celor patru taburi la 1080×2400, fără
+  crash și fără container scrollabil.
+- Captura TABLOU a release-ului semnat este
+  `android/build/emulator-artifacts/release-v3.06-tablou-signed-1080x2400.png`.
+- Livrare Telegram confirmată prin `@sun_tattva_access_bot`: mesaj ID **57**, nume
+  `SolarMonitor-v3.06.apk`, dimensiune 3.573.257 bytes.
+- Release-ul include monitorul SISTEM și extensiile API documentate la 13.42. API-ul de producție a fost
+  deja reconstruit și verificat; accesul la invertor rămâne strict READ-ONLY.

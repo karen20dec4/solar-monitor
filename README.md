@@ -27,6 +27,7 @@ Monitorizare 100% locală (self-hosted), **READ-ONLY**, fără cloud / fără Sh
 Invertor --USB (/dev/growatt)--> Collector Python (Modbus RTU, READ-ONLY)
     |-> InfluxDB bucket `live`    (1s,  retenție 48h)
     |-> InfluxDB bucket `history` (60s, retenție 31 zile)
+    |-> API Android READ-ONLY (telemetrie, istoric și agregate CPU/RAM din `/proc:ro`)
     `-> Grafana (dashboard live 1s + istoric 30 zile)
 ```
 

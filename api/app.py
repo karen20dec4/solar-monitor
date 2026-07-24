@@ -8,6 +8,7 @@ NU vorbeste cu invertorul; doar cu InfluxDB.
 import os
 from flask import Flask, jsonify, request
 from influxdb_client import InfluxDBClient
+from system_metrics import HostMetricsSampler
 
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
 TOKEN      = os.getenv("INFLUX_TOKEN", "")
@@ -74,10 +75,17 @@ HISTORY_FIELDS = {
             "30d": {"start": "-30d", "window": "1d", "bucket": "history", "fn": "max"},
         },
     },
+    "inverter_temp": {
+        "label": "Temperatura invertor", "unit": "°C", "chart": "line",
+        "ranges": {
+            "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
+        },
+    },
 }
 
 app = Flask(__name__)
 client = InfluxDBClient(url=INFLUX_URL, token=TOKEN, org=ORG, timeout=5000)
+host_metrics = HostMetricsSampler()
 
 
 @app.get("/health")
@@ -99,6 +107,7 @@ def latest():
                 ts = rec.get_time()
     except Exception as e:
         return jsonify({"error": str(e)}), 503
+    out.update(host_metrics.snapshot())
     out["timestamp"] = ts.isoformat() if ts else None
     return jsonify(out)
 

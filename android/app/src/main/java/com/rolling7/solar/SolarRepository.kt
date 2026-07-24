@@ -15,6 +15,8 @@ data class SolarData(
     val batteryDischarge: Double, val batterySupport: Double,
     val gridImport: Double, val gridCharge: Double, val gridVoltage: Double,
     val inverterTemp: Double, val inverterLoss: Double,
+    val serverCpuPercent: Double?, val serverMemoryPercent: Double?,
+    val serverUploadKbps: Double?, val serverUptimeSeconds: Double?,
     val energyPvToday: Double, val energyPvTotal: Double,
     val energyLoadToday: Double, val energyLoadTotal: Double,
     val status: Double, val houseSource: Double, val timestamp: String?
@@ -58,6 +60,7 @@ object SolarRepository {
             val text = conn.inputStream.bufferedReader().use { it.readText() }
             val j = JSONObject(text)
             fun d(k: String) = j.optDouble(k, 0.0)
+            fun dn(k: String) = if (j.has(k) && !j.isNull(k)) j.optDouble(k) else null
             SolarData(
                 pv = d("pv_power"), pv1 = d("pv1_power"), pv2 = d("pv2_power"),
                 house = d("output_power"), loadPercent = d("load_percent"),
@@ -68,6 +71,10 @@ object SolarRepository {
                 gridImport = d("grid_import_power"), gridCharge = d("grid_charge_power"),
                 gridVoltage = d("grid_voltage"),
                 inverterTemp = d("inverter_temp"), inverterLoss = d("inverter_loss"),
+                serverCpuPercent = dn("server_cpu_percent"),
+                serverMemoryPercent = dn("server_memory_percent"),
+                serverUploadKbps = dn("server_upload_kbps"),
+                serverUptimeSeconds = dn("server_uptime_seconds"),
                 energyPvToday = d("energy_pv_today"), energyPvTotal = d("energy_pv_total"),
                 energyLoadToday = d("energy_load_today"), energyLoadTotal = d("energy_load_total"),
                 status = d("status"), houseSource = d("house_source"),

@@ -339,3 +339,51 @@ Operatorul `?.` inseamna „foloseste proprietatea numai daca obiectul nu este n
 de retea nu a sosit, functiile `wholeNumber` si `decimalNumber` transforma `null` in `—`. Dupa sosirea unui
 nou `SolarData`, Compose observa schimbarea state-ului `data` si redeseneaza automat numai partile care il
 folosesc.
+
+## 9. Pagina SISTEM Retro V5
+
+Cele două carduri păstrează artwork-ul Photoshop, dar folosesc raporturile reale ale resurselor și
+`ContentScale.Fit`; bitmap-urile nu sunt întinse pentru a umple o înălțime artificială. Pornirea verticală
+este comună cu primul card din TABLOU, iar spațiul dintre carduri este convertit din 40 px în `Dp` folosind
+densitatea ecranului.
+
+Ferestrele instrumentelor sunt suprapuneri Compose native. Ele primesc valorile live din `SolarData`:
+
+- Consum casă: `house`, afișat în W și colorat albastru.
+- Panouri: `pv`, afișat în W și colorat verde.
+- Baterie: `batteryVoltage`, afișată cu două zecimale în V și colorată galben.
+- Consum invertor: `inverterLoss`, afișat corect în W.
+- Temperatură: `inverterTemp`, afișată în °C cu praguri verde/galben/roșu.
+- Rețea: `gridVoltage`, afișată în V și colorată roșu.
+
+`RetroVfdDisplay` desenează cifrele, unitatea, glow-ul și scanline-urile peste ferestrele fotografice.
+Valorile rămân dinamice; nu sunt lipite în resursele bitmap. Când telemetria lipsește, toate ferestrele
+afișează `—`, nu valori zero inventate.
+
+Primele trei ferestre sunt și scurtături contextuale. Atingerea lor schimbă tabul global în ENERGIE și
+selectează `output_power`, `pv_power` sau `battery_voltage`. Bara NAV rămâne o singură instanță comună
+tuturor paginilor.
+
+## 10. Monitorul de sistem și consola
+
+Artwork-ul `retro_system_monitor_artwork.webp` este stratul fotografic al cardului inferior. Este ancorat
+la baza suprafeței de conținut și folosește raportul nativ 1030/531, fără deformare. Titlul, metricile,
+graficele și consola sunt desenate de Compose.
+
+Rândul de diagnostic citește din același răspuns `/solar/latest`:
+
+- `serverCpuPercent`: utilizarea agregată a procesoarelor gazdei.
+- `serverMemoryPercent`: memoria folosită raportată la `MemAvailable`.
+- `serverUptimeSeconds`: uptime-ul Linux, formatat în zile și ore.
+- `serverUploadKbps`: traficul total transmis de interfețele gazdei, fără loopback și interfețe Docker.
+
+API-ul obține aceste agregate dintr-un mount `/proc` strict read-only. Aplicația nu primește informații
+despre procese, adrese, hostname sau containere.
+
+Cele două mini-grafice citesc `battery_voltage` și `inverter_temp` pe intervalul `1h`. Cât pagina SISTEM
+este vizibilă, Compose încarcă seriile la intrare și apoi la fiecare 60 secunde. Plecarea din tab oprește
+automat coroutine-ul. Telemetria principală rămâne la polling-ul existent de două secunde.
+
+Consola nu este un log de comandă și nu acceptă input. Este un sumar READ-ONLY cu temperatura, API/upload,
+starea invertorului, bateria și rețeaua. Codurile colorate păstrează convenția globală și nu adaugă nicio
+funcție de control.

@@ -123,6 +123,10 @@ services:
       INFLUX_ORG: ${INFLUXDB_ORG}
       INFLUX_BUCKET_LIVE: ${INFLUXDB_BUCKET_LIVE}
       INFLUX_BUCKET_HISTORY: ${INFLUXDB_BUCKET_HISTORY}
+      HOST_PROC_ROOT: /host/proc
+    volumes:
+      # Metrici agregate CPU/RAM/retea/uptime; montare strict READ-ONLY, fara Docker socket.
+      - /proc:/host/proc:ro
 
   # Reverse proxy HTTPS pentru acces remote securizat la Grafana (TLS self-signed).
   caddy:
