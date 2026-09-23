@@ -170,7 +170,7 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 ✅ Stack Docker complet pornit pe HP: `influxdb`, `collector`, `grafana`, `ntfy`, `api`, `caddy`.
 ✅ Monitorizare live 1s + istoric 60s/31 zile, verificate după cutover.
 ✅ API Android: `/solar/latest` + `/solar/history`, acces prin `https://vyra.go.ro:31443`.
-✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 20 / versionName 3.07**.
+✅ App Android nativă cu teme Retro/Simple, flux animat, grafice istoric și alarmă locală foreground service. Versiune curentă: **versionCode 30 / versionName 3.26**.
 ✅ Alerte protecție în collector + ntfy; alarmă locală în Android pentru consum mare.
 ✅ 100% local/self-hosted pentru datele invertorului, read-only, pornește la boot.
 ✅ **Putere baterie REALĂ (reg90) + pierdere/consum invertor (~90–110W) — afișat pe dashboard.**
@@ -1400,3 +1400,11 @@ vizuală. Scalarea fontului și reechilibrarea greutăților, corectate manual.
 **Release.** `versionCode` 29, `versionName` 3.25, `SolarMonitor-v3.25.apk`, 7.213.764 bytes,
 SHA-256 `f0b01c5a4a07052fee881f8e880a060c599a11d896fedbba8ba1c7f62ad0e426`, Telegram mesaj **83**,
 SHA-256 descărcat înapoi identic. Sistemul rămâne strict **READ-ONLY**.
+
+### 13.57 Release Android v3.26 (2026-09-24)
+
+Release nou, fără modificări funcționale Android față de v3.25. `versionCode` 30,
+`versionName` 3.26, APK semnat `/opt/solar-monitor/SolarMonitor-v3.26.apk`,
+7.213.764 bytes, SHA-256 `95f108d4a9851c3170c13a989909eacb6f57e9b6fe9b4c39ea68a4dbac84bf94`.
+Trimis prin @sun_tattva_access_bot, mesaj **112**; SHA-256 al fișierului descărcat din
+Telegram este identic. Sistemul rămâne strict **READ-ONLY**.
