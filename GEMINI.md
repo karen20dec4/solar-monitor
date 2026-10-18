@@ -245,9 +245,11 @@ Două teme, comutabile din SETĂRI, alegerea persistată de `DashboardStyleStore
    lipește în bitmap.
 3. **Textul din poze nu se schimbă din cod.** Etichetele desenate în asset-urile WebP
    (numele taburilor, titlurile secțiunilor ENERGIE, etichetele cadranelor) sunt pixeli. Excepții
-   pe ENERGIE din v3.28: butoanele de interval, rândul PUTERE/ENERGIE/TENSIUNE, fanta de stare de
-   sus și linia de jos sunt plăci native opace peste text pictat vechi („7d"/„30d", „PRODUCȚIE
-   ZILNICĂ", vechile taburi, „Ultima actualizare: ACUM"). Dacă schimbi valoarea din Kotlin,
+   pe ENERGIE din v3.28: butoanele de interval, rândul PUTERE/ENERGIE/TENSIUNE și linia de jos
+   sunt plăci native opace peste text pictat vechi („7d"/„30d", „PRODUCȚIE ZILNICĂ", „Ultima
+   actualizare: ACUM"). Din v3.29 fanta vechilor taburi de sus e scoasă din asset (petic
+   ImageMagick, `scripts/patch-retro-energy-top.py`), iar LED-ul verde pictat primește o
+   suprapunere recolorată portocaliu/roșu când datele live întârzie. Dacă schimbi valoarea din Kotlin,
    trebuie să repictezi și asset-ul, altfel butonul scrie una și face alta. **Vezi
    `docs/DEZVOLTARE.md` §„Capcana etichetelor din poze".**
 4. **Un build Gradle reușit nu e dovadă vizuală.** Rulează emulatorul și **uită-te la PNG**.

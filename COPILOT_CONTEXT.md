@@ -1588,3 +1588,32 @@ graficul potrivit; APK-ul release semnat instalat curat, fără `FATAL EXCEPTION
 7.197.384 bytes, SHA-256 `91a71a2eb38d1e6ced6ad62b4d08bbb273412e257ab178b8889e4a2612d673a1`,
 Telegram mesaj **121**, SHA-256 descărcat înapoi identic. API reconstruit pe server.
 Sistemul rămâne strict **READ-ONLY**.
+
+### 13.63 ENERGIE: textul de stare scos, LED-ul arată vechimea datelor, release v3.29 (2026-10-18)
+
+Feedback după instalarea v3.28: „ACTUALIZAT ACUM 1 S" încarcă pagina degeaba; LED-ul din placa
+de sus să devină portocaliu dacă nu s-a actualizat în ultimele 10 s și roșu peste 1 min. Pe
+telefon titlul „PANOURI · PUTERE · 2 ORE" se tăia după PUTERE (font de sistem mărit); intervalul
+din titlu dubla butonul aprins, utilizatorul a ales să fie scos.
+
+- `liveLedFor(timestamp, now)` (`EnergySelection.kt`): ≤ 10 s verde, ≤ 60 s portocaliu, altfel sau
+  fără timestamp roșu; înlocuiește `energyFreshness`. Reevaluat la 1 s în `rememberLiveLed`, care
+  recompune doar la schimbarea culorii și ține minte ultimul timestamp văzut (API-ul trimite
+  `timestamp: null` după 15 s fără date, altfel LED-ul ar sări din verde direct în roșu).
+- Retro: fanta vechilor taburi e scoasă din `retro_energy_top_artwork.webp` cu un petic din tabla
+  placii; LED-ul portocaliu/roșu = aceeași fotografie recolorată (`retro_energy_led_*.webp`), pusă
+  exact peste LED-ul pictat. Generator reproductibil: `scripts/patch-retro-energy-top.py` (intrare =
+  asset-ul din `1d728bc`, ieșire identică byte cu byte cu cea din repo).
+- Simple: rândul „Actualizat acum N s" scos.
+- Titlul graficului = subiect · mod („PANOURI · PUTERE"), în ambele teme; `energyRangeLabel` scos.
+- Afișajul de jos („DIN 14:58 · MEDII PE 1 MIN") are rând strâns și centrat: cu fontul de sistem la
+  130% cobora pe marginea plăcii.
+- Verificat în emulator: verde cu date, portocaliu la ~20 s și roșu la ~70 s în mod avion, verde
+  la loc după reconectare; Pixel 6 și Note 9 cu font 130%: titlul și rândul de jos încap;
+  `retro-tabs` trece; APK-ul release instalat, fără `FATAL EXCEPTION`. 26 teste Android trec.
+
+**Release.** `versionCode` 33, `versionName` 3.29, `/opt/solar-monitor/SolarMonitor-v3.29.apk`,
+7.230.390 bytes, SHA-256 `70b90ce5e332711d7796f419c0e8423ec0479d0b920538dd28d460b3a659f7ab`,
+Telegram mesaj **122**, SHA-256 descărcat înapoi identic; capturile (LED verde/portocaliu/roșu,
+pagina, Note 9 cu font mare) ca album, mesajele 123–125. Fără schimbări pe server.
+Sistemul rămâne strict **READ-ONLY**.

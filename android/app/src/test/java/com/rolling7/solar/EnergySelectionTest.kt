@@ -1,8 +1,6 @@
 package com.rolling7.solar
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -43,10 +41,10 @@ class EnergySelectionTest {
     }
 
     @Test
-    fun `titles are complete and short`() {
-        assertEquals("CASA · PUTERE · 2 ORE", energyChartTitle("output_power", "2h"))
-        assertEquals("PANOURI · ENERGIE · 7 ZILE", energyChartTitle("energy_pv_today", "7d"))
-        assertEquals("BATERIE · TENSIUNE · 24 ORE", energyChartTitle("battery_voltage", "1d"))
+    fun `titles name subject and mode, not the range`() {
+        assertEquals("CASA · PUTERE", energyChartTitle("output_power"))
+        assertEquals("PANOURI · ENERGIE", energyChartTitle("energy_pv_today"))
+        assertEquals("BATERIE · TENSIUNE", energyChartTitle("battery_voltage"))
     }
 
     @Test
@@ -79,14 +77,15 @@ class EnergySelectionTest {
     }
 
     @Test
-    fun `freshness turns into a warning after a minute`() {
+    fun `led is green up to 10 s, orange up to a minute, then red`() {
         val now = OffsetDateTime.parse("2026-10-18T12:00:30Z").toInstant().toEpochMilli()
-        val fresh = energyFreshness("2026-10-18T12:00:28.500000+00:00", now)
-        assertEquals("ACTUALIZAT ACUM 1 S", fresh.text)
-        assertFalse(fresh.stale)
-        val old = energyFreshness("2026-10-18T11:55:30+00:00", now)
-        assertEquals("DATE VECHI · ACUM 5 MIN", old.text)
-        assertTrue(old.stale)
-        assertTrue(energyFreshness(null, now).stale)
+        assertEquals(LiveLed.FRESH, liveLedFor("2026-10-18T12:00:28.500000+00:00", now))
+        assertEquals(LiveLed.FRESH, liveLedFor("2026-10-18T12:00:20+00:00", now))
+        assertEquals(LiveLed.LATE, liveLedFor("2026-10-18T12:00:19+00:00", now))
+        assertEquals(LiveLed.LATE, liveLedFor("2026-10-18T11:59:30+00:00", now))
+        assertEquals(LiveLed.STALE, liveLedFor("2026-10-18T11:59:29+00:00", now))
+        assertEquals(LiveLed.STALE, liveLedFor(null, now))
+        // Ceasul telefonului putin in urma serverului nu aprinde avertismentul.
+        assertEquals(LiveLed.FRESH, liveLedFor("2026-10-18T12:00:33+00:00", now))
     }
 }

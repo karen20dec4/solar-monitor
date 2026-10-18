@@ -42,13 +42,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,6 +76,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -613,16 +617,22 @@ internal fun RetroEnergyArtworkPage(
     }
 }
 
-/** Ora curenta, reimprospatata la o secunda - pentru "actualizat acum N s". */
+/**
+ * Culoarea LED-ului, reevaluata la o secunda (si fara date noi trebuie sa treaca in portocaliu);
+ * recompune doar cand se schimba culoarea. API-ul trimite timestamp null dupa 15 s fara date, asa
+ * ca LED-ul tine minte ultimul moment vazut, altfel ar sari direct din verde in rosu.
+ */
 @Composable
-internal fun rememberNowMillis(): Long {
-    val now by produceState(System.currentTimeMillis()) {
+private fun rememberLiveLed(timestamp: String?): State<LiveLed> {
+    val latest by rememberUpdatedState(timestamp)
+    return produceState(liveLedFor(timestamp, System.currentTimeMillis())) {
+        var lastSeen = latest
         while (true) {
+            lastSeen = latest ?: lastSeen
+            value = liveLedFor(lastSeen, System.currentTimeMillis())
             delay(1_000)
-            value = System.currentTimeMillis()
         }
     }
-    return now
 }
 
 @Composable
@@ -630,29 +640,35 @@ private fun RetroEnergyTopArtwork(
     data: SolarData?,
     modifier: Modifier = Modifier
 ) {
-    val freshness = energyFreshness(data?.timestamp, rememberNowMillis())
-    BoxWithConstraints(modifier) {
-        val scaleX = maxWidth / 1_400f
-        val scaleY = maxHeight / 298f
+    val led by rememberLiveLed(data?.timestamp)
+    val ledDescription = when (led) {
+        LiveLed.FRESH -> "date live la zi"
+        LiveLed.LATE -> "fara date noi de peste 10 secunde"
+        LiveLed.STALE -> "fara date noi de peste un minut"
+    }
+    // Fanta vechilor taburi PRODUCTIE / CONSUM / ISTORIC a fost acoperita in asset cu tabla placii
+    // (v3.29); pe placa raman titlul si LED-ul.
+    BoxWithConstraints(modifier.semantics { contentDescription = "Energie, $ledDescription" }) {
         Image(
             painter = painterResource(R.drawable.retro_energy_top_artwork),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.FillBounds
         )
-        // In fanta pictata stateau taburile PRODUCTIE / CONSUM / ISTORIC, care alegeau aceleasi
-        // grafice ca butoanele de jos (iar PRODUCTIE ramanea aprins, fiind pictat). Acum fanta e
-        // afisajul de stare al datelor live, langa LED.
-        RetroInsetReadout(
-            text = freshness.text,
-            color = if (freshness.stale) RetroRed else RetroSage,
-            dot = true,
-            modifier = Modifier
-                .offset(x = scaleX * 70f, y = scaleY * 180f)
-                .width(scaleX * 1_024f)
-                .height(scaleY * 90f)
-                .semantics { contentDescription = "Date live: ${freshness.text.lowercase()}" }
-        )
+        // LED-ul pictat e verde. Portocaliu si rosu sunt aceeasi fotografie recolorata, decupata
+        // din asset la 840,53 / 120 x 120 px (asset 1024 x 218) si pusa exact peste.
+        if (led != LiveLed.FRESH) {
+            Image(
+                painter = painterResource(
+                    if (led == LiveLed.LATE) R.drawable.retro_energy_led_orange else R.drawable.retro_energy_led_red
+                ),
+                contentDescription = null,
+                modifier = Modifier
+                    .offset(x = maxWidth * (840f / 1_024f), y = maxHeight * (53f / 218f))
+                    .size(width = maxWidth * (120f / 1_024f), height = maxHeight * (120f / 218f)),
+                contentScale = ContentScale.FillBounds
+            )
+        }
     }
 }
 
@@ -661,8 +677,7 @@ private fun RetroEnergyTopArtwork(
 private fun RetroInsetReadout(
     text: String,
     color: Color,
-    modifier: Modifier = Modifier,
-    dot: Boolean = false
+    modifier: Modifier = Modifier
 ) {
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
@@ -678,11 +693,6 @@ private fun RetroInsetReadout(
                 cornerRadius = radius,
                 style = Stroke(width = 1.dp.toPx())
             )
-            if (dot) {
-                val center = Offset(size.height * 0.62f, size.height / 2f)
-                drawCircle(color.copy(alpha = 0.25f), radius = size.height * 0.20f, center = center)
-                drawCircle(color, radius = size.height * 0.09f, center = center)
-            }
         }
         Text(
             text = text,
@@ -691,6 +701,11 @@ private fun RetroInsetReadout(
             fontSize = 9.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.6.sp,
+            // Rand strans si centrat: cu fontul de sistem marit textul cobora pe marginea placii.
+            lineHeight = 10.sp,
+            style = LocalTextStyle.current.copy(
+                lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)
+            ),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -823,7 +838,7 @@ private fun RetroEnergyControlsArtwork(
         )
 
         // Peste "Ultima actualizare: ACUM" pictat (scria ACUM si cu date vechi): de cand pornesc
-        // datele si ce reprezinta un punct. Prospetimea datelor e sus, langa LED.
+        // datele si ce reprezinta un punct. Prospetimea datelor o arata LED-ul de sus.
         RetroInsetReadout(
             text = spanLabel,
             color = RetroMuted,

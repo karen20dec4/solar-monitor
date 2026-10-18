@@ -1,6 +1,5 @@
 package com.rolling7.solar
 
-import java.time.Duration
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -64,17 +63,12 @@ internal val EnergyFields = setOf(
 internal fun normalizedEnergyField(field: String): String =
     field.takeIf(EnergyFields::contains) ?: "pv_power"
 
-internal fun energyRangeLabel(range: String): String = when (range) {
-    "2h" -> "2 ORE"
-    "1d" -> "24 ORE"
-    "7d" -> "7 ZILE"
-    "30d" -> "30 ZILE"
-    else -> range.uppercase()
-}
-
-/** Titlul complet al graficului, scurt cat sa incapa pe placa Retro: "CASA · PUTERE · 2 ORE". */
-internal fun energyChartTitle(field: String, range: String): String =
-    "${energySubjectForField(field).label} · ${energyModeForField(field).label} · ${energyRangeLabel(range)}"
+/**
+ * Titlul graficului: "CASA · PUTERE". Fara interval: il arata deja butonul aprins de deasupra, iar
+ * cu fontul de sistem marit "PANOURI · PUTERE · 2 ORE" nu mai incapea pe placa Retro (v3.29).
+ */
+internal fun energyChartTitle(field: String): String =
+    "${energySubjectForField(field).label} · ${energyModeForField(field).label}"
 
 /** Durata ferestrei de agregare intoarse de API ("1m", "10m", "1h", "1d"). */
 internal fun windowMinutes(window: String): Long {
@@ -151,22 +145,22 @@ internal fun energySpanLabel(
     return "DIN $from · $what"
 }
 
-/** Cat de proaspete sunt datele live; peste un minut fara date noi devine avertisment. */
-internal data class EnergyFreshness(val text: String, val stale: Boolean)
+/** LED-ul de pe placa ENERGIE: verde = date live la zi, portocaliu peste 10 s, rosu peste 1 min. */
+internal enum class LiveLed { FRESH, LATE, STALE }
 
-internal fun energyFreshness(timestamp: String?, nowMillis: Long): EnergyFreshness {
+internal fun liveLedFor(timestamp: String?, nowMillis: Long): LiveLed {
     val time = timestamp?.let {
         try {
             OffsetDateTime.parse(it).toInstant().toEpochMilli()
         } catch (e: Exception) {
             null
         }
-    } ?: return EnergyFreshness("ASTEPT DATE", stale = true)
-    val seconds = Duration.ofMillis((nowMillis - time).coerceAtLeast(0L)).seconds
+    } ?: return LiveLed.STALE
+    val age = (nowMillis - time).coerceAtLeast(0L)
     return when {
-        seconds < 60 -> EnergyFreshness("ACTUALIZAT ACUM $seconds S", stale = false)
-        seconds < 3600 -> EnergyFreshness("DATE VECHI · ACUM ${seconds / 60} MIN", stale = true)
-        else -> EnergyFreshness("DATE VECHI · ACUM ${seconds / 3600} ORE", stale = true)
+        age <= 10_000L -> LiveLed.FRESH
+        age <= 60_000L -> LiveLed.LATE
+        else -> LiveLed.STALE
     }
 }
 

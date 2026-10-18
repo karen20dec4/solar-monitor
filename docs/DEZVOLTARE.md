@@ -225,10 +225,18 @@ Din v3.27 ele sunt acoperite de **plăci native** (`RetroEnergyTouchTarget` cu `
 care împart lățimea ramei (365..685 în spațiul logic) la câte intervale are
 `RetroEnergyRanges` — acum trei: `2h`, `1d`, `7d`. Textul vizibil vine deci din Kotlin;
 pixelii vechi rămân doar sub plăci. Din v3.28 la fel sunt acoperite rândul „PRODUCȚIE ZILNICĂ /
-CONSUM ZILNIC" (acum PUTERE · W / ENERGIE · kWh, sau TENSIUNE · V la baterie), fanta vechilor
-taburi PRODUCȚIE / CONSUM / ISTORIC (acum starea datelor live) și „Ultima actualizare: ACUM" de
-jos (acum de când pornesc datele și ce reprezintă un punct). Restul etichetelor de pe șasiu sunt
-în continuare pixeli.
+CONSUM ZILNIC" (acum PUTERE · W / ENERGIE · kWh, sau TENSIUNE · V la baterie) și „Ultima
+actualizare: ACUM" de jos (acum de când pornesc datele și ce reprezintă un punct). Restul
+etichetelor de pe șasiu sunt în continuare pixeli.
+
+Din v3.29 fanta vechilor taburi PRODUCȚIE / CONSUM / ISTORIC nu mai e în
+`retro_energy_top_artwork.webp`: a fost acoperită cu tabla placii printr-un petic
+(`scripts/patch-retro-energy-top.py`, arătat utilizatorului înainte de release, cf. regula de mai
+jos). Același script decupează LED-ul (px 840,53, 120 × 120 din asset-ul 1024 × 218) și îl
+recolorează în `retro_energy_led_orange.webp` / `retro_energy_led_red.webp`; Compose le pune exact
+peste LED-ul verde pictat când ultimele date live au peste 10 s, respectiv peste 1 min
+(`liveLedFor` în `EnergySelection.kt`). Dacă vine un export Photoshop nou al plăcii, regenerează
+și suprapunerile din el.
 
 Asset: `android/app/src/main/res/drawable-nodpi/retro_energy_controls_chart_artwork.webp`
 — **1024 × 1266 px**, desenat în spațiul logic 1045 × 1292 folosit de Compose

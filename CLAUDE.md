@@ -153,8 +153,10 @@ live values, the gauge needle, LEDs, semantics and click targets must remain nat
 
 **Static labels are painted into the WebP, not rendered by Compose.** The tab names, the dial captions,
 the ENERGIE section titles — those are pixels. (Exceptions on ENERGIE since v3.28: the range buttons, the
-PUTERE/ENERGIE/TENSIUNE row, the status slot at the top and the line at the bottom are opaque native plates
-laid over old painted text — `7d`/`30d`, `PRODUCȚIE ZILNICĂ`, the old tabs, `Ultima actualizare: ACUM`.)
+PUTERE/ENERGIE/TENSIUNE row and the line at the bottom are opaque native plates laid over old painted
+text — `7d`/`30d`, `PRODUCȚIE ZILNICĂ`, `Ultima actualizare: ACUM`. Since v3.29 the old tab slot at the
+top is gone from the asset itself (ImageMagick patch, `scripts/patch-retro-energy-top.py`), and the
+painted green LED gets a recoloured orange/red overlay when live data is late.)
 Changing the string in Kotlin
 leaves the photo saying the old thing while the button does the new thing. Rule of thumb: if the text
 does not appear inside a `Text(...)` call, it is in the artwork and needs a repaint (ideally a fresh

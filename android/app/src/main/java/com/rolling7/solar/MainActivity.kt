@@ -471,7 +471,7 @@ private fun RetroEnergyPage(
         data = data,
         selectedField = selectedField,
         selectedRange = selectedRange,
-        chartTitle = energyChartTitle(selectedField, selectedRange),
+        chartTitle = energyChartTitle(selectedField),
         spanLabel = series?.let { energySeriesSpan(it, metric) } ?: if (history.loading) "SE INCARCA..." else "—",
         stats = energyStatPairs(series?.stats, metric),
         onFieldClick = onFieldSelected,
@@ -491,7 +491,7 @@ private fun RetroEnergyPage(
 
 /**
  * ENERGIE in tema Simple, aceeasi ordine ca in Retro: energia de azi (informativ), CE urmaresti,
- * CUM, CAT timp, apoi graficul cu cele patru cifre si cat de proaspete sunt datele.
+ * CUM, CAT timp, apoi graficul cu cele patru cifre.
  */
 @Composable
 private fun SimpleEnergyPage(
@@ -503,7 +503,6 @@ private fun SimpleEnergyPage(
 ) {
     val subject = energySubjectForField(selectedField)
     val mode = energyModeForField(selectedField)
-    val freshness = energyFreshness(data?.timestamp, rememberNowMillis())
     Column(
         Modifier
             .fillMaxSize()
@@ -544,16 +543,10 @@ private fun SimpleEnergyPage(
             retro = false,
             selectedRange = selectedRange,
             onRangeChange = onRangeSelected,
-            title = energyChartTitle(selectedField, selectedRange),
+            title = energyChartTitle(selectedField),
             embedded = true,
             compact = true,
             modifier = Modifier.weight(1f)
-        )
-        Text(
-            freshness.text.lowercase(Locale.getDefault())
-                .replaceFirstChar { it.titlecase(Locale.getDefault()) },
-            color = if (freshness.stale) CGrid else CMuted,
-            fontSize = 11.sp
         )
     }
 }
