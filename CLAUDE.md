@@ -54,7 +54,7 @@ asks and accepts the risk.
 ```
 Inverter --USB (/dev/growatt)--> collector.py (minimalmodbus, FC04, polls every 1s)
    |-> InfluxDB bucket `live`    (1s data,  48h retention)
-   |-> InfluxDB bucket `history` (60s data, 31d retention)
+   |-> InfluxDB bucket `history` (60s averages, 31d retention)
    |-> ntfy push (phone alerts on threshold breach / watchdog)
    `-> Grafana dashboard `solar-main` (live 1s + 30-day history)
 ```
@@ -155,31 +155,45 @@ restart the collector, and inspect the raw `r{i}`/`s{i}` (signed) register field
 ## How `collector.py` works
 
 Single-file, single-threaded loop in `collector.py`. Per cycle: open Modbus instrument (lazily,
-reconnect on failure) → one FC04 read of `REG_COUNT` registers → `parse(regs)` → evaluate alerts →
-write a point to `live` (and to `history` every `HISTORY_INTERVAL`).
+reconnect on failure) → one FC04 read of `REG_COUNT` registers → `parse(regs)` →
+`BalanceDeriver.apply()` → evaluate alerts → queue a point for `live` and, every `HISTORY_INTERVAL`,
+a point for `history` that is the **mean of the interval** (`HistoryAverager`; energy counters,
+status codes and `battery_soc` keep the last value) → `InfluxSink.flush()`.
 
-- **`parse(regs)`** is the heart: maps raw registers to named float fields and computes derived
-  metrics. `u32`/`s32` decode 32-bit register pairs (big-endian, two's complement). Battery power
-  comes from the signed int32 **Bat_Watt at regs 77/78** (the code negates it so the field
-  convention stays *positive = charging, negative = discharging*); charge/discharge currents are
-  regs 83/84. Voltages/SOC/temp are single registers with the scalings shown inline.
-  - Derived signals worth understanding before touching them: `inverter_loss` (self-consumption,
-    from a power balance, ~100–350 W depending on load), `power_deficit` and `grid_import_power`
-    are published as a **60 s rolling median** (`BALANCE_SMOOTH_S`, instantaneous samples kept in
-    `<field>_raw`) because the inverter's power registers refresh out of phase and the
-    instantaneous residual spikes 1–4000 W on load steps. `house_source`,
-    `battery_inferred_discharge_power` and `battery_display_power` are computed in `parse()` from
-    the instantaneous balance and are not filtered. `grid_import_power` vs. inferred battery
-    discharge (uses inverter **status code** reg 0 — `STATUS_BYPASS`/`STATUS_DISCHARGE` — plus grid
-    voltage and battery-first mode to decide whether an unexplained load deficit is coming from the
-    grid or the battery), and `house_source` (1=PV / 2=battery / 3=grid). `house_source` also routes
-    `output_power` to exactly one of `house_pv`/`house_bat`/`house_grid` each cycle so the dashboard
-    can show a single source-colored pill.
+- **`parse(regs)`** is the heart and is stateless: maps raw registers to named float fields.
+  `u32`/`s32` decode 32-bit register pairs (big-endian, two's complement). Battery power comes from
+  the signed int32 **Bat_Watt at regs 77/78** (the code negates it so the field convention stays
+  *positive = charging, negative = discharging*); charge/discharge currents are regs 83/84.
+  Voltages/SOC/temp are single registers with the scalings shown inline.
+- **`BalanceDeriver`** (stateful) computes everything that comes from the power balance
+  `PV + discharge + grid→battery − load − charge`: `inverter_loss` (self-consumption, ~100–350 W
+  depending on load), `power_deficit`, `grid_import_power`, the inferred battery discharge and from
+  it `battery_support_power` / `battery_display_power`, and `house_source` (1=PV / 2=battery /
+  3=grid). The balance is a residual, not a measurement: the inverter's power registers refresh
+  every ~3–4 s out of phase, so the instantaneous value spikes 1–4000 W on load steps. The **signed
+  balance goes through a 60 s rolling median** (`BALANCE_SMOOTH_S`) before any decision;
+  instantaneous values stay in `inverter_loss_raw` / `power_deficit_raw` / `grid_import_power_raw`.
+  Grid vs. battery for an unexplained deficit is decided from the inverter **status code** reg 0
+  (`STATUS_BYPASS`/`STATUS_DISCHARGE`) plus grid voltage and battery-first mode. `house_source`
+  only switches when the new source holds for `HOUSE_SOURCE_HOLD_S` (10 s), and routes
+  `output_power` to exactly one of `house_pv`/`house_bat`/`house_grid` each cycle so the dashboard
+  can show a single source-colored pill. With both knobs at 0 the output is identical to the old
+  unfiltered logic (checked on 26 h of real data).
 - **Alerts** (`build_alerts` / `eval_alerts`): list of dicts with `fire`/`clear` lambdas over the
   parsed data. Each alert has **debounce** (condition must hold `ALERT_DEBOUNCE_S`), **cooldown**
-  (`ALERT_COOLDOWN_S` between re-alerts), and **hysteresis** (separate clear threshold). Covers high
-  load, battery low/high, overheat, lost AC output. A separate **watchdog** fires after
-  `WATCHDOG_FAILS` consecutive read failures (inverter silent / USB unplugged).
+  (`ALERT_COOLDOWN_S` between re-alerts), and **hysteresis** (separate clear threshold); timing uses
+  `time.monotonic()`. Covers high load, battery low (voltage only) / high (57.5 V), overheat, lost AC
+  output. A separate **watchdog** fires after `WATCHDOG_FAILS` consecutive **Modbus** failures
+  (inverter silent / USB unplugged).
+- **`InfluxSink`**: InfluxDB errors are handled apart from Modbus errors. Points carry their own
+  timestamp, wait in a bounded in-memory queue (`INFLUX_BUFFER_LIVE` ≈ 15 min,
+  `INFLUX_BUFFER_HISTORY` ≈ 24 h) and are retried every `INFLUX_RETRY_S`. An InfluxDB outage no
+  longer fires the "inverter not responding" watchdog or reopens the serial port; ntfy alerts keep
+  working because they don't go through InfluxDB. 400/422 rejections are dropped, since retrying
+  cannot fix them.
+- **Do not use `battery_soc` (reg 18) in logic.** In 31 days it only took the values 25/50/75/100
+  and read 100% overnight while the voltage fell 54 → 49 V (decision 2026-10-18). It is still
+  recorded, and the app and Grafana still display it.
 
 > Note on register docs: `COPILOT_CONTEXT.md` is a hand-maintained session log with the hardware
 > details, access credentials' locations, and the discovery history of the register map. Parts of

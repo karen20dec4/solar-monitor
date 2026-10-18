@@ -13,9 +13,9 @@ ceva ce API-ul refuză, sau API care servește ceva ce nimeni nu afișează.
 
 | # | Strat | Fișier | Ce faci aici |
 |---|---|---|---|
-| 1 | Invertor → registre | `collector/collector.py`, funcția `parse()` | mapezi registre brute în câmpuri cu nume; adaugi metrici derivate |
+| 1 | Invertor → registre | `collector/collector.py`, funcția `parse()` și clasa `BalanceDeriver` | `parse()` mapează registre brute în câmpuri cu nume; tot ce vine din bilanțul de puteri (pierdere, deficit, import rețea, sursa casei) e în `BalanceDeriver` |
 | 2 | Alerte | `collector/collector.py`, `build_alerts()` | praguri, debounce, cooldown, histerezis |
-| 3 | Stocare | InfluxDB, bucket `live` (1s/48h) și `history` (60s/31z) | nimic de editat; doar alegi din care bucket citești |
+| 3 | Stocare | InfluxDB, bucket `live` (1s/48h) și `history` (medii pe 60s/31z) | nimic de editat; doar alegi din care bucket citești |
 | 4 | Expunere JSON | `api/app.py` — listele `FIELDS` și `HISTORY_FIELDS` | ce câmpuri și ce intervale sunt permise aplicației |
 | 5 | Client HTTP | `android/.../SolarRepository.kt` | `SolarData` / `HistorySeries`, parsarea JSON |
 | 6 | Stare + config UI | `android/.../MainActivity.kt` (`DashboardHistoryMetrics`), `RetroEnergyInteraction.kt` | ce metrici există, ce intervale, care e implicit |
@@ -45,7 +45,7 @@ va exista dar va da mereu eroare.
 | Interval cerut | Bucket | De ce |
 |---|---|---|
 | ≤ 6 ore | `live` | are rezoluție 1 s, dar reține doar 48 h |
-| ≥ 24 ore | `history` | rezoluție 60 s, reține 31 zile |
+| ≥ 24 ore | `history` | medii pe 60 s, reține 31 zile |
 | > 31 zile | **imposibil** | datele nu mai există; nu inventa un interval mai lung |
 
 `window` (dimensiunea ferestrei de agregare) se alege ca să iasă ~100–300 de puncte pe grafic.

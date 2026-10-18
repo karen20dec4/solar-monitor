@@ -6,10 +6,12 @@ Trimite alerte push (ntfy) pentru consum mare, protectie baterie,
 supraincalzire, pierdere iesire AC si "monitorizare cazuta" (watchdog).
 """
 import os
+import re
 import time
 import logging
 import statistics
 from collections import deque
+from itertools import islice
 import urllib.request
 
 import serial
@@ -33,13 +35,19 @@ MODBUS_SLAVE = int(os.getenv("MODBUS_SLAVE", "1"))
 POLL_LIVE    = float(os.getenv("POLL_INTERVAL_LIVE", "1"))
 HIST_EVERY   = float(os.getenv("HISTORY_INTERVAL", "60"))
 DEBUG_RAW    = os.getenv("DEBUG_RAW", "0") == "1"
-REG_COUNT    = int(os.getenv("REG_COUNT", "45"))
+REG_COUNT    = int(os.getenv("REG_COUNT", "91"))   # >= cel mai mare registru citit in parse() (88) + 1
 
 INFLUX_URL   = os.getenv("INFLUX_URL", "http://influxdb:8086")
 INFLUX_TOKEN = os.getenv("INFLUX_TOKEN", "")
 INFLUX_ORG   = os.getenv("INFLUX_ORG", "casa")
 BUCKET_LIVE  = os.getenv("INFLUX_BUCKET_LIVE", "live")
 BUCKET_HIST  = os.getenv("INFLUX_BUCKET_HISTORY", "history")
+# Daca InfluxDB nu raspunde, punctele asteapta in memorie (cele mai vechi se pierd primele)
+# si scrierea se reincearca la INFLUX_RETRY_S, fara sa blocheze citirea invertorului.
+INFLUX_TIMEOUT_MS     = int(os.getenv("INFLUX_TIMEOUT_MS", "3000"))
+INFLUX_RETRY_S        = envf("INFLUX_RETRY_S", "10")
+INFLUX_BUFFER_LIVE    = int(os.getenv("INFLUX_BUFFER_LIVE", "900"))      # ~15 min la 1 s
+INFLUX_BUFFER_HISTORY = int(os.getenv("INFLUX_BUFFER_HISTORY", "1440"))  # ~24 h la 60 s
 
 # ---------- config alerte (ntfy) ----------
 NTFY_URL          = os.getenv("NTFY_URL", "")          # gol = dezactivat
@@ -48,13 +56,13 @@ ALERT_DEBOUNCE_S  = envf("ALERT_DEBOUNCE_S", "3")      # conditia trebuie sa tin
 WATCHDOG_FAILS    = int(os.getenv("WATCHDOG_FAILS", "30"))
 
 # praguri (cu histerezis: _CLR = revenire la normal)
+# SOC-ul raportat de invertor (reg 18) nu intra in alerte: in 31 de zile a avut doar valorile
+# 25/50/75/100 si arata 100% noaptea, cu tensiunea coborand 54 -> 49 V (decizie 2026-10-18).
 ALERT_THRESHOLD_W = envf("ALERT_THRESHOLD_W", "5500")
 ALERT_CLEAR_W     = envf("ALERT_CLEAR_W", "5000")
 BAT_LOW_V         = envf("BAT_LOW_V", "48.0")
 BAT_LOW_V_CLR     = envf("BAT_LOW_V_CLR", "49.0")
-BAT_LOW_SOC       = envf("BAT_LOW_SOC", "20")
-BAT_LOW_SOC_CLR   = envf("BAT_LOW_SOC_CLR", "25")
-BAT_HIGH_V        = envf("BAT_HIGH_V", "57.0")
+BAT_HIGH_V        = envf("BAT_HIGH_V", "57.5")
 BAT_HIGH_V_CLR    = envf("BAT_HIGH_V_CLR", "56.0")
 TEMP_HIGH         = envf("TEMP_HIGH", "65")
 TEMP_HIGH_CLR     = envf("TEMP_HIGH_CLR", "60")
@@ -63,10 +71,10 @@ OUT_LOST_V_CLR    = envf("OUT_LOST_V_CLR", "200")
 GRID_PRESENT_V    = envf("GRID_PRESENT_V", "100")
 BATTERY_FIRST_MIN_V = envf("BATTERY_FIRST_MIN_V", str(BAT_LOW_V))
 INVERTER_LOSS_ESTIMATE_W = envf("INVERTER_LOSS_ESTIMATE_W", "90")
-# Fereastra (s) a medianei glisante pentru marimile din bilantul de puteri
-# (inverter_loss, power_deficit, grid_import_power). 0 = fara filtrare.
+# Fereastra (s) a medianei glisante pe bilantul de puteri. 0 = fara filtrare.
 BALANCE_SMOOTH_S = envf("BALANCE_SMOOTH_S", "60")
-BALANCE_SMOOTHED_FIELDS = ("inverter_loss", "power_deficit", "grid_import_power")
+# Sursa casei (PV/baterie/retea) se schimba doar daca noua sursa tine atatea secunde. 0 = imediat.
+HOUSE_SOURCE_HOLD_S = envf("HOUSE_SOURCE_HOLD_S", "10")
 
 MEASUREMENT = "inverter"
 
@@ -84,6 +92,7 @@ def s32(regs, hi):
 
 
 def parse(regs):
+    """Registre -> marimi masurate. Fara stare: bilantul il calculeaza `BalanceDeriver`."""
     status = regs[0]
     pv1_p = u32(regs, 3) * 0.1
     pv2_p = u32(regs, 5) * 0.1
@@ -103,58 +112,11 @@ def parse(regs):
     discharge_p = max(-bat_p, 0.0)
 
     grid_voltage = regs[20] * 0.1
-    grid_available = grid_voltage >= GRID_PRESENT_V
-    grid_charge_for_balance = grid_charge if grid_available else 0.0
-
-    # Bilant fara consumul casei din retea:
-    #   PV + descarcare_baterie + retea->baterie - consum_casa - incarcare_baterie
-    # Daca e pozitiv, diferenta este consum propriu/pierdere invertor.
-    # Daca e negativ si reteaua exista, diferenta lipsa vine din retea catre casa (bypass/line).
-    # Daca reteaua e 0V, deficitul ramas este descarcare baterie inferata (reg90 poate ramane 0).
-    balance = pv_p + discharge_p + grid_charge_for_balance - out_p - charge_p
-    measured_loss = max(balance, 0.0)
-    deficit = max(-balance, 0.0)
-
-    bypass_active = status in STATUS_BYPASS
-    discharge_active = status in STATUS_DISCHARGE
-
-    # Reg 0 spune modul real de lucru: codurile 8-11 sunt Bypass, 2/12 sunt Discharge.
-    # In BAT.FIRST/Only SOL, prezenta tensiunii AC nu inseamna ca reteaua alimenteaza casa.
-    battery_first_active = v_bat > BATTERY_FIRST_MIN_V
-    infer_battery_discharge = (not bypass_active) and (
-        (not grid_available) or discharge_active or battery_first_active
-    )
-    grid_import = 0.0 if infer_battery_discharge else deficit
-
-    loss_estimated = 0.0
-    if infer_battery_discharge and deficit > 0.0 and discharge_p == 0.0:
-        loss_estimated = INVERTER_LOSS_ESTIMATE_W
-    loss = max(measured_loss, loss_estimated)
-
-    battery_inferred_discharge = (deficit + loss_estimated) if infer_battery_discharge else 0.0
-    battery_support = discharge_p + battery_inferred_discharge
-    battery_display = bat_p - battery_inferred_discharge
-
-    # Sursa consumului casei (cod numeric pt. dashboard, colorat):
-    #   1 = PV (verde) / 2 = Baterie (galben) / 3 = Retea (rosu)
-    DEAD = 50.0
-    if grid_import > DEAD:
-        house_source = 3.0          # deficit acoperit din retea (bypass/line)
-    elif grid_available and grid_charge > DEAD:
-        house_source = 3.0          # invertor pe retea (incarcare AC)
-    elif battery_support > DEAD:
-        house_source = 2.0          # bateria se descarca -> alimenteaza casa
-    elif pv_p > DEAD:
-        house_source = 1.0          # PV produce si acopera consumul
-    elif out_p > DEAD:
-        house_source = 3.0 if grid_available else 2.0
-    else:
-        house_source = 1.0          # ~fara consum (repaus)
 
     data = {
         "status":                  status,
-        "bypass_active":           1.0 if bypass_active else 0.0,
-        "discharge_active":        1.0 if discharge_active else 0.0,
+        "bypass_active":           1.0 if status in STATUS_BYPASS else 0.0,
+        "discharge_active":        1.0 if status in STATUS_DISCHARGE else 0.0,
         "pv1_voltage":             regs[1] * 0.1,
         "pv2_voltage":             regs[2] * 0.1,
         "pv1_power":               pv1_p,
@@ -167,7 +129,7 @@ def parse(regs):
         "battery_soc":             regs[18],
         "bus_voltage":             regs[19] * 0.1,
         "grid_voltage":            grid_voltage,
-        "grid_available":          1.0 if grid_available else 0.0,
+        "grid_available":          1.0 if grid_voltage >= GRID_PRESENT_V else 0.0,
         "grid_freq":               regs[21] * 0.01,
         "output_voltage":          regs[22] * 0.1,
         "output_freq":             regs[23] * 0.01,
@@ -185,23 +147,7 @@ def parse(regs):
         "battery_power":           bat_p,
         "battery_charge_power":    charge_p,
         "battery_discharge_power": discharge_p,
-        "battery_inferred_discharge_power": battery_inferred_discharge,
-        "battery_support_power":   battery_support,
-        "battery_display_power":   battery_display,
-        "inverter_loss":           loss,
-        "inverter_loss_estimated":  1.0 if loss_estimated > 0.0 else 0.0,
-        "power_deficit":           deficit,
-        "grid_import_power":       grid_import,
-        "house_source":            house_source,
     }
-    # Rutez consumul casei pe campul sursei active -> card unic colorat in Grafana
-    # (doar campul activ e scris in fiecare ciclu => o singura pastila afisata).
-    if house_source == 1.0:
-        data["house_pv"] = out_p
-    elif house_source == 2.0:
-        data["house_bat"] = out_p
-    else:
-        data["house_grid"] = out_p
     if DEBUG_RAW:
         for i in range(REG_COUNT):
             v = regs[i]
@@ -210,32 +156,227 @@ def parse(regs):
     return data
 
 
-_balance_windows = {name: deque() for name in BALANCE_SMOOTHED_FIELDS}
+class BalanceDeriver:
+    """Marimile derivate din bilantul de puteri; tine stare intre cicluri.
 
-
-def smooth_balance_fields(data, now):
-    """Mediana glisanta pe marimile derivate din bilant; valoarea instantanee ramane in `<camp>_raw`.
-
-    `inverter_loss`, `power_deficit` si `grid_import_power` sunt reziduuri de bilant
-    (PV + baterie - consum - incarcare), nu masuratori. Registrele de putere ale invertorului se
-    reimprospateaza decalat (~3-4 s, faze diferite), asa ca la fiecare variatie de sarcina reziduul
-    sare cu sute sau mii de W (observat 1..4100 W intr-o ora, cu consumul propriu real la
-    ~100-350 W). Mediana pe fereastra elimina aceste varfuri fara sa le propage in aplicatie,
-    Grafana sau istoric.
+    Bilantul `PV + descarcare + retea->baterie - consum - incarcare` e un reziduu, nu o masuratoare.
+    Registrele de putere se reimprospateaza la ~3-4 s, decalat, deci reziduul instantaneu sare cu
+    sute sau mii de W la fiecare variatie de sarcina. Pe 26 h fara bypass: 75 de deficite false
+    >50 W, toate <= 7 s, 35 Wh in total, dar ajungeau cu salturi de pana la 4 kW in cifra bateriei
+    din aplicatie si faceau sursa casei sa palpaie (27 schimbari/ora ziua, 44% sub 4 s). De aceea:
+      - bilantul semnat trece printr-o mediana glisanta (BALANCE_SMOOTH_S) inainte de a decide
+        pierdere / deficit / import din retea / descarcare inferata; valorile instantanee raman in
+        `inverter_loss_raw`, `power_deficit_raw`, `grid_import_power_raw`;
+      - sursa casei se schimba doar daca noua sursa tine HOUSE_SOURCE_HOLD_S secunde.
     """
-    for name, window in _balance_windows.items():
-        raw = data[name]
-        data[name + "_raw"] = raw
-        if BALANCE_SMOOTH_S <= 0:
-            continue
-        window.append((now, raw))
-        while window and now - window[0][0] > BALANCE_SMOOTH_S:
-            window.popleft()
-        data[name] = statistics.median(v for _, v in window)
+
+    def __init__(self, smooth_s, hold_s):
+        self.smooth_s = smooth_s
+        self.hold_s = hold_s
+        self.window = deque()
+        self.source = None
+        self.candidate = None
+        self.candidate_since = 0.0
+
+    def _smooth(self, balance, now):
+        if self.smooth_s <= 0:
+            return balance
+        self.window.append((now, balance))
+        while now - self.window[0][0] > self.smooth_s:
+            self.window.popleft()
+        return statistics.median(v for _, v in self.window)
+
+    def _hold_source(self, candidate, now):
+        if self.source is None or self.hold_s <= 0:
+            self.source = candidate
+        elif candidate == self.source:
+            self.candidate = None
+        elif candidate != self.candidate:
+            self.candidate, self.candidate_since = candidate, now
+        elif now - self.candidate_since >= self.hold_s:
+            self.source, self.candidate = candidate, None
+        return self.source
+
+    def apply(self, data, now):
+        pv_p = data["pv_power"]
+        out_p = data["output_power"]
+        grid_charge = data["grid_charge_power"]
+        discharge_p = data["battery_discharge_power"]
+        grid_available = data["grid_available"] > 0.0
+        grid_charge_for_balance = grid_charge if grid_available else 0.0
+
+        # Bilant fara consumul casei din retea:
+        #   PV + descarcare_baterie + retea->baterie - consum_casa - incarcare_baterie
+        # Daca e pozitiv, diferenta este consum propriu/pierdere invertor.
+        # Daca e negativ si reteaua exista, diferenta lipsa vine din retea catre casa (bypass/line).
+        # Daca reteaua e 0V, deficitul ramas este descarcare baterie inferata (reg90 poate ramane 0).
+        balance_raw = (pv_p + discharge_p + grid_charge_for_balance
+                       - out_p - data["battery_charge_power"])
+        balance = self._smooth(balance_raw, now)
+
+        # Reg 0 spune modul real de lucru: codurile 8-11 sunt Bypass, 2/12 sunt Discharge.
+        # In BAT.FIRST/Only SOL, prezenta tensiunii AC nu inseamna ca reteaua alimenteaza casa.
+        battery_first_active = data["battery_voltage"] > BATTERY_FIRST_MIN_V
+        infer_battery_discharge = data["bypass_active"] == 0.0 and (
+            (not grid_available) or data["discharge_active"] > 0.0 or battery_first_active
+        )
+
+        def split(bal):
+            deficit = max(-bal, 0.0)
+            grid_import = 0.0 if infer_battery_discharge else deficit
+            estimated = 0.0
+            if infer_battery_discharge and deficit > 0.0 and discharge_p == 0.0:
+                estimated = INVERTER_LOSS_ESTIMATE_W
+            return max(bal, 0.0, estimated), estimated, deficit, grid_import
+
+        loss_raw, _, deficit_raw, grid_import_raw = split(balance_raw)
+        loss, loss_estimated, deficit, grid_import = split(balance)
+
+        battery_inferred_discharge = (deficit + loss_estimated) if infer_battery_discharge else 0.0
+        battery_support = discharge_p + battery_inferred_discharge
+        battery_display = data["battery_power"] - battery_inferred_discharge
+
+        # Sursa consumului casei (cod numeric pt. dashboard, colorat):
+        #   1 = PV (verde) / 2 = Baterie (galben) / 3 = Retea (rosu)
+        DEAD = 50.0
+        if grid_import > DEAD:
+            candidate = 3.0          # deficit acoperit din retea (bypass/line)
+        elif grid_available and grid_charge > DEAD:
+            candidate = 3.0          # invertor pe retea (incarcare AC)
+        elif battery_support > DEAD:
+            candidate = 2.0          # bateria se descarca -> alimenteaza casa
+        elif pv_p > DEAD:
+            candidate = 1.0          # PV produce si acopera consumul
+        elif out_p > DEAD:
+            candidate = 3.0 if grid_available else 2.0
+        else:
+            candidate = 1.0          # ~fara consum (repaus)
+        house_source = self._hold_source(candidate, now)
+
+        data.update({
+            "battery_inferred_discharge_power": battery_inferred_discharge,
+            "battery_support_power":   battery_support,
+            "battery_display_power":   battery_display,
+            "inverter_loss":           loss,
+            "inverter_loss_raw":       loss_raw,
+            "inverter_loss_estimated": 1.0 if loss_estimated > 0.0 else 0.0,
+            "power_deficit":           deficit,
+            "power_deficit_raw":       deficit_raw,
+            "grid_import_power":       grid_import,
+            "grid_import_power_raw":   grid_import_raw,
+            "house_source":            house_source,
+        })
+        # Rutez consumul casei pe campul sursei active -> card unic colorat in Grafana
+        # (doar campul activ e scris in fiecare ciclu => o singura pastila afisata).
+        data[HOUSE_FIELDS[house_source]] = out_p
 
 
-def make_point(data):
-    p = Point(MEASUREMENT).tag("device", "spf6000es")
+HOUSE_FIELDS = {1.0: "house_pv", 2.0: "house_bat", 3.0: "house_grid"}
+_DEBUG_KEY = re.compile(r"^[rs]\d+$")
+
+
+class HistoryAverager:
+    """Punctul din bucket-ul `history` = media intervalului HISTORY_INTERVAL, nu o citire izolata.
+
+    O singura citire pe minut diferea de media minutului cu ~1,5 kW in 1% din puncte (p99, 26 h)
+    si strica graficele 24h/7d/30d si min/max din statistici. Contoarele de energie, codurile de
+    stare si SOC-ul raman ultima valoare: media lor n-are sens (resetul contoarelor la miezul
+    noptii ar da o valoare intermediara falsa).
+    """
+
+    LAST_VALUE = {"status", "bypass_active", "discharge_active", "grid_available",
+                  "house_source", "inverter_loss_estimated", "battery_soc"}
+
+    def __init__(self):
+        self.sums = {}
+        self.last = None
+
+    @classmethod
+    def _averaged(cls, key):
+        return not (key in cls.LAST_VALUE or key.startswith(("energy_", "house_"))
+                    or _DEBUG_KEY.match(key))
+
+    def add(self, data):
+        self.last = data
+        for k, v in data.items():
+            if self._averaged(k):
+                s, n = self.sums.get(k, (0.0, 0))
+                self.sums[k] = (s + float(v), n + 1)
+
+    def flush(self):
+        out = {k: v for k, v in self.last.items() if not k.startswith("house_")}
+        for k, (s, n) in self.sums.items():
+            out[k] = s / n
+        out["house_source"] = self.last["house_source"]
+        out[HOUSE_FIELDS[out["house_source"]]] = out["output_power"]
+        self.sums = {}
+        return out
+
+
+class InfluxSink:
+    """Scrieri InfluxDB separate de citirea Modbus.
+
+    Inainte, orice eroare de scriere era numarata ca eroare Modbus: o pana InfluxDB dadea dupa
+    ~1 min alerta falsa "Invertorul nu mai raspunde", inchidea portul serial in bucla si pierdea
+    datele. Acum punctele (cu timestamp propriu) asteapta in memorie si se trimit cand InfluxDB
+    revine; alertele ntfy merg in continuare, pentru ca nu depind de InfluxDB.
+    """
+
+    BATCH = 500
+
+    def __init__(self, write_api):
+        self.write_api = write_api
+        self.queues = {BUCKET_LIVE: deque(maxlen=INFLUX_BUFFER_LIVE),
+                       BUCKET_HIST: deque(maxlen=INFLUX_BUFFER_HISTORY)}
+        self.retry_at = float("-inf")
+        self.failing_since = None
+        self.failures = 0
+        self.dropped = 0
+
+    def add(self, bucket, point):
+        q = self.queues[bucket]
+        if len(q) == q.maxlen:
+            self.dropped += 1
+        q.append(point)
+
+    def flush(self, now):
+        if now < self.retry_at:
+            return
+        try:
+            for bucket, q in self.queues.items():
+                while q:
+                    batch = list(islice(q, self.BATCH))
+                    try:
+                        self.write_api.write(bucket=bucket, record=batch)
+                    except Exception as e:
+                        # 400/422 = puncte respinse definitiv (format, retentie); reincercarea nu
+                        # le-ar trece niciodata si ar bloca tot ce vine dupa ele.
+                        if getattr(e, "status", None) not in (400, 422):
+                            raise
+                        log.error("InfluxDB a respins %d puncte (%s): %s", len(batch), bucket, e)
+                    for _ in batch:
+                        q.popleft()
+        except Exception as e:
+            self.failures += 1
+            self.retry_at = now + INFLUX_RETRY_S
+            pending = sum(len(q) for q in self.queues.values())
+            if self.failing_since is None:
+                self.failing_since = now
+                log.warning("Scriere InfluxDB esuata, pastrez punctele in memorie: %s", e)
+            elif self.failures % 30 == 0:
+                log.warning("InfluxDB tot indisponibil de %.0f s; %d puncte in asteptare.",
+                            now - self.failing_since, pending)
+            return
+        if self.failing_since is not None:
+            log.info("InfluxDB revenit dupa %.0f s; puncte pierdute (buffer plin): %d.",
+                     now - self.failing_since, self.dropped)
+            self.failing_since = None
+            self.failures = 0
+            self.dropped = 0
+
+
+def make_point(data, ts_ns):
+    p = Point(MEASUREMENT).tag("device", "spf6000es").time(ts_ns)
     for k, v in data.items():
         p = p.field(k, float(v))
     return p
@@ -265,9 +406,9 @@ def build_alerts():
 
         {"key": "baterie_jos", "prio": "urgent", "tags": "warning,battery",
          "title": "Baterie descarcata!",
-         "fire":  lambda d: d["battery_voltage"] <= BAT_LOW_V or d["battery_soc"] <= BAT_LOW_SOC,
-         "clear": lambda d: d["battery_voltage"] >= BAT_LOW_V_CLR and d["battery_soc"] >= BAT_LOW_SOC_CLR,
-         "msg":   lambda d: f"Baterie {d['battery_voltage']:.2f} V / SOC {d['battery_soc']:.0f}% - reduceti consumul."},
+         "fire":  lambda d: d["battery_voltage"] <= BAT_LOW_V,
+         "clear": lambda d: d["battery_voltage"] >= BAT_LOW_V_CLR,
+         "msg":   lambda d: f"Baterie {d['battery_voltage']:.2f} V (prag {BAT_LOW_V:.1f} V) - reduceti consumul."},
 
         {"key": "baterie_sus", "prio": "high", "tags": "battery",
          "title": "Baterie aproape plina",
@@ -295,20 +436,20 @@ def eval_alerts(alerts, data, now):
             if a["clear"](data):
                 send_ntfy(a["title"] + " - revenit", "Revenit la normal.", "default", "white_check_mark")
                 a["active"] = False
-                a["since"] = 0.0
+                a["since"] = None
                 log.info("Alerta '%s' revenita la normal.", a["key"])
         else:
             if a["fire"](data):
-                if a["since"] == 0.0:
+                if a["since"] is None:
                     a["since"] = now
                 if (now - a["since"] >= ALERT_DEBOUNCE_S) and (now - a["last"] >= ALERT_COOLDOWN_S):
                     send_ntfy(a["title"], a["msg"](data), a["prio"], a["tags"])
                     a["active"] = True
                     a["last"] = now
-                    a["since"] = 0.0
+                    a["since"] = None
                     log.info("ALERTA '%s': %s", a["key"], a["msg"](data))
             else:
-                a["since"] = 0.0
+                a["since"] = None
 
 
 def connect_modbus():
@@ -327,51 +468,42 @@ def main():
              MODBUS_PORT, MODBUS_BAUD, MODBUS_SLAVE, REG_COUNT, POLL_LIVE, HIST_EVERY,
              DEBUG_RAW, bool(NTFY_URL), ALERT_THRESHOLD_W)
 
-    influx = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
-    write_api = influx.write_api(write_options=SYNCHRONOUS)
+    influx = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG,
+                            timeout=INFLUX_TIMEOUT_MS)
+    sink = InfluxSink(influx.write_api(write_options=SYNCHRONOUS))
+    deriver = BalanceDeriver(BALANCE_SMOOTH_S, HOUSE_SOURCE_HOLD_S)
+    history = HistoryAverager()
 
+    # Intervalele (debounce, cooldown, ferestre, history) merg pe ceas monoton: o corectie NTP
+    # a ceasului de sistem nu le mai poate scurta sau lungi. Timestamp-ul punctelor ramane ora reala.
     alerts = build_alerts()
     for a in alerts:
         a["active"] = False
-        a["since"]  = 0.0
-        a["last"]   = 0.0
+        a["since"]  = None
+        a["last"]   = float("-inf")
 
     inst = None
-    last_hist = 0.0
+    last_hist = float("-inf")
+    last_ok = time.monotonic()
     fail = 0
     watchdog_alerted = False
 
     while True:
-        t0 = time.time()
+        t0 = time.monotonic()
         try:
             if inst is None:
                 inst = connect_modbus()
             regs = inst.read_registers(0, REG_COUNT, functioncode=4)
             data = parse(regs)
-            smooth_balance_fields(data, t0)
-
-            eval_alerts(alerts, data, t0)
-
-            point = make_point(data)
-            write_api.write(bucket=BUCKET_LIVE, record=point)
-            if t0 - last_hist >= HIST_EVERY:
-                write_api.write(bucket=BUCKET_HIST, record=point)
-                last_hist = t0
-
-            if fail:
-                log.info("Comunicatie Modbus restabilita.")
-                if watchdog_alerted:
-                    send_ntfy("Monitorizare revenita", "Invertorul raspunde din nou.",
-                              "default", "white_check_mark")
-                    watchdog_alerted = False
-                fail = 0
+            deriver.apply(data, t0)
         except Exception as e:
             fail += 1
             if fail <= 3 or fail % 30 == 0:
-                log.warning("Eroare citire/scriere (%d): %s", fail, e)
+                log.warning("Eroare citire Modbus (%d): %s", fail, e)
             if fail == WATCHDOG_FAILS and not watchdog_alerted:
+                down_s = time.monotonic() - last_ok
                 send_ntfy("Monitorizare cazuta!",
-                          f"Invertorul nu mai raspunde de ~{fail}s (USB deconectat / invertor oprit?).",
+                          f"Invertorul nu mai raspunde de ~{down_s:.0f}s (USB deconectat / invertor oprit?).",
                           "urgent", "rotating_light")
                 watchdog_alerted = True
                 log.warning("WATCHDOG: alerta 'monitorizare cazuta' trimisa.")
@@ -381,9 +513,30 @@ def main():
             except Exception:
                 pass
             inst = None
+            sink.flush(time.monotonic())
             time.sleep(1)
+            continue
 
-        dt = time.time() - t0
+        if fail:
+            log.info("Comunicatie Modbus restabilita.")
+            if watchdog_alerted:
+                send_ntfy("Monitorizare revenita", "Invertorul raspunde din nou.",
+                          "default", "white_check_mark")
+                watchdog_alerted = False
+            fail = 0
+        last_ok = t0
+
+        eval_alerts(alerts, data, t0)
+
+        ts_ns = time.time_ns()
+        sink.add(BUCKET_LIVE, make_point(data, ts_ns))
+        history.add(data)
+        if t0 - last_hist >= HIST_EVERY:
+            sink.add(BUCKET_HIST, make_point(history.flush(), ts_ns))
+            last_hist = t0
+        sink.flush(t0)
+
+        dt = time.monotonic() - t0
         if dt < POLL_LIVE:
             time.sleep(POLL_LIVE - dt)
 

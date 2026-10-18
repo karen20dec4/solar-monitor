@@ -1441,3 +1441,56 @@ Neatinse intenționat: `house_source`, `battery_inferred_discharge_power`, `batt
 `battery_display_power` — se calculează în `parse()` din bilanțul instantaneu, deci tot
 instantanee. Alertele nu folosesc niciunul din câmpurile filtrate. Consecință: la trecerea în
 bypass, `grid_import_power` urcă cu ~30 s întârziere față de realitate.
+
+### 13.60 Audit collector: bilanț filtrat, sursă stabilă, history pe medii, InfluxSink (2026-10-18)
+
+**Verificarea filtrelor din 13.58/13.59** (date reale, 26 h `live` + 31 zile `history`):
+- mediana pe `inverter_loss` e utilă: saltul văzut de aplicație la 2 s scade de la p99 203 W /
+  max 3995 W la p99 12 W / max 151 W; abaterea față de media pe 10 min a bilanțului e −2 W, iar
+  integrala (1,18 kWh) se potrivește cu bilanțul energetic din contoare (1,17 kWh, ~91 W medie);
+- filtrul pe `power_deficit` / `grid_import_power` era corect, dar fără efect în aplicație:
+  `power_deficit` nu e afișat, iar `grid_import_power` e nenul doar în bypass (status 9/11:
+  ~29 h în 31 de zile, pe 5, 7, 12–14 oct). Cifra bateriei și sursa casei se calculau tot din
+  deficitul instantaneu.
+
+**Ce merge bine:** 99,97% acoperire pe 26 h, niciun gol >3 s; contoarele confirmă registrele de
+putere (PV 7,30 kWh contor vs 7,31 integral; consum 4,90 vs 4,90). Registrele de putere se
+schimbă la ~3–4 s; bateria (77/78) se actualizează ~1 s după ieșire, dar alinierea cu 1 s reduce
+zgomotul bilanțului doar 6% — nu merită.
+
+**Modificări (aprobate de utilizator, punctele 1–5 + 6 + 7 din audit):**
+1. `parse()` nu mai ține logică de bilanț; clasa `BalanceDeriver` filtrează **bilanțul semnat**
+   (mediană `BALANCE_SMOOTH_S`=60 s) și abia apoi decide pierdere / deficit / import rețea /
+   descărcare inferată. Cu filtrele pe 0 rezultatul e identic cu logica veche (0 diferențe pe
+   91.670 eșantioane).
+2. `house_source` se schimbă doar dacă noua sursă ține `HOUSE_SOURCE_HOLD_S`=10 s. Simulat pe
+   aceeași zi: 29,3 → 4,8 schimbări/oră, segmente ≤4 s: 139 → 0.
+3. `history` primește **media intervalului** (`HistoryAverager`); contoarele `energy_*`,
+   codurile de stare și `battery_soc` rămân ultima valoare (resetul de la miezul nopții nu
+   trebuie mediat). Înainte, o citire izolată diferea de media minutului cu p99 ~1,5 kW.
+   Verificat live: punctul `history` = media exactă a celor 60 de puncte `live`. Consecință:
+   valorile max din statisticile 24h/7d/30d devin vârfuri de medii pe minut, nu vârfuri de 1 s.
+4. `InfluxSink`: erorile InfluxDB nu mai sunt numărate ca erori Modbus (înainte: alertă falsă
+   „Invertorul nu mai răspunde” după ~1 min, port serial redeschis în buclă, date pierdute).
+   Puncte cu timestamp propriu, coadă în memorie (15 min live, 24 h history), reîncercare la 10 s,
+   timeout client 3 s; 400/422 se aruncă. Test live: `docker pause solar-influxdb` 25 s →
+   0 puncte pierdute, pas maxim între puncte 3,2 s (blocarea de 3 s a încercărilor), fără alertă.
+5. `REG_COUNT` implicit 91 (era 45); debounce/cooldown/ferestre pe `time.monotonic()`;
+   mesajul watchdog arată secundele reale de la ultima citire reușită.
+6. `BAT_HIGH_V` 57,0 → **57,5 V** (`.env`, `.env.example`, implicit în cod). La 57,0 V alerta
+   „Baterie aproape plină” pornea și se oprea de 7 ori în 16–17 oct, fiind chiar vârful
+   încărcării normale (max 57,18 V).
+7. **SOC-ul invertorului (reg 18) nu se mai folosește în logică**: în 31 de zile doar
+   25/50/75/100%, 100% în 59% din timp, inclusiv noaptea cu tensiunea 54 → 49 V. Alerta
+   „Baterie descărcată” e acum doar pe tensiune (≤48,0 V, revenire ≥49,0 V); `BAT_LOW_SOC*`
+   scoase din `.env`. Câmpul se înregistrează în continuare; aplicația (Simple + Retro) și panoul
+   Grafana „Istoric baterie (SOC + tensiune)” încă îl afișează — de schimbat la un release viitor.
+
+**Ce n-a rezolvat punctul 1:** cifra bateriei din aplicație se mișcă aproape la fel (p99 pas
+182 → 175 W). Salturile mari vin din registrul bateriei însuși, majoritatea schimbări reale de
+sarcină; există și ~43 de episoade/26 h de valori fizic imposibile, de 1–8 s, pe care o mediană
+scurtă (4–8 s) nu le elimină. Lăsat neschimbat.
+
+**Informativ:** ceasul invertorului e ~9 min înainte (contoarele „azi” se resetează la 23:51
+local); corectarea ar însemna o scriere în invertor, deci rămâne așa. Sistemul rămâne strict
+**READ-ONLY**.

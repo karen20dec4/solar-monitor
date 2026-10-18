@@ -43,7 +43,7 @@ Toate fișierele de documentație din repo, în ordinea în care le citești:
 ```
 Invertor --USB (/dev/growatt)--> Collector Python (Modbus RTU, READ-ONLY)
     |-> InfluxDB bucket `live`    (1s,  retenție 48h)
-    |-> InfluxDB bucket `history` (60s, retenție 31 zile)
+    |-> InfluxDB bucket `history` (medii pe 60s, retenție 31 zile)
     |-> API Android READ-ONLY (telemetrie, istoric și agregate CPU/RAM din `/proc:ro`)
     `-> Grafana (dashboard live 1s + istoric 30 zile)
 ```

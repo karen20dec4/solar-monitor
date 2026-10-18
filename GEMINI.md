@@ -61,7 +61,7 @@ Recon-ul FC03 (citire holding registers) e o *citire* și nu încalcă invariant
 ```
 Invertor --USB (/dev/growatt)--> collector.py  (minimalmodbus, FC04, 1 dată/secundă)
    |-> InfluxDB bucket `live`     (1s,  retenție 48h)
-   |-> InfluxDB bucket `history`  (60s, retenție 31 zile)
+   |-> InfluxDB bucket `history`  (medii pe 60s, retenție 31 zile)
    |-> ntfy push (alerte pe telefon)
    |-> Grafana dashboard `solar-main`
    `-> solar-api (Flask) --Caddy HTTPS--> aplicația Android
@@ -175,31 +175,46 @@ câmpurile brute `r{i}` / `s{i}` (signed) în InfluxDB.
 ## Cum funcționează `collector.py`
 
 Buclă unică, un singur fir, într-un singur fișier. Per ciclu: deschide instrumentul Modbus
-(lazy, reconectare la eșec) → un FC04 de `REG_COUNT` registre → `parse(regs)` → evaluează
-alertele → scrie un punct în `live` (și în `history` la fiecare `HISTORY_INTERVAL`).
+(lazy, reconectare la eșec) → un FC04 de `REG_COUNT` registre → `parse(regs)` →
+`BalanceDeriver.apply()` → evaluează alertele → pune în coadă un punct pentru `live` și, la fiecare
+`HISTORY_INTERVAL`, unul pentru `history` care e **media intervalului** (`HistoryAverager`;
+contoarele de energie, codurile de stare și `battery_soc` păstrează ultima valoare) →
+`InfluxSink.flush()`.
 
-- **`parse(regs)`** e inima: mapează registrele brute în câmpuri float cu nume și calculează
-  metrici derivate. `u32`/`s32` decodează perechi de registre pe 32 de biți (big-endian,
-  complement față de doi). Puterea bateriei vine din **Bat_Watt signed int32, registrele
-  77/78** (codul o neagă, ca să păstreze convenția *pozitiv = încărcare, negativ = descărcare*);
-  curenții de încărcare/descărcare sunt 83/84.
-- Semnale derivate de înțeles înainte de a le atinge: `inverter_loss` (autoconsum, dintr-un
-  bilanț de puteri, ~100–350 W în funcție de sarcină), `power_deficit` și `grid_import_power`
-  sunt publicate ca **mediană glisantă pe 60 s** (`BALANCE_SMOOTH_S`, eșantioanele instantanee
-  rămân în `<câmp>_raw`), pentru că registrele de putere ale invertorului se reîmprospătează
-  decalat și reziduul instantaneu sare 1–4000 W la fiecare variație de sarcină. `house_source`,
-  `battery_inferred_discharge_power` și `battery_display_power` se calculează în `parse()` din
-  bilanțul instantaneu și nu sunt filtrate. `grid_import_power` vs. descărcarea inferată a bateriei
-  (folosește codul de stare din registrul 0 — `STATUS_BYPASS`/`STATUS_DISCHARGE` — plus
-  tensiunea rețelei și modul battery-first, ca să decidă dacă un deficit inexplicabil vine
-  din rețea sau din baterie), și `house_source` (1=PV / 2=baterie / 3=rețea). `house_source`
-  rutează `output_power` către exact unul dintre `house_pv`/`house_bat`/`house_grid` la
-  fiecare ciclu.
+- **`parse(regs)`** e inima și nu ține stare: mapează registrele brute în câmpuri float cu nume.
+  `u32`/`s32` decodează perechi de registre pe 32 de biți (big-endian, complement față de doi).
+  Puterea bateriei vine din **Bat_Watt signed int32, registrele 77/78** (codul o neagă, ca să
+  păstreze convenția *pozitiv = încărcare, negativ = descărcare*); curenții de
+  încărcare/descărcare sunt 83/84.
+- **`BalanceDeriver`** (cu stare) calculează tot ce vine din bilanțul de puteri
+  `PV + descărcare + rețea→baterie − consum − încărcare`: `inverter_loss` (autoconsum,
+  ~100–350 W în funcție de sarcină), `power_deficit`, `grid_import_power`, descărcarea inferată a
+  bateriei și din ea `battery_support_power` / `battery_display_power`, plus `house_source`
+  (1=PV / 2=baterie / 3=rețea). Bilanțul e un reziduu, nu o măsurătoare: registrele de putere se
+  reîmprospătează la ~3–4 s, decalat, deci valoarea instantanee sare 1–4000 W la fiecare variație de
+  sarcină. **Bilanțul semnat trece printr-o mediană glisantă pe 60 s** (`BALANCE_SMOOTH_S`) înainte
+  de orice decizie; valorile instantanee rămân în `inverter_loss_raw` / `power_deficit_raw` /
+  `grid_import_power_raw`. Dacă un deficit vine din rețea sau din baterie se decide din codul de
+  stare din registrul 0 (`STATUS_BYPASS`/`STATUS_DISCHARGE`), tensiunea rețelei și modul
+  battery-first. `house_source` se schimbă doar dacă noua sursă ține `HOUSE_SOURCE_HOLD_S` (10 s)
+  și rutează `output_power` către exact unul dintre `house_pv`/`house_bat`/`house_grid` la fiecare
+  ciclu. Cu ambele setări pe 0, rezultatul e identic cu logica veche nefiltrată (verificat pe 26 h
+  de date reale).
 - **Alerte** (`build_alerts` / `eval_alerts`): listă de dicționare cu lambda-uri `fire`/`clear`
   peste datele parsate. Fiecare are **debounce** (condiția trebuie să țină `ALERT_DEBOUNCE_S`),
   **cooldown** (`ALERT_COOLDOWN_S` între realertări) și **histerezis** (prag separat de
-  revenire). Acoperă: consum mare, baterie joasă/înaltă, supraîncălzire, ieșire AC pierdută.
-  Separat, un **watchdog** se declanșează după `WATCHDOG_FAILS` citiri eșuate consecutiv.
+  revenire); timpii merg pe `time.monotonic()`. Acoperă: consum mare, baterie joasă (doar după
+  tensiune) / înaltă (57,5 V), supraîncălzire, ieșire AC pierdută. Separat, un **watchdog** se
+  declanșează după `WATCHDOG_FAILS` erori **Modbus** consecutive.
+- **`InfluxSink`**: erorile InfluxDB sunt tratate separat de cele Modbus. Punctele au timestamp
+  propriu, așteaptă într-o coadă limitată în memorie (`INFLUX_BUFFER_LIVE` ≈ 15 min,
+  `INFLUX_BUFFER_HISTORY` ≈ 24 h) și se retrimit la `INFLUX_RETRY_S`. O pană InfluxDB nu mai
+  declanșează watchdog-ul „invertorul nu mai răspunde” și nu mai redeschide portul serial;
+  alertele ntfy merg în continuare, fiindcă nu trec prin InfluxDB. Respingerile 400/422 se
+  aruncă, reîncercarea nu le-ar rezolva.
+- **Nu folosi `battery_soc` (registrul 18) în logică.** În 31 de zile a avut doar valorile
+  25/50/75/100 și arăta 100% noaptea, cu tensiunea coborând 54 → 49 V (decizie 2026-10-18). Se
+  înregistrează în continuare, iar aplicația și Grafana încă îl afișează.
 
 > **Despre documentația de registre:** `COPILOT_CONTEXT.md` e un jurnal de sesiuni ținut de
 > mână. Părți din tabelul lui de registre sunt **învechite** — de exemplu documentează puterea
