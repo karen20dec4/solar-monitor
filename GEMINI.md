@@ -241,7 +241,9 @@ Două teme, comutabile din SETĂRI, alegerea persistată de `DashboardStyleStore
    accesibilitate și zonele tactile rămân Compose nativ și dinamice. Nicio valoare nu se
    lipește în bitmap.
 3. **Textul din poze nu se schimbă din cod.** Etichetele desenate în asset-urile WebP
-   (de ex. „7d" / „30d" pe butoanele de interval) sunt pixeli. Dacă schimbi valoarea din Kotlin,
+   (numele taburilor, titlurile secțiunilor ENERGIE, etichetele cadranelor) sunt pixeli. Excepție
+   din v3.27: butoanele de interval ENERGIE sunt plăci native cu text Compose, peste „7d" / „30d"
+   pictate, câte una pentru fiecare valoare din `RetroEnergyRanges`. Dacă schimbi valoarea din Kotlin,
    trebuie să repictezi și asset-ul, altfel butonul scrie una și face alta. **Vezi
    `docs/DEZVOLTARE.md` §„Capcana etichetelor din poze".**
 4. **Un build Gradle reușit nu e dovadă vizuală.** Rulează emulatorul și **uită-te la PNG**.

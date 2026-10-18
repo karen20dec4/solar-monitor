@@ -802,7 +802,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Istoric baterie (SOC + tensiune)",
+      "title": "Istoric baterie (tensiune)",
       "id": 10,
       "gridPos": {
         "h": 9,
@@ -816,43 +816,36 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "volt",
+          "decimals": 2,
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
             "fillOpacity": 5,
-            "showPoints": "never"
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byFrameRefID",
-              "options": "A"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "percent"
-              }
-            ]
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
           },
-          {
-            "matcher": {
-              "id": "byFrameRefID",
-              "options": "B"
-            },
-            "properties": [
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
               {
-                "id": "unit",
-                "value": "volt"
+                "color": "transparent",
+                "value": null
               },
               {
-                "id": "custom.axisPlacement",
-                "value": "right"
+                "color": "red",
+                "value": 48
+              },
+              {
+                "color": "orange",
+                "value": 57.5
               }
             ]
           }
-        ]
+        },
+        "overrides": []
       },
       "options": {
         "legend": {
@@ -872,14 +865,6 @@
       "targets": [
         {
           "refId": "A",
-          "datasource": {
-            "type": "influxdb",
-            "uid": "influxdb"
-          },
-          "query": "from(bucket: \"history\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"inverter\" and r[\"_field\"] == \"battery_soc\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> set(key: \"_field\", value: \"SOC (%)\")"
-        },
-        {
-          "refId": "B",
           "datasource": {
             "type": "influxdb",
             "uid": "influxdb"

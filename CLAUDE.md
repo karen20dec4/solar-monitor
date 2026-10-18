@@ -142,8 +142,9 @@ The Retro UI is a fixed full-screen four-tab instrument panel. It must never gai
 the page content fits above the fixed photo navigation bar. Keep photographic chassis assets decorative;
 live values, the gauge needle, LEDs, semantics and click targets must remain native Compose and dynamic.
 
-**Static labels are painted into the WebP, not rendered by Compose.** The `7d` / `30d` range buttons on
-the ENERGIE page, the tab names, the dial captions — those are pixels. Changing the string in Kotlin
+**Static labels are painted into the WebP, not rendered by Compose.** The tab names, the dial captions,
+the ENERGIE section titles — those are pixels. (Exception since v3.27: the ENERGIE range buttons are native
+plates with Compose labels laid over the painted `7d` / `30d`, one per entry in `RetroEnergyRanges`.) Changing the string in Kotlin
 leaves the photo saying the old thing while the button does the new thing. Rule of thumb: if the text
 does not appear inside a `Text(...)` call, it is in the artwork and needs a repaint (ideally a fresh
 Photoshop export from the user). Coordinates and the check command are in `docs/DEZVOLTARE.md` §3.

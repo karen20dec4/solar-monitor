@@ -1494,3 +1494,51 @@ scurtă (4–8 s) nu le elimină. Lăsat neschimbat.
 **Informativ:** ceasul invertorului e ~9 min înainte (contoarele „azi” se resetează la 23:51
 local); corectarea ar însemna o scriere în invertor, deci rămâne așa. Sistemul rămâne strict
 **READ-ONLY**.
+
+### 13.61 Interval 2h pe ENERGIE, SOC scos, release v3.27 (2026-10-18)
+
+**Cerere:** SOC înlocuit cu tensiunea; interval nou `2h` pe toate graficele ENERGIE (CASA,
+PANOURI, BATERIE, PRODUCȚIE, CONSUM); release pe Telegram; analiză a paginii ENERGIE.
+
+**SOC.** În aplicație SOC apărea doar într-un composable mort (`RetroSystemPanel`, neapelat);
+textul a devenit doar puterea bateriei, iar `batterySoc` a fost scos din `SolarData`. SOC-ul
+vizibil era în Grafana: panoul „Istoric baterie (SOC + tensiune)" a devenit „Istoric baterie
+(tensiune)", cu linii de prag la 48 V și 57,5 V. Pragurile de 57,0 V din aplicație (linia din
+graficul bateriei, mini-trendul de 60 min, textul „ATENTIE BATERIE") au trecut la 57,5 V, ca
+alerta din 13.60.
+
+**2h.** `api/app.py`: `battery_voltage` / `output_power` / `pv_power` → bucket `live`, medii pe
+1 min (121 puncte). `energy_pv_today` / `energy_load_today` → integrala puterii (`integral_of`:
+`pv_power` / `output_power`) pe ferestre de 10 min, cu începutul aliniat la fereastră (12 bare
+pline + cea curentă); contoarele au pas de 0,1 kWh, prea grosier. Verificat: integrala PV pe
+2 h = 6,39 kWh față de contor 6,2 kWh pe 4 minute mai puțin. Kotlin: `RetroEnergyRanges` =
+`2h, 1d, 7d` (implicit rămâne `1d`); butoanele de interval Retro sunt plăci native generate din
+listă (365..685 împărțit egal), peste „7d / 30d" pictate. Simple: etichete corecte pentru bare
+(`13 x 10 min`, `24 ore`, `8 zile`, înainte scria „zile" și la 1d), statistici „Medie/10 min".
+Simple ENERGIE folosește acum varianta `compact` a `HistorySheet`: cele 4 statistici pe un rând
+(înainte rândul Medie/Vârf cădea sub bara de navigare).
+
+**Verificat vizual** pe Pixel 6 și Note 9 (1440×2960 @560), ambele teme; `retro-tabs` trece,
+nicio pagină Retro nu derulează; APK-ul release semnat instalat curat în emulator, 2h → 13 bare.
+
+**Release.** `versionCode` 31, `versionName` 3.27, `/opt/solar-monitor/SolarMonitor-v3.27.apk`,
+7.213.768 bytes, SHA-256 `0ed16656b078f8763a27c37139191540e2a5bd55f007b352951d4e8ae56e0dc8`,
+Telegram mesaj **120**, SHA-256 descărcat înapoi identic. API reconstruit pe server
+(`docker compose up -d --build api`).
+
+**Probleme găsite pe pagina ENERGIE (propunere trimisă utilizatorului, neimplementată):**
+1. Același grafic se alege din trei locuri: taburile PRODUCȚIE/CONSUM, afișajele ENERGIE
+   ASTĂZI și butoanele PRODUCȚIE ZILNICĂ/CONSUM ZILNIC; ISTORIC readuce ultimul grafic de putere.
+2. „PRODUCȚIE" e pictat aprins în poză, deci pare selectat și când ești pe CONSUM/ISTORIC.
+3. Putere (W/V, linie) și energie (kWh, bare) sunt amestecate în două rânduri fără legătură:
+   CASA și CONSUM ZILNIC sunt același subiect pe rânduri diferite.
+4. Retro nu arată nicio cifră (total, medie, vârf), doar graficul.
+5. Statisticile sunt calculate din punctele graficului: VÂRF la `1d` = cea mai mare medie
+   orară. Măsurat: consum 2964 W afișat vs 4720 W real (1 s), PV 4238 W vs 6126 W.
+6. Titlul graficului e tăiat („ISTORIC CONSUM CASA …").
+7. „Ultima actualizare: ACUM" e pictat: scrie ACUM și când datele sunt vechi.
+8. `7d` are 8 bare (azi parțial + 7 zile); `1d` la energie = ultimele 24 h, nu „azi"; etichete
+   de axă neregulate (16:00, 21:00 … 15:01).
+9. Simple: chipurile nu arată selecția, „Energie produsă/consumată" sunt ascunse în dreapta,
+   subtitlul rămâne „ultimele zile" și la 2h, barele n-au axă de timp.
+Sistemul rămâne strict **READ-ONLY**.

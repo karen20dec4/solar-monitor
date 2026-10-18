@@ -10,7 +10,7 @@ import java.net.URL
 data class SolarData(
     val pv: Double, val pv1: Double, val pv2: Double,
     val house: Double, val loadPercent: Double,
-    val batteryVoltage: Double, val batterySoc: Double,
+    val batteryVoltage: Double,
     val batteryPower: Double, val batteryDisplay: Double, val batteryCharge: Double,
     val batteryDischarge: Double, val batterySupport: Double,
     val gridImport: Double, val gridCharge: Double, val gridVoltage: Double,
@@ -64,7 +64,7 @@ object SolarRepository {
             SolarData(
                 pv = d("pv_power"), pv1 = d("pv1_power"), pv2 = d("pv2_power"),
                 house = d("output_power"), loadPercent = d("load_percent"),
-                batteryVoltage = d("battery_voltage"), batterySoc = d("battery_soc"),
+                batteryVoltage = d("battery_voltage"),
                 batteryPower = d("battery_power"),
                 batteryDisplay = d("battery_display_power"), batteryCharge = d("battery_charge_power"),
                 batteryDischarge = d("battery_discharge_power"), batterySupport = d("battery_support_power"),

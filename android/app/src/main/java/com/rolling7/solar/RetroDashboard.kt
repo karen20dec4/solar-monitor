@@ -218,7 +218,7 @@ internal fun retroSystemTemperatureColor(value: Double?): Color = when {
 internal fun retroSystemHealthText(data: SolarData?): String = when {
     data == null -> "FARA DATE"
     data.inverterTemp >= 55.0 -> "ATENTIE TEMP · COD ${data.status.roundToInt()}"
-    data.batteryVoltage <= 48.0 || data.batteryVoltage >= 57.0 ->
+    data.batteryVoltage <= 48.0 || data.batteryVoltage >= 57.5 ->
         "ATENTIE BATERIE · COD ${data.status.roundToInt()}"
     else -> "STATUS OPTIM · COD ${data.status.roundToInt()}"
 }
@@ -732,32 +732,24 @@ private fun RetroEnergyControlsArtwork(
                 .height(scaleY * 100f),
             onClick = { onFieldClick("energy_load_today") }
         )
+        // Rama pictata are doua butoane ("7d"/"30d" din fotografia veche); placile native le acopera
+        // si impart aceeasi latime (365..685) la cate intervale exista.
         val ranges = retroEnergyRangesForField(selectedField)
-        val leftRange = ranges.getOrElse(0) { "1d" }
-        val rightRange = ranges.getOrElse(1) { "7d" }
-
-        RetroEnergyTouchTarget(
-            description = if (leftRange == "1d") "Interval 24 ore" else "Interval 7 zile",
-            selected = selectedRange == leftRange,
-            accent = selectedAccent,
-            labelText = leftRange,
-            modifier = Modifier
-                .offset(x = scaleX * 365f, y = scaleY * 390f)
-                .width(scaleX * 160f)
-                .height(scaleY * 82f),
-            onClick = { onRangeClick(leftRange) }
-        )
-        RetroEnergyTouchTarget(
-            description = if (rightRange == "7d") "Interval 7 zile" else "Interval 30 zile",
-            selected = selectedRange == rightRange,
-            accent = selectedAccent,
-            labelText = rightRange,
-            modifier = Modifier
-                .offset(x = scaleX * 525f, y = scaleY * 390f)
-                .width(scaleX * 160f)
-                .height(scaleY * 82f),
-            onClick = { onRangeClick(rightRange) }
-        )
+        val rangeLeft = 365f
+        val rangeWidth = 320f / ranges.size
+        ranges.forEachIndexed { index, range ->
+            RetroEnergyTouchTarget(
+                description = retroEnergyRangeDescription(range),
+                selected = selectedRange == range,
+                accent = selectedAccent,
+                labelText = range,
+                modifier = Modifier
+                    .offset(x = scaleX * (rangeLeft + rangeWidth * index), y = scaleY * 390f)
+                    .width(scaleX * rangeWidth)
+                    .height(scaleY * 82f),
+                onClick = { onRangeClick(range) }
+            )
+        }
 
         Box(
             modifier = Modifier
@@ -1288,7 +1280,7 @@ private fun RetroSystemMonitorArtwork(
                 points = batteryHistory,
                 minValue = 48.0,
                 maxValue = 58.0,
-                thresholds = listOf(48.0, 57.0),
+                thresholds = listOf(48.0, 57.5),
                 color = RetroYellow,
                 modifier = Modifier.weight(1f)
             )
@@ -2952,7 +2944,7 @@ private fun RetroSystemPanel(
                 label = "BATERIE",
                 value = data?.let { String.format(Locale.US, "%.2f", it.batteryVoltage) } ?: "—",
                 unit = "V",
-                supporting = data?.let { "SOC ${it.batterySoc.roundToInt()}% · ${retroSigned(it.batteryDisplay)} W" } ?: "ASTEPT DATE",
+                supporting = data?.let { "${retroSigned(it.batteryDisplay)} W" } ?: "ASTEPT DATE",
                 color = RetroYellow,
                 onClick = { onHistoryFieldClick("battery_voltage") }
             )

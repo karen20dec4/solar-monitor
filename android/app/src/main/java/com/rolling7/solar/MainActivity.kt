@@ -339,11 +339,13 @@ fun App() {
                     },
                     compact = true
                 )
+                // compact: graficul ia spatiul ramas si toate cele 4 statistici stau pe un rand.
+                // In varianta lunga, randul al doilea (Medie, Varf) cadea sub bara de navigare.
                 HistorySheet(
                     metric = metric,
                     retro = false,
                     embedded = true,
-                    compact = false,
+                    compact = true,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -453,7 +455,7 @@ private fun RetroEnergyPage(
     selectedMetric: HistoryMetric,
     onMetricSelected: (HistoryMetric) -> Unit
 ) {
-    var selectedRange by rememberSaveable { mutableStateOf(RetroEnergyRanges.first()) }
+    var selectedRange by rememberSaveable { mutableStateOf(RetroEnergyDefaultRange) }
     val activeRange = normalizedRetroEnergyRange(selectedRange, selectedMetric.field)
     var topSectionName by rememberSaveable(selectedMetric.field) {
         mutableStateOf(retroEnergyTopSectionForField(selectedMetric.field).name)
@@ -765,10 +767,22 @@ private fun RetroEnergyChartCanvas(
     }
 }
 
+/** Intervale pe care axa timpului arata ore (HH:mm), nu zile. */
+private val HourlyRanges = setOf("1h", "2h", "6h", "24h", "1d")
+
+private fun barCountLabel(series: HistorySeries): String {
+    val count = series.points.size
+    return when (series.range) {
+        "2h" -> "$count x 10 min"
+        "1d", "24h" -> "$count ore"
+        else -> "$count zile"
+    }
+}
+
 private fun retroEnergyLabelIndices(pointCount: Int, range: String): List<Int> {
     if (pointCount <= 0) return emptyList()
     if (pointCount <= 4) return (0 until pointCount).toList()
-    if (range == "1d" || range == "24h" || range == "1h" || range == "6h") {
+    if (range in HourlyRanges) {
         val step = max(1, pointCount / 5)
         val list = (0 until pointCount step step).toMutableList()
         if (list.last() != pointCount - 1) list.add(pointCount - 1)
@@ -781,7 +795,7 @@ private fun retroEnergyLabelIndices(pointCount: Int, range: String): List<Int> {
 private fun retroEnergyDateLabel(value: String, range: String): String =
     try {
         val dt = OffsetDateTime.parse(value).atZoneSameInstant(LocalZone)
-        if (range == "1d" || range == "24h" || range == "1h" || range == "6h") {
+        if (range in HourlyRanges) {
             dt.format(DateTimeFormatter.ofPattern("HH:mm"))
         } else {
             dt.format(DateTimeFormatter.ofPattern("dd.MM"))
@@ -1840,7 +1854,7 @@ private val DashboardHistoryMetrics = listOf(
         unit = "W",
         color = CHouse,
         defaultRange = "1d",
-        ranges = listOf("1d", "7d")
+        ranges = listOf("2h", "1d", "7d")
     ),
     HistoryMetric(
         title = "Productie PV",
@@ -1848,7 +1862,7 @@ private val DashboardHistoryMetrics = listOf(
         unit = "W",
         color = CPv,
         defaultRange = "1d",
-        ranges = listOf("1d", "7d")
+        ranges = listOf("2h", "1d", "7d")
     ),
     HistoryMetric(
         title = "Baterie",
@@ -1856,10 +1870,10 @@ private val DashboardHistoryMetrics = listOf(
         unit = "V",
         color = CBat,
         defaultRange = "1d",
-        ranges = listOf("1d", "7d"),
+        ranges = listOf("2h", "1d", "7d"),
         thresholds = listOf(
             ChartThreshold(48.0, CGrid),
-            ChartThreshold(57.0, CGrid)
+            ChartThreshold(57.5, CGrid)
         )
     ),
     HistoryMetric(
@@ -1868,7 +1882,7 @@ private val DashboardHistoryMetrics = listOf(
         unit = "kWh",
         color = CPv,
         defaultRange = "7d",
-        ranges = listOf("1d", "7d"),
+        ranges = listOf("2h", "1d", "7d"),
         chartStyle = ChartStyle.Bar
     ),
     HistoryMetric(
@@ -1877,7 +1891,7 @@ private val DashboardHistoryMetrics = listOf(
         unit = "kWh",
         color = CHouse,
         defaultRange = "7d",
-        ranges = listOf("1d", "7d"),
+        ranges = listOf("2h", "1d", "7d"),
         chartStyle = ChartStyle.Bar
     )
 )
@@ -2629,7 +2643,7 @@ private fun BarHistoryChart(
     Column(modifier) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(formatHistoryValue(maxValue, metric.unit), color = chrome.muted, fontFamily = chrome.font, fontSize = if (compact) 8.sp else 11.sp)
-            Text("${series.points.size} zile", color = chrome.muted, fontFamily = chrome.font, fontSize = if (compact) 8.sp else 11.sp)
+            Text(barCountLabel(series), color = chrome.muted, fontFamily = chrome.font, fontSize = if (compact) 8.sp else 11.sp)
         }
         Spacer(Modifier.height(if (compact) 4.dp else 6.dp))
         val chartModifier = if (compact) {
@@ -2722,9 +2736,14 @@ private fun HistoryStatsGrid(
         return
     }
     if (metric.chartStyle == ChartStyle.Bar) {
-        val avgLabel = if (range == "1d") "Medie/ora" else "Medie/zi"
-        val maxLabel = if (range == "1d") "Max ora" else "Max zi"
-        val lastLabel = if (range == "1d") "Ultima ora" else "Ultima zi"
+        val slot = when (range) {
+            "2h" -> "10 min"
+            "1d" -> "ora"
+            else -> "zi"
+        }
+        val avgLabel = "Medie/$slot"
+        val maxLabel = "Max $slot"
+        val lastLabel = if (range == "2h") "Ultimele 10 min" else "Ultima $slot"
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatTile(Modifier.weight(1f), "Total", formatHistoryValue(stats.sum, metric.unit), accent, retro)
@@ -2869,6 +2888,7 @@ private fun timeTicks(series: HistorySeries): List<TimeTick> {
 
     val stepMinutes = when (series.range) {
         "1h" -> 10L
+        "2h" -> 30L
         "6h" -> 60L
         "1d", "24h" -> 60L
         "7d" -> 1440L
@@ -2919,7 +2939,7 @@ private fun formatHistoryValue(value: Double, unit: String): String = when (unit
 }
 
 private fun historySubtitle(metric: HistoryMetric): String = when (metric.field) {
-    "battery_voltage" -> "Tensiune baterie cu praguri 48V / 57V"
+    "battery_voltage" -> "Tensiune baterie cu praguri 48V / 57.5V"
     "output_power" -> "Consum casa si varf maxim"
     "pv_power" -> "Productie PV si varf maxim"
     "energy_pv_today" -> "Productie zilnica pe ultimele zile"

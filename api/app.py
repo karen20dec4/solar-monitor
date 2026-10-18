@@ -34,6 +34,7 @@ HISTORY_FIELDS = {
     "battery_voltage": {
         "label": "Tensiune baterie", "unit": "V", "chart": "line",
         "ranges": {
+            "2h": {"start": "-2h", "window": "1m", "bucket": "live", "fn": "mean"},
             "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
             "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
             "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
@@ -45,6 +46,7 @@ HISTORY_FIELDS = {
     "output_power": {
         "label": "Consum casa", "unit": "W", "chart": "line",
         "ranges": {
+            "2h": {"start": "-2h", "window": "1m", "bucket": "live", "fn": "mean"},
             "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
             "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
             "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
@@ -56,6 +58,7 @@ HISTORY_FIELDS = {
     "pv_power": {
         "label": "PV intrari", "unit": "W", "chart": "line",
         "ranges": {
+            "2h": {"start": "-2h", "window": "1m", "bucket": "live", "fn": "mean"},
             "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
             "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
             "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
@@ -67,6 +70,8 @@ HISTORY_FIELDS = {
     "energy_pv_today": {
         "label": "Produs", "unit": "kWh", "chart": "bar",
         "ranges": {
+            # 2h: contoarele au pas de 0,1 kWh, prea grosier pe 10 min - integram puterea.
+            "2h": {"start": "-2h", "window": "10m", "bucket": "live", "integral_of": "pv_power"},
             "1d": {"start": "-25h", "window": "1h", "bucket": "history", "fn": "max", "diff": True},
             "7d": {"start": "-7d", "window": "1d", "bucket": "history", "fn": "max"},
             "30d": {"start": "-30d", "window": "1d", "bucket": "history", "fn": "max"},
@@ -75,6 +80,8 @@ HISTORY_FIELDS = {
     "energy_load_today": {
         "label": "Consum", "unit": "kWh", "chart": "bar",
         "ranges": {
+            # 2h: contoarele au pas de 0,1 kWh, prea grosier pe 10 min - integram puterea.
+            "2h": {"start": "-2h", "window": "10m", "bucket": "live", "integral_of": "output_power"},
             "1d": {"start": "-25h", "window": "1h", "bucket": "history", "fn": "max", "diff": True},
             "7d": {"start": "-7d", "window": "1d", "bucket": "history", "fn": "max"},
             "30d": {"start": "-30d", "window": "1d", "bucket": "history", "fn": "max"},
@@ -132,11 +139,27 @@ def history():
     bucket = BUCKET_HISTORY if range_cfg["bucket"] == "history" else BUCKET_LIVE
     q = (
         'import "timezone"\n'
+        'import "date"\n'
         'option location = timezone.location(name: "Europe/Bucharest")\n'
-        f'from(bucket: "{bucket}") |> range(start: {range_cfg["start"]}) '
-        f'|> filter(fn: (r) => r._measurement == "inverter" and r._field == "{field}") '
-        f'|> aggregateWindow(every: {range_cfg["window"]}, fn: {range_cfg["fn"]}, createEmpty: false) '
     )
+    if range_cfg.get("integral_of"):
+        # Energie (kWh) pe ferestre, din integrala puterii. Inceputul e aliniat la fereastra,
+        # altfel prima bara ar acoperi doar o parte din interval si ar parea o scadere.
+        window = range_cfg["window"]
+        q += (
+            f'from(bucket: "{bucket}") '
+            f'|> range(start: date.add(d: {range_cfg["start"]}, to: date.truncate(t: now(), unit: {window}))) '
+            f'|> filter(fn: (r) => r._measurement == "inverter" and r._field == "{range_cfg["integral_of"]}") '
+            f'|> aggregateWindow(every: {window}, '
+            'fn: (column, tables=<-) => tables |> integral(unit: 1h, column: column), createEmpty: false) '
+            '|> map(fn: (r) => ({r with _value: r._value / 1000.0})) '
+        )
+    else:
+        q += (
+            f'from(bucket: "{bucket}") |> range(start: {range_cfg["start"]}) '
+            f'|> filter(fn: (r) => r._measurement == "inverter" and r._field == "{field}") '
+            f'|> aggregateWindow(every: {range_cfg["window"]}, fn: {range_cfg["fn"]}, createEmpty: false) '
+        )
     if range_cfg.get("diff"):
         q += '|> difference(nonNegative: true) '
     q += '|> keep(columns: ["_time", "_value"])'
