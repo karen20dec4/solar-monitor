@@ -8,6 +8,8 @@ supraincalzire, pierdere iesire AC si "monitorizare cazuta" (watchdog).
 import os
 import time
 import logging
+import statistics
+from collections import deque
 import urllib.request
 
 import serial
@@ -61,6 +63,8 @@ OUT_LOST_V_CLR    = envf("OUT_LOST_V_CLR", "200")
 GRID_PRESENT_V    = envf("GRID_PRESENT_V", "100")
 BATTERY_FIRST_MIN_V = envf("BATTERY_FIRST_MIN_V", str(BAT_LOW_V))
 INVERTER_LOSS_ESTIMATE_W = envf("INVERTER_LOSS_ESTIMATE_W", "90")
+# Fereastra (s) a medianei glisante pentru `inverter_loss`. 0 = fara filtrare.
+INVERTER_LOSS_SMOOTH_S = envf("INVERTER_LOSS_SMOOTH_S", "60")
 
 MEASUREMENT = "inverter"
 
@@ -204,6 +208,28 @@ def parse(regs):
     return data
 
 
+_loss_window = deque()
+
+
+def smooth_inverter_loss(data, now):
+    """Mediana glisanta pe `inverter_loss`; valoarea instantanee ramane in `inverter_loss_raw`.
+
+    `inverter_loss` e un reziduu de bilant (PV + baterie - consum - incarcare), nu o masuratoare.
+    Registrele de putere ale invertorului se reimprospateaza decalat (~3-4 s, faze diferite), asa ca
+    la fiecare variatie de sarcina reziduul sare cu sute sau mii de W (observat 1..4100 W intr-o
+    ora, cu consumul propriu real la ~100-350 W). Mediana pe fereastra elimina aceste varfuri
+    fara sa le propage in aplicatie, Grafana sau istoric.
+    """
+    raw = data["inverter_loss"]
+    data["inverter_loss_raw"] = raw
+    if INVERTER_LOSS_SMOOTH_S <= 0:
+        return
+    _loss_window.append((now, raw))
+    while _loss_window and now - _loss_window[0][0] > INVERTER_LOSS_SMOOTH_S:
+        _loss_window.popleft()
+    data["inverter_loss"] = statistics.median(v for _, v in _loss_window)
+
+
 def make_point(data):
     p = Point(MEASUREMENT).tag("device", "spf6000es")
     for k, v in data.items():
@@ -318,6 +344,7 @@ def main():
                 inst = connect_modbus()
             regs = inst.read_registers(0, REG_COUNT, functioncode=4)
             data = parse(regs)
+            smooth_inverter_loss(data, t0)
 
             eval_alerts(alerts, data, t0)
 

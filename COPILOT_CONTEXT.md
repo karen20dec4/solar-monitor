@@ -1408,3 +1408,22 @@ Release nou, fără modificări funcționale Android față de v3.25. `versionCo
 7.213.764 bytes, SHA-256 `95f108d4a9851c3170c13a989909eacb6f57e9b6fe9b4c39ea68a4dbac84bf94`.
 Trimis prin @sun_tattva_access_bot, mesaj **112**; SHA-256 al fișierului descărcat din
 Telegram este identic. Sistemul rămâne strict **READ-ONLY**.
+
+### 13.58 Consum invertor stabil: mediană glisantă (2026-10-18)
+
+**Simptom.** În aplicație „consum invertor" sărea 90 W → 490 W → 300 W de la o secundă la alta.
+
+**Cauză.** `inverter_loss` nu e o măsurătoare, ci reziduul `PV + descărcare + rețea→baterie −
+consum − încărcare`. Registrele de putere (PV, baterie, ieșire) se reîmprospătează la ~3–4 s, în
+faze diferite, deci reziduul instantaneu include decalajul dintre ele. Pe 30 min: min 1 W, max
+4100 W, abatere standard 248 W, 464 salturi >50 W între eșantioane vecine. Varfurile mari (2889,
+4100 W) apar la trepte de sarcină, când `battery_power` încă arată starea anterioară.
+`90` era doar `INVERTER_LOSS_ESTIMATE_W`, valoarea de rezervă din ramura de descărcare inferată.
+
+**Fix (doar server, fără release Android).** `collector.py`: `smooth_inverter_loss()` ține
+mediana pe ultimele `INVERTER_LOSS_SMOOTH_S` secunde (implicit 60; 0 = oprit) și o scrie în
+`inverter_loss`; valoarea instantanee rămâne în `inverter_loss_raw`. Simulat pe 30 min de date
+reale: salt maxim între citiri vecine 40 W, zero salturi >50 W (față de 464). Mediana respinge
+varfurile, media nu le-ar fi respins. Efect: aplicația, Grafana și `history` văd valoarea filtrată.
+`power_deficit`, `grid_import_power` și `battery_display_power` provin din același bilanț și
+rămân instantanee. Sistemul rămâne strict **READ-ONLY**.
