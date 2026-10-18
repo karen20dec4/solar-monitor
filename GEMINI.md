@@ -184,10 +184,12 @@ alertele → scrie un punct în `live` (și în `history` la fiecare `HISTORY_IN
   77/78** (codul o neagă, ca să păstreze convenția *pozitiv = încărcare, negativ = descărcare*);
   curenții de încărcare/descărcare sunt 83/84.
 - Semnale derivate de înțeles înainte de a le atinge: `inverter_loss` (autoconsum, dintr-un
-  bilanț de puteri, ~100–350 W în funcție de sarcină; valoarea e o **mediană glisantă pe 60 s**
-  (`INVERTER_LOSS_SMOOTH_S`, eșantionul brut rămâne în `inverter_loss_raw`), pentru că registrele
-  de putere ale invertorului se reîmprospătează decalat și reziduul instantaneu sare 1–4000 W la
-  fiecare variație de sarcină), `grid_import_power` vs. descărcarea inferată a bateriei
+  bilanț de puteri, ~100–350 W în funcție de sarcină), `power_deficit` și `grid_import_power`
+  sunt publicate ca **mediană glisantă pe 60 s** (`BALANCE_SMOOTH_S`, eșantioanele instantanee
+  rămân în `<câmp>_raw`), pentru că registrele de putere ale invertorului se reîmprospătează
+  decalat și reziduul instantaneu sare 1–4000 W la fiecare variație de sarcină. `house_source`,
+  `battery_inferred_discharge_power` și `battery_display_power` se calculează în `parse()` din
+  bilanțul instantaneu și nu sunt filtrate. `grid_import_power` vs. descărcarea inferată a bateriei
   (folosește codul de stare din registrul 0 — `STATUS_BYPASS`/`STATUS_DISCHARGE` — plus
   tensiunea rețelei și modul battery-first, ca să decidă dacă un deficit inexplicabil vine
   din rețea sau din baterie), și `house_source` (1=PV / 2=baterie / 3=rețea). `house_source`

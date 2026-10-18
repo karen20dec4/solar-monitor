@@ -1425,5 +1425,19 @@ mediana pe ultimele `INVERTER_LOSS_SMOOTH_S` secunde (implicit 60; 0 = oprit) ș
 `inverter_loss`; valoarea instantanee rămâne în `inverter_loss_raw`. Simulat pe 30 min de date
 reale: salt maxim între citiri vecine 40 W, zero salturi >50 W (față de 464). Mediana respinge
 varfurile, media nu le-ar fi respins. Efect: aplicația, Grafana și `history` văd valoarea filtrată.
-`power_deficit`, `grid_import_power` și `battery_display_power` provin din același bilanț și
-rămân instantanee. Sistemul rămâne strict **READ-ONLY**.
+`power_deficit`, `grid_import_power` și `battery_display_power` provin din același bilanț; primele
+două sunt filtrate în pasul următor (13.59), `battery_display_power` rămâne instantaneu.
+Sistemul rămâne strict **READ-ONLY**.
+
+### 13.59 Mediană glisantă și pe `power_deficit`, `grid_import_power` (2026-10-18)
+
+La cererea utilizatorului, filtrul din 13.58 acoperă acum toate cele trei mărimi derivate din
+bilanț: `inverter_loss`, `power_deficit`, `grid_import_power`. `smooth_inverter_loss()` a devenit
+`smooth_balance_fields()` (o fereastră per câmp), iar variabila `INVERTER_LOSS_SMOOTH_S` a fost
+redenumită `BALANCE_SMOOTH_S` (implicit 60 s, 0 = oprit). Eșantioanele instantanee se păstrează în
+`inverter_loss_raw`, `power_deficit_raw`, `grid_import_power_raw`.
+
+Neatinse intenționat: `house_source`, `battery_inferred_discharge_power`, `battery_support_power`,
+`battery_display_power` — se calculează în `parse()` din bilanțul instantaneu, deci tot
+instantanee. Alertele nu folosesc niciunul din câmpurile filtrate. Consecință: la trecerea în
+bypass, `grid_import_power` urcă cu ~30 s întârziere față de realitate.

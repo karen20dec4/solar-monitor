@@ -164,10 +164,12 @@ write a point to `live` (and to `history` every `HISTORY_INTERVAL`).
   convention stays *positive = charging, negative = discharging*); charge/discharge currents are
   regs 83/84. Voltages/SOC/temp are single registers with the scalings shown inline.
   - Derived signals worth understanding before touching them: `inverter_loss` (self-consumption,
-    from a power balance, ~100–350 W depending on load; the value is a **60 s rolling median**
-    (`INVERTER_LOSS_SMOOTH_S`, raw sample kept in `inverter_loss_raw`) because the inverter's power
-    registers refresh out of phase and the instantaneous residual spikes 1–4000 W on load steps),
-    `grid_import_power` vs. inferred battery
+    from a power balance, ~100–350 W depending on load), `power_deficit` and `grid_import_power`
+    are published as a **60 s rolling median** (`BALANCE_SMOOTH_S`, instantaneous samples kept in
+    `<field>_raw`) because the inverter's power registers refresh out of phase and the
+    instantaneous residual spikes 1–4000 W on load steps. `house_source`,
+    `battery_inferred_discharge_power` and `battery_display_power` are computed in `parse()` from
+    the instantaneous balance and are not filtered. `grid_import_power` vs. inferred battery
     discharge (uses inverter **status code** reg 0 — `STATUS_BYPASS`/`STATUS_DISCHARGE` — plus grid
     voltage and battery-first mode to decide whether an unexplained load deficit is coming from the
     grid or the battery), and `house_source` (1=PV / 2=battery / 3=grid). `house_source` also routes
