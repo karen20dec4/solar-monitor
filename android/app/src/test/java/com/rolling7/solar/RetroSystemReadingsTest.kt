@@ -60,7 +60,7 @@ class RetroSystemReadingsTest {
     @Test
     fun `diagnostic console exposes explicit warning states`() {
         val hot = sampleData().copy(inverterTemp = 56.0)
-        val batteryHigh = sampleData().copy(batteryVoltage = 57.1)
+        val batteryHigh = sampleData().copy(batteryVoltage = 57.6)
         val disconnectedGrid = sampleData().copy(gridVoltage = 0.0)
 
         assertEquals("ATENTIE TEMP · COD 12", retroSystemHealthText(hot))
@@ -75,7 +75,6 @@ class RetroSystemReadingsTest {
         house = 383.0,
         loadPercent = 6.0,
         batteryVoltage = 55.92,
-        batterySoc = 81.0,
         batteryPower = -36.0,
         batteryDisplay = -36.0,
         batteryCharge = 0.0,

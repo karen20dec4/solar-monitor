@@ -66,7 +66,7 @@ class HistoryApiTest(unittest.TestCase):
 
     def test_daily_energy_metrics_keep_bar_contract(self):
         for field in ("energy_pv_today", "energy_load_today"):
-            for range_key in ("1d", "7d", "30d"):
+            for range_key in ("2h", "1d", "7d", "30d"):
                 response = self.client.get(f"/history?field={field}&range={range_key}")
                 self.assertEqual(200, response.status_code)
                 self.assertEqual("bar", response.get_json()["chart"])
@@ -98,20 +98,100 @@ class HistoryApiTest(unittest.TestCase):
         self.assertEqual(400, response.status_code)
         self.assertEqual("range nepermis", response.get_json()["error"])
 
-    def test_energy_pv_today_1d_includes_difference(self):
-        response = self.client.get("/history?field=energy_pv_today&range=1d")
-        self.assertEqual(200, response.status_code)
-        self.assertIn("difference(nonNegative: true)", self.queries[-1])
+    def test_energy_short_ranges_integrate_power_from_live(self):
+        for field, source in (("energy_pv_today", "pv_power"), ("energy_load_today", "output_power")):
+            for range_key, start, window in (("2h", "-110m", "10m"), ("1d", "-23h", "1h")):
+                with self.subTest(field=field, range=range_key):
+                    response = self.client.get(f"/history?field={field}&range={range_key}")
+                    self.assertEqual(200, response.status_code)
+                    self.assertEqual(window, response.get_json()["window"])
+                    query = self.queries[-1]
+                    self.assertIn('from(bucket: "live")', query)
+                    self.assertIn(f'r._field == "{source}"', query)
+                    self.assertIn("integral(unit: 1h", query)
+                    self.assertIn(f"date.add(d: {start}, to: date.truncate(t: now(), unit: {window}))", query)
+                    self.assertIn('timeSrc: "_start"', query)
+                    self.assertNotIn("difference(", query)
 
-    def test_pv_power_1d_excludes_difference(self):
-        response = self.client.get("/history?field=pv_power&range=1d")
-        self.assertEqual(200, response.status_code)
-        self.assertNotIn("difference(nonNegative: true)", self.queries[-1])
-
-    def test_energy_pv_today_7d_excludes_difference(self):
+    def test_energy_week_uses_daily_counter_max_aligned_to_midnight(self):
         response = self.client.get("/history?field=energy_pv_today&range=7d")
         self.assertEqual(200, response.status_code)
-        self.assertNotIn("difference(nonNegative: true)", self.queries[-1])
+        query = self.queries[-1]
+        self.assertIn('from(bucket: "history")', query)
+        self.assertIn("fn: max", query)
+        self.assertIn("date.add(d: -6d, to: date.truncate(t: now(), unit: 1d))", query)
+        self.assertNotIn("integral(", query)
+
+    def test_line_ranges_keep_window_end_timestamps(self):
+        response = self.client.get("/history?field=pv_power&range=2h")
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("1m", response.get_json()["window"])
+        self.assertIn('from(bucket: "live")', self.queries[-1])
+        self.assertNotIn("timeSrc", self.queries[-1])
+
+
+class _Record:
+    def __init__(self, value, stat=None):
+        self._value = value
+        self.values = {"stat": stat} if stat else {}
+
+    def get_value(self):
+        return self._value
+
+    def get_time(self):
+        import datetime
+        return datetime.datetime(2026, 10, 18, 12, 0, tzinfo=datetime.timezone.utc)
+
+
+class _Table:
+    def __init__(self, records):
+        self.records = records
+
+
+class _StatsQueryApi:
+    def __init__(self, queries):
+        self.queries = queries
+
+    def query(self, query, org=None):
+        self.queries.append(query)
+        if "union(" in query:
+            return [_Table([_Record(266.0, "min"), _Record(4720.0, "max"),
+                            _Record(2128.0, "avg"), _Record(3298.0, "last")])]
+        return [_Table([_Record(1000.0), _Record(2964.0)])]
+
+
+class _StatsClient:
+    def __init__(self, queries):
+        self.queries = queries
+
+    def query_api(self):
+        return _StatsQueryApi(self.queries)
+
+
+class ExactStatsTest(unittest.TestCase):
+    def setUp(self):
+        self.original_client = api_module.client
+        self.queries = []
+        api_module.client = _StatsClient(self.queries)
+        self.client = api_module.app.test_client()
+
+    def tearDown(self):
+        api_module.client = self.original_client
+
+    def test_line_stats_come_from_raw_data_not_chart_points(self):
+        payload = self.client.get("/history?field=output_power&range=1d").get_json()
+        self.assertEqual(4720.0, payload["stats"]["max"])
+        self.assertEqual(266.0, payload["stats"]["min"])
+        self.assertEqual(3298.0, payload["stats"]["last"])
+        # 24 h de date la 1 s: statisticile vin din `live`, graficul din `history`
+        self.assertIn('from(bucket: "history")', self.queries[0])
+        self.assertIn('from(bucket: "live")', self.queries[1])
+
+    def test_bar_stats_stay_on_the_bars(self):
+        payload = self.client.get("/history?field=energy_pv_today&range=2h").get_json()
+        self.assertEqual(1, len(self.queries))
+        self.assertEqual(3964.0, payload["stats"]["sum"])
+        self.assertEqual(2964.0, payload["stats"]["max"])
 
 
 if __name__ == "__main__":

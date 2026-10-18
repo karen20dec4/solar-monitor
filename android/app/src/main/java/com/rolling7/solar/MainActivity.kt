@@ -211,11 +211,12 @@ class MainActivity : ComponentActivity() {
 fun App() {
     val context = LocalContext.current
     var data by remember { mutableStateOf<SolarData?>(null) }
-    var selectedHistory by remember { mutableStateOf<HistoryMetric?>(null) }
     var showHistoryMenu by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var retroTabName by rememberSaveable { mutableStateOf(RetroTab.DASHBOARD.name) }
     var selectedEnergyField by rememberSaveable { mutableStateOf("energy_pv_today") }
+    // Intervalul ramane acelasi cand schimbi graficul si e comun ambelor teme.
+    var energyRange by rememberSaveable { mutableStateOf(RetroEnergyDefaultRange) }
     var alarmSettings by remember { mutableStateOf(AlarmSettingsStore.read(context)) }
     var dashboardStyle by remember { mutableStateOf(DashboardStyleStore.read(context)) }
     var enableAfterNotificationPermission by remember { mutableStateOf(false) }
@@ -325,30 +326,13 @@ fun App() {
 
     MaterialTheme(colorScheme = colors) {
         val simpleEnergyContent: @Composable () -> Unit = {
-            Column(
-                Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                val metric = selectedHistory ?: historyMetric(selectedEnergyField)
-                HistoryMenuSheet(
-                    metrics = DashboardHistoryMetrics,
-                    retro = false,
-                    onMetricClick = { 
-                        selectedHistory = it
-                        selectedEnergyField = it.field 
-                    },
-                    compact = true
-                )
-                // compact: graficul ia spatiul ramas si toate cele 4 statistici stau pe un rand.
-                // In varianta lunga, randul al doilea (Medie, Varf) cadea sub bara de navigare.
-                HistorySheet(
-                    metric = metric,
-                    retro = false,
-                    embedded = true,
-                    compact = true,
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            SimpleEnergyPage(
+                data = data,
+                selectedField = normalizedEnergyField(selectedEnergyField),
+                selectedRange = normalizedRetroEnergyRange(energyRange),
+                onFieldSelected = { selectedEnergyField = it },
+                onRangeSelected = { energyRange = it }
+            )
         }
         
         val simpleSystemContent: @Composable () -> Unit = {
@@ -357,7 +341,6 @@ fun App() {
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 SystemDetails(data = data, onHistoryClick = {
-                    selectedHistory = it
                     selectedEnergyField = it.field
                     retroTabName = RetroTab.ENERGY.name
                 })
@@ -401,8 +384,10 @@ fun App() {
                 energyContent = {
                     RetroEnergyPage(
                         data = data,
-                        selectedMetric = historyMetric(selectedEnergyField),
-                        onMetricSelected = { metric -> selectedEnergyField = metric.field }
+                        selectedField = normalizedEnergyField(selectedEnergyField),
+                        selectedRange = normalizedRetroEnergyRange(energyRange),
+                        onFieldSelected = { selectedEnergyField = it },
+                        onRangeSelected = { energyRange = it }
                     )
                 },
                 settingsContent = simpleSettingsContent
@@ -411,8 +396,7 @@ fun App() {
                 data = data,
                 selectedTab = RetroTab.valueOf(retroTabName),
                 onTabSelected = { tab -> retroTabName = tab.name },
-                onHistoryFieldClick = { 
-                    selectedHistory = it
+                onHistoryFieldClick = {
                     selectedEnergyField = it.field
                     retroTabName = RetroTab.ENERGY.name
                 },
@@ -449,86 +433,183 @@ private fun DashboardSheetHandle(retro: Boolean) {
     )
 }
 
+/** Istoricul graficului ales; reincarcat la schimbarea campului, a intervalului sau la reincercare. */
+private class EnergyHistoryState {
+    var series by mutableStateOf<HistorySeries?>(null)
+    var loading by mutableStateOf(true)
+    var error by mutableStateOf<String?>(null)
+}
+
+@Composable
+private fun rememberEnergyHistory(field: String, range: String, reloadKey: Int, errorText: String): EnergyHistoryState {
+    val state = remember(field, range, reloadKey) { EnergyHistoryState() }
+    LaunchedEffect(field, range, reloadKey) {
+        state.loading = true
+        state.error = null
+        state.series = null
+        val result = withContext(Dispatchers.IO) { SolarRepository.fetchHistory(field, range) }
+        if (result == null) state.error = errorText else state.series = result
+        state.loading = false
+    }
+    return state
+}
+
 @Composable
 private fun RetroEnergyPage(
     data: SolarData?,
-    selectedMetric: HistoryMetric,
-    onMetricSelected: (HistoryMetric) -> Unit
+    selectedField: String,
+    selectedRange: String,
+    onFieldSelected: (String) -> Unit,
+    onRangeSelected: (String) -> Unit
 ) {
-    var selectedRange by rememberSaveable { mutableStateOf(RetroEnergyDefaultRange) }
-    val activeRange = normalizedRetroEnergyRange(selectedRange, selectedMetric.field)
-    var topSectionName by rememberSaveable(selectedMetric.field) {
-        mutableStateOf(retroEnergyTopSectionForField(selectedMetric.field).name)
-    }
-    var selectedHistoryField by rememberSaveable {
-        mutableStateOf(
-            selectedMetric.field.takeIf(::isRetroEnergyDetailedHistoryField) ?: "pv_power"
-        )
-    }
+    val metric = historyMetric(selectedField)
     var reloadKey by rememberSaveable { mutableStateOf(0) }
-    var series by remember(selectedMetric.field, activeRange, reloadKey) {
-        mutableStateOf<HistorySeries?>(null)
-    }
-    var loading by remember(selectedMetric.field, activeRange, reloadKey) { mutableStateOf(true) }
-    var error by remember(selectedMetric.field, activeRange, reloadKey) { mutableStateOf<String?>(null) }
-    val topSection = runCatching { RetroEnergyTopSection.valueOf(topSectionName) }
-        .getOrDefault(retroEnergyTopSectionForField(selectedMetric.field))
-
-    LaunchedEffect(selectedMetric.field) {
-        if (isRetroEnergyDetailedHistoryField(selectedMetric.field)) {
-            selectedHistoryField = selectedMetric.field
-        }
-    }
-
-    LaunchedEffect(selectedMetric.field, activeRange, reloadKey) {
-        loading = true
-        error = null
-        series = null
-        val result = withContext(Dispatchers.IO) {
-            SolarRepository.fetchHistory(selectedMetric.field, activeRange)
-        }
-        if (result == null) {
-            error = "ISTORIC INDISPONIBIL"
-        } else {
-            series = result
-        }
-        loading = false
-    }
-
-    val selectField: (String) -> Unit = { field ->
-        if (isRetroEnergyDetailedHistoryField(field)) {
-            selectedHistoryField = field
-        }
-        topSectionName = retroEnergyTopSectionForField(field).name
-        onMetricSelected(historyMetric(field))
-    }
+    val history = rememberEnergyHistory(selectedField, selectedRange, reloadKey, "ISTORIC INDISPONIBIL")
+    val series = history.series
 
     RetroEnergyArtworkPage(
         data = data,
-        selectedTopSection = topSection,
-        selectedField = selectedMetric.field,
-        selectedRange = activeRange,
-        chartTitle = retroEnergyChartTitle(selectedMetric.field),
-        onTopSectionClick = { section ->
-            topSectionName = section.name
-            val field = retroEnergyFieldForTopSection(section, selectedHistoryField)
-            if (field != selectedMetric.field) {
-                onMetricSelected(historyMetric(field))
-            }
-        },
-        onHistoryFieldClick = selectField,
-        onRangeClick = { selectedRange = normalizedRetroEnergyRange(it, selectedMetric.field) },
+        selectedField = selectedField,
+        selectedRange = selectedRange,
+        chartTitle = energyChartTitle(selectedField, selectedRange),
+        spanLabel = series?.let { energySeriesSpan(it, metric) } ?: if (history.loading) "SE INCARCA..." else "—",
+        stats = energyStatPairs(series?.stats, metric),
+        onFieldClick = onFieldSelected,
+        onRangeClick = { onRangeSelected(normalizedRetroEnergyRange(it, selectedField)) },
         chartContent = { modifier ->
             RetroEnergyEmbeddedHistoryChart(
-                metric = selectedMetric,
+                metric = metric,
                 series = series,
-                loading = loading,
-                error = error,
+                loading = history.loading,
+                error = history.error,
                 onRetry = { reloadKey += 1 },
                 modifier = modifier
             )
         }
     )
+}
+
+/**
+ * ENERGIE in tema Simple, aceeasi ordine ca in Retro: energia de azi (informativ), CE urmaresti,
+ * CUM, CAT timp, apoi graficul cu cele patru cifre si cat de proaspete sunt datele.
+ */
+@Composable
+private fun SimpleEnergyPage(
+    data: SolarData?,
+    selectedField: String,
+    selectedRange: String,
+    onFieldSelected: (String) -> Unit,
+    onRangeSelected: (String) -> Unit
+) {
+    val subject = energySubjectForField(selectedField)
+    val mode = energyModeForField(selectedField)
+    val freshness = energyFreshness(data?.timestamp, rememberNowMillis())
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SimpleTodayTile(Modifier.weight(1f), "Produs azi", data?.energyPvToday, CPv)
+            SimpleTodayTile(Modifier.weight(1f), "Consumat azi", data?.energyLoadToday, CHouse)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            EnergySubject.values().forEach { option ->
+                RangeChip(
+                    modifier = Modifier.weight(1f),
+                    label = option.label,
+                    selected = option == subject,
+                    color = simpleSubjectColor(option),
+                    retro = false,
+                    onClick = { onFieldSelected(energyFieldForSubject(option, selectedField)) }
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            energyModesFor(subject).forEach { option ->
+                RangeChip(
+                    modifier = Modifier.weight(1f),
+                    label = "${option.label} · ${option.unit}",
+                    selected = option == mode,
+                    color = simpleSubjectColor(subject),
+                    retro = false,
+                    compact = true,
+                    onClick = { onFieldSelected(energyFieldFor(subject, option)) }
+                )
+            }
+        }
+        HistorySheet(
+            metric = historyMetric(selectedField),
+            retro = false,
+            selectedRange = selectedRange,
+            onRangeChange = onRangeSelected,
+            title = energyChartTitle(selectedField, selectedRange),
+            embedded = true,
+            compact = true,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            freshness.text.lowercase(Locale.getDefault())
+                .replaceFirstChar { it.titlecase(Locale.getDefault()) },
+            color = if (freshness.stale) CGrid else CMuted,
+            fontSize = 11.sp
+        )
+    }
+}
+
+@Composable
+private fun SimpleTodayTile(modifier: Modifier, label: String, value: Double?, color: Color) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(CPanel)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .semantics(mergeDescendants = true) {}
+    ) {
+        Text(label, color = CMuted, fontSize = 11.sp, maxLines = 1)
+        Text(
+            value?.let { String.format(Locale.US, "%.1f kWh", it) } ?: "—",
+            color = color,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
+    }
+}
+
+private fun simpleSubjectColor(subject: EnergySubject): Color = when (subject) {
+    EnergySubject.HOUSE -> CHouse
+    EnergySubject.PANELS -> CPv
+    EnergySubject.BATTERY -> CBat
+}
+
+private fun energySeriesSpan(series: HistorySeries, metric: HistoryMetric): String =
+    energySpanLabel(
+        times = series.points.map { it.time },
+        window = series.window,
+        range = series.range,
+        bars = metric.chartStyle == ChartStyle.Bar,
+        zone = LocalZone
+    )
+
+/**
+ * Cele patru cifre de sub grafic, aceleasi in ambele teme. Pentru bare: total, medie pe bara, maximul
+ * unei bare, ultima bara. Pentru linii: valorile vin din datele brute (API), nu din punctele graficului.
+ */
+private fun energyStatPairs(stats: HistoryStats?, metric: HistoryMetric): List<Pair<String, String>> {
+    val labels = if (metric.chartStyle == ChartStyle.Bar) {
+        listOf("TOTAL", "MEDIE", "MAX", "ULTIM")
+    } else {
+        listOf("ULTIM", "MIN", "MEDIE", if (metric.unit == "W") "VARF" else "MAX")
+    }
+    if (stats == null) return labels.map { it to "—" }
+    val values = if (metric.chartStyle == ChartStyle.Bar) {
+        listOf(stats.sum, stats.avg, stats.max, stats.last)
+    } else {
+        listOf(stats.last, stats.min, stats.avg, stats.max)
+    }
+    return labels.zip(values) { label, value -> label to formatHistoryValue(value, metric.unit) }
 }
 
 @Composable
@@ -608,7 +689,7 @@ private fun RetroEnergyChartCanvas(
         if (metric.chartStyle == ChartStyle.Bar) point.value.coerceAtLeast(0.0) else point.value
     }
     val axis = if (metric.chartStyle == ChartStyle.Bar) {
-        val maxValue = max(values.maxOrNull() ?: 1.0, 1.0)
+        val maxValue = max(values.maxOrNull() ?: 0.1, 0.1)
         val step = niceStep(maxValue / 4.0)
         val top = max(step * 4.0, ceil(maxValue / step) * step)
         LineAxis(
@@ -620,7 +701,7 @@ private fun RetroEnergyChartCanvas(
     } else {
         lineAxis(metric, values)
     }
-    val labelIndices = retroEnergyLabelIndices(series.points.size, series.range)
+    val tickIndices = energyTickIndices(series.points.map { it.time }, series.range, LocalZone)
 
     Canvas(modifier.padding(horizontal = 3.dp, vertical = 2.dp)) {
         val leftPad = 45.dp.toPx()
@@ -673,20 +754,27 @@ private fun RetroEnergyChartCanvas(
             )
         }
 
-        labelIndices.forEach { index ->
-            val x = xFor(index)
+        // Barele stau in centrul slotului lor, liniile pe pozitia punctului.
+        val barSlot = plotWidth / series.points.size.coerceAtLeast(1)
+        fun pointX(index: Int): Float =
+            if (metric.chartStyle == ChartStyle.Bar) plotLeft + barSlot * index + barSlot / 2f else xFor(index)
+
+        // Etichete doar pe ore rotunde; una care s-ar suprapune cu precedenta sau ar iesi din
+        // cadru e sarita.
+        var lastLabelRight = Float.NEGATIVE_INFINITY
+        tickIndices.forEach { index ->
+            val x = pointX(index)
+            val label = energyTickLabel(series.points[index].time, series.range, LocalZone)
+            val half = xPaint.measureText(label) / 2f
+            if (x - half < lastLabelRight + 4.dp.toPx() || x + half > size.width) return@forEach
             drawLine(
                 color = RetroOlive.copy(alpha = 0.15f),
                 start = Offset(x, plotTop),
                 end = Offset(x, plotBottom),
                 strokeWidth = 0.8.dp.toPx()
             )
-            drawContext.canvas.nativeCanvas.drawText(
-                retroEnergyDateLabel(series.points[index].time, series.range),
-                x,
-                size.height - 3.dp.toPx(),
-                xPaint
-            )
+            drawContext.canvas.nativeCanvas.drawText(label, x, size.height - 3.dp.toPx(), xPaint)
+            lastLabelRight = x + half
         }
 
         metric.thresholds.forEach { threshold ->
@@ -767,120 +855,12 @@ private fun RetroEnergyChartCanvas(
     }
 }
 
-/** Intervale pe care axa timpului arata ore (HH:mm), nu zile. */
-private val HourlyRanges = setOf("1h", "2h", "6h", "24h", "1d")
-
 private fun barCountLabel(series: HistorySeries): String {
     val count = series.points.size
     return when (series.range) {
         "2h" -> "$count x 10 min"
         "1d", "24h" -> "$count ore"
         else -> "$count zile"
-    }
-}
-
-private fun retroEnergyLabelIndices(pointCount: Int, range: String): List<Int> {
-    if (pointCount <= 0) return emptyList()
-    if (pointCount <= 4) return (0 until pointCount).toList()
-    if (range in HourlyRanges) {
-        val step = max(1, pointCount / 5)
-        val list = (0 until pointCount step step).toMutableList()
-        if (list.last() != pointCount - 1) list.add(pointCount - 1)
-        return list.distinct()
-    }
-    val last = pointCount - 1
-    return listOf(0, last / 3, last * 2 / 3, last).distinct()
-}
-
-private fun retroEnergyDateLabel(value: String, range: String): String =
-    try {
-        val dt = OffsetDateTime.parse(value).atZoneSameInstant(LocalZone)
-        if (range in HourlyRanges) {
-            dt.format(DateTimeFormatter.ofPattern("HH:mm"))
-        } else {
-            dt.format(DateTimeFormatter.ofPattern("dd.MM"))
-        }
-    } catch (e: Exception) {
-        ""
-    }
-
-@Composable
-private fun RetroEnergyMetricSelector(
-    selectedMetric: HistoryMetric,
-    onMetricSelected: (HistoryMetric) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    RetroPanelSurface(
-        modifier = modifier,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-        fillContent = true
-    ) {
-        Text(
-            "GRAFIC SELECTAT",
-            color = RetroMuted,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.2.sp
-        )
-        Spacer(Modifier.height(5.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            DashboardHistoryMetrics.take(3).forEach { metric ->
-                RetroMetricButton(
-                    modifier = Modifier.weight(1f),
-                    metric = metric,
-                    selected = metric.field == selectedMetric.field,
-                    onClick = { onMetricSelected(metric) }
-                )
-            }
-        }
-        Spacer(Modifier.height(5.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            DashboardHistoryMetrics.drop(3).forEach { metric ->
-                RetroMetricButton(
-                    modifier = Modifier.weight(1f),
-                    metric = metric,
-                    selected = metric.field == selectedMetric.field,
-                    onClick = { onMetricSelected(metric) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RetroMetricButton(
-    modifier: Modifier,
-    metric: HistoryMetric,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    val accent = historyAccent(metric.field, metric.color, retro = true)
-    val label = when (metric.field) {
-        "output_power" -> "CASA"
-        "pv_power" -> "PANOURI"
-        "battery_voltage" -> "BATERIE"
-        "energy_pv_today" -> "PRODUS ZILNIC"
-        "energy_load_today" -> "CONSUM ZILNIC"
-        else -> metric.title.uppercase(Locale.getDefault())
-    }
-    RetroMetalButton(
-        modifier = modifier.height(32.dp),
-        selected = selected,
-        accent = accent,
-        description = "Grafic $label${if (selected) ", selectat" else ""}",
-        onClick = onClick
-    ) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                label,
-                color = if (selected) accent else RetroMuted,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 7.sp,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                maxLines = 1
-            )
-        }
     }
 }
 
@@ -1748,90 +1728,6 @@ private fun TrendGlyph(modifier: Modifier, color: Color) {
     }
 }
 
-@Composable
-private fun HistoryMenuSheet(
-    metrics: List<HistoryMetric>,
-    retro: Boolean,
-    compact: Boolean = false,
-    onMetricClick: (HistoryMetric) -> Unit
-) {
-    val chrome = dashboardChrome(retro)
-    if (compact && !retro) {
-        androidx.compose.foundation.lazy.LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-        ) {
-            items(metrics.size) { index ->
-                val metric = metrics[index]
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(CPanel)
-                        .clickable { onMetricClick(metric) }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        metric.title,
-                        color = chrome.text,
-                        fontFamily = chrome.font,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        }
-    } else {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 18.dp, end = 18.dp, bottom = 28.dp)
-        ) {
-            Text(
-                if (retro) "ISTORIC" else "Istoric",
-                color = if (retro) RetroYellow else chrome.text,
-                fontFamily = chrome.font,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = if (retro) 1.sp else 0.sp
-            )
-            Text(
-                "Alege valoarea pe care vrei sa o analizezi.",
-                color = chrome.muted,
-                fontFamily = chrome.font,
-                fontSize = 12.sp
-            )
-            Spacer(Modifier.height(12.dp))
-            metrics.forEachIndexed { index, metric ->
-                val accent = historyAccent(metric.field, metric.color, retro)
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (retro) RetroPanelRaised.copy(alpha = 0.34f) else Color.Transparent)
-                        .clickable { onMetricClick(metric) }
-                        .padding(horizontal = 10.dp, vertical = 13.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(accent))
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            if (retro) metric.title.uppercase(Locale.getDefault()) else metric.title,
-                            color = chrome.text,
-                            fontFamily = chrome.font,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(historySubtitle(metric), color = chrome.muted, fontFamily = chrome.font, fontSize = 10.sp)
-                    }
-                    TrendGlyph(Modifier.size(18.dp), accent)
-                }
-                if (index < metrics.lastIndex) DetailDivider(retro)
-            }
-        }
-    }
-}
-
 private data class HistoryMetric(
     val title: String,
     val field: String,
@@ -1909,7 +1805,6 @@ private data class LineAxis(
 private data class TimeTick(val timeMs: Long, val label: String)
 
 private val LocalZone: ZoneId = ZoneId.of("Europe/Bucharest")
-private val HourFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH")
 private val TimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 private val DayFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM")
 
@@ -2257,31 +2152,19 @@ private fun retroSwitchColors() = SwitchDefaults.colors(
 private fun HistorySheet(
     metric: HistoryMetric,
     retro: Boolean,
+    selectedRange: String,
+    onRangeChange: (String) -> Unit,
+    title: String = metric.title,
     embedded: Boolean = false,
     compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val chrome = dashboardChrome(retro)
     val accent = historyAccent(metric.field, metric.color, retro)
-    var selectedRange by remember(metric.field) { mutableStateOf(metric.defaultRange) }
-    var series by remember(metric.field) { mutableStateOf<HistorySeries?>(null) }
-    var loading by remember(metric.field) { mutableStateOf(false) }
-    var error by remember(metric.field) { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(metric.field, selectedRange) {
-        loading = true
-        error = null
-        series = null
-        val result = withContext(Dispatchers.IO) {
-            SolarRepository.fetchHistory(metric.field, selectedRange)
-        }
-        if (result == null) {
-            error = "Nu pot incarca istoricul"
-        } else {
-            series = result
-        }
-        loading = false
-    }
+    val history = rememberEnergyHistory(metric.field, selectedRange, 0, "Nu pot incarca istoricul")
+    val series = history.series
+    val loading = history.loading
+    val error = history.error
 
     val scrollModifier = if (embedded) Modifier else Modifier.verticalScroll(rememberScrollState())
     Column(
@@ -2294,14 +2177,26 @@ private fun HistorySheet(
                 bottom = if (embedded) 0.dp else 28.dp
             )
     ) {
+        val rangeSelector: @Composable () -> Unit = {
+            RangeSelector(
+                ranges = metric.ranges,
+                selectedRange = selectedRange,
+                color = accent,
+                retro = retro,
+                compact = compact
+            ) { onRangeChange(it) }
+        }
         if (compact) {
+            // Ordinea paginii ENERGIE: intervalul (CAT) inaintea titlului si a graficului.
+            rangeSelector()
+            Spacer(Modifier.height(8.dp))
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Bottom
             ) {
                 Text(
-                    metric.title.uppercase(Locale.getDefault()),
+                    title.uppercase(Locale.getDefault()),
                     modifier = Modifier.weight(1f),
                     color = accent,
                     fontFamily = chrome.font,
@@ -2311,16 +2206,16 @@ private fun HistorySheet(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    historySubtitle(metric),
+                    series?.let { energySeriesSpan(it, metric).lowercase(Locale.getDefault()) } ?: "",
                     color = chrome.muted,
                     fontFamily = chrome.font,
-                    fontSize = 8.sp,
+                    fontSize = 10.sp,
                     maxLines = 1
                 )
             }
         } else {
             Text(
-                if (retro) metric.title.uppercase(Locale.getDefault()) else metric.title,
+                if (retro) title.uppercase(Locale.getDefault()) else title,
                 color = if (retro) accent else chrome.text,
                 fontFamily = chrome.font,
                 fontSize = 22.sp,
@@ -2333,15 +2228,9 @@ private fun HistorySheet(
                 fontFamily = chrome.font,
                 fontSize = 12.sp
             )
+            Spacer(Modifier.height(14.dp))
+            rangeSelector()
         }
-        Spacer(Modifier.height(if (compact) 6.dp else 14.dp))
-        RangeSelector(
-            ranges = metric.ranges,
-            selectedRange = selectedRange,
-            color = accent,
-            retro = retro,
-            compact = compact
-        ) { selectedRange = it }
         Spacer(Modifier.height(if (compact) 7.dp else 16.dp))
 
         when {
@@ -2638,7 +2527,9 @@ private fun BarHistoryChart(
     val chrome = dashboardChrome(retro)
     val accent = historyAccent(metric.field, metric.color, retro)
     val values = series.points.map { it.value.coerceAtLeast(0.0) }
-    val maxValue = max(values.maxOrNull() ?: 1.0, 1.0)
+    // Pe 2 ore barele au cateva zecimi de kWh: scala nu mai porneste fortat de la 1 kWh.
+    val maxValue = max(values.maxOrNull() ?: 0.1, 0.1)
+    val tickIndices = energyTickIndices(series.points.map { it.time }, series.range, LocalZone)
 
     Column(modifier) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -2659,8 +2550,9 @@ private fun BarHistoryChart(
                 .border(1.dp, chrome.line, RoundedCornerShape(14.dp))
         ) {
             Canvas(Modifier.matchParentSize().padding(if (compact) 7.dp else 10.dp)) {
+                val labelBand = 16f * density
                 val width = size.width
-                val height = size.height
+                val height = size.height - labelBand
                 for (i in 0..3) {
                     val y = height * i / 3f
                     drawLine(
@@ -2684,6 +2576,21 @@ private fun BarHistoryChart(
                             cap = StrokeCap.Butt
                         )
                     }
+                    // Fiecare bara poarta ora/ziua de inceput; etichetam doar momentele rotunde.
+                    val xPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = chrome.muted.toArgb()
+                        textSize = 10f * density
+                        textAlign = Paint.Align.CENTER
+                    }
+                    var lastRight = Float.NEGATIVE_INFINITY
+                    tickIndices.forEach { index ->
+                        val x = slot * index + slot / 2f
+                        val label = energyTickLabel(series.points[index].time, series.range, LocalZone)
+                        val half = xPaint.measureText(label) / 2f
+                        if (x - half < lastRight + 4f * density || x - half < 0f || x + half > width) return@forEach
+                        drawContext.canvas.nativeCanvas.drawText(label, x, size.height - 2f * density, xPaint)
+                        lastRight = x + half
+                    }
                 }
             }
             if (retro) {
@@ -2706,27 +2613,12 @@ private fun HistoryStatsGrid(
 ) {
     val accent = historyAccent(metric.field, metric.color, retro)
     if (compact) {
-        val compactValues = if (metric.chartStyle == ChartStyle.Bar) {
-            listOf(
-                "TOTAL" to stats.sum,
-                "MEDIE" to stats.avg,
-                "MAX" to stats.max,
-                "ULTIM" to stats.last
-            )
-        } else {
-            listOf(
-                "ULTIM" to stats.last,
-                "MIN" to stats.min,
-                "MEDIE" to stats.avg,
-                (if (metric.unit == "W") "VARF" else "MAX") to stats.max
-            )
-        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            compactValues.forEach { (label, rawValue) ->
+            energyStatPairs(stats, metric).forEach { (label, value) ->
                 StatTile(
                     modifier = Modifier.weight(1f),
                     label = label,
-                    value = formatHistoryValue(rawValue, metric.unit),
+                    value = value,
                     color = accent,
                     retro = retro,
                     compact = true
@@ -2886,26 +2778,14 @@ private fun timeTicks(series: HistorySeries): List<TimeTick> {
     val last = series.points.lastOrNull()?.time?.let(::parsePointMillis) ?: return emptyList()
     if (last <= first) return emptyList()
 
-    val stepMinutes = when (series.range) {
-        "1h" -> 10L
-        "2h" -> 30L
-        "6h" -> 60L
-        "1d", "24h" -> 60L
-        "7d" -> 1440L
-        "30d" -> 1440L * 5
-        else -> 60L
-    }
-    val formatter = when (series.range) {
-        "1d", "24h" -> HourFormatter
-        "7d", "30d" -> DayFormatter
-        else -> TimeFormatter
-    }
+    val stepMinutes = energyTickStepMinutes(series.range)
+    val formatter = if (stepMinutes < 1440L) TimeFormatter else DayFormatter
     var tick = floorToStep(OffsetDateTime.ofInstant(java.time.Instant.ofEpochMilli(first), LocalZone), stepMinutes)
     if (tick.toInstant().toEpochMilli() < first) {
         tick = tick.plusMinutes(stepMinutes)
     }
 
-    val maxTicks = if (series.range == "1d" || series.range == "24h") 32 else 16
+    val maxTicks = 16
     val out = mutableListOf<TimeTick>()
     while (tick.toInstant().toEpochMilli() <= last && out.size < maxTicks) {
         out += TimeTick(tick.toInstant().toEpochMilli(), tick.format(formatter))

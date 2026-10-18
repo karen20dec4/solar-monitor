@@ -130,13 +130,16 @@ Dacă îl scazi, `parse()` dă `IndexError`.
 **Nu există suite de teste, linter sau CI** pentru stack-ul de infrastructură. Iterația
 se face prin Docker și interogări InfluxDB.
 
-**Excepție: API-ul are teste.** `api/test_app.py` și `api/test_system_metrics.py` (`unittest`,
-6 teste). Flask nu e instalat pe gazdă și testele nu intră în imagine, deci rulează-le într-un
-container efemer:
+**Excepție: există două suite de teste unitare și trebuie să treacă înainte de release.**
+API: `api/test_app.py` și `api/test_system_metrics.py` (`unittest`). Flask nu e instalat pe
+gazdă, dar imaginea API-ului îl are. Android: logica pură Kotlin (selecția de pe ENERGIE,
+etichetele axei, citirile SISTEM) în `android/app/src/test/`.
 
 ```bash
-docker run --rm -v /opt/solar-monitor/api:/app:ro -w /app python:3.12-slim \
-  sh -c "pip install -q -r requirements.txt && python -m unittest discover -p 'test_*.py'"
+docker run --rm --network none -v /opt/solar-monitor/api:/src:ro -w /src --entrypoint python \
+  solar-monitor-api -m unittest
+cd android && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ANDROID_HOME=/opt/android-sdk \
+  /opt/gradle-8.9/bin/gradle -q :app:testDebugUnitTest
 ```
 
 Rulează-le după orice modificare în `api/app.py` — inclusiv după adăugarea unui interval nou.
@@ -241,9 +244,10 @@ Două teme, comutabile din SETĂRI, alegerea persistată de `DashboardStyleStore
    accesibilitate și zonele tactile rămân Compose nativ și dinamice. Nicio valoare nu se
    lipește în bitmap.
 3. **Textul din poze nu se schimbă din cod.** Etichetele desenate în asset-urile WebP
-   (numele taburilor, titlurile secțiunilor ENERGIE, etichetele cadranelor) sunt pixeli. Excepție
-   din v3.27: butoanele de interval ENERGIE sunt plăci native cu text Compose, peste „7d" / „30d"
-   pictate, câte una pentru fiecare valoare din `RetroEnergyRanges`. Dacă schimbi valoarea din Kotlin,
+   (numele taburilor, titlurile secțiunilor ENERGIE, etichetele cadranelor) sunt pixeli. Excepții
+   pe ENERGIE din v3.28: butoanele de interval, rândul PUTERE/ENERGIE/TENSIUNE, fanta de stare de
+   sus și linia de jos sunt plăci native opace peste text pictat vechi („7d"/„30d", „PRODUCȚIE
+   ZILNICĂ", vechile taburi, „Ultima actualizare: ACUM"). Dacă schimbi valoarea din Kotlin,
    trebuie să repictezi și asset-ul, altfel butonul scrie una și face alta. **Vezi
    `docs/DEZVOLTARE.md` §„Capcana etichetelor din poze".**
 4. **Un build Gradle reușit nu e dovadă vizuală.** Rulează emulatorul și **uită-te la PNG**.

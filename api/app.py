@@ -38,7 +38,7 @@ HISTORY_FIELDS = {
             "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
             "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
             "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
-            "1d": {"start": "-1d", "window": "1h", "bucket": "history", "fn": "mean"},
+            "1d": {"start": "-1d", "window": "1h", "bucket": "history", "fn": "mean", "stats_bucket": "live"},
             "7d": {"start": "-7d", "window": "30m", "bucket": "history", "fn": "mean"},
             "30d": {"start": "-30d", "window": "2h", "bucket": "history", "fn": "mean"},
         },
@@ -50,7 +50,7 @@ HISTORY_FIELDS = {
             "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
             "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
             "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
-            "1d": {"start": "-1d", "window": "1h", "bucket": "history", "fn": "mean"},
+            "1d": {"start": "-1d", "window": "1h", "bucket": "history", "fn": "mean", "stats_bucket": "live"},
             "7d": {"start": "-7d", "window": "30m", "bucket": "history", "fn": "mean"},
             "30d": {"start": "-30d", "window": "2h", "bucket": "history", "fn": "mean"},
         },
@@ -62,29 +62,33 @@ HISTORY_FIELDS = {
             "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
             "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
             "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
-            "1d": {"start": "-1d", "window": "1h", "bucket": "history", "fn": "mean"},
+            "1d": {"start": "-1d", "window": "1h", "bucket": "history", "fn": "mean", "stats_bucket": "live"},
             "7d": {"start": "-7d", "window": "30m", "bucket": "history", "fn": "mean"},
             "30d": {"start": "-30d", "window": "2h", "bucket": "history", "fn": "mean"},
         },
     },
+    # Bare de energie. Fiecare bara poarta ora de INCEPUT a ferestrei (timeSrc _start) si intervalul
+    # e aliniat la fereastra, cu fereastra curenta (partiala) ultima: 2h = 12 bare de 10 min,
+    # 1d = 24 bare orare, 7d = 7 bare zilnice, toate incluzand perioada in curs.
+    # 2h si 1d integreaza puterea din `live`: contoarele invertorului au pas de 0,1 kWh si se
+    # reseteaza la 23:51 (ceasul invertorului e ~9 min inainte), ambele prea grosiere pe ora.
+    # 7d/30d iau maximul zilnic al contorului, exact pe zile intregi.
     "energy_pv_today": {
         "label": "Produs", "unit": "kWh", "chart": "bar",
         "ranges": {
-            # 2h: contoarele au pas de 0,1 kWh, prea grosier pe 10 min - integram puterea.
-            "2h": {"start": "-2h", "window": "10m", "bucket": "live", "integral_of": "pv_power"},
-            "1d": {"start": "-25h", "window": "1h", "bucket": "history", "fn": "max", "diff": True},
-            "7d": {"start": "-7d", "window": "1d", "bucket": "history", "fn": "max"},
-            "30d": {"start": "-30d", "window": "1d", "bucket": "history", "fn": "max"},
+            "2h": {"start": "-110m", "window": "10m", "bucket": "live", "integral_of": "pv_power"},
+            "1d": {"start": "-23h", "window": "1h", "bucket": "live", "integral_of": "pv_power"},
+            "7d": {"start": "-6d", "window": "1d", "bucket": "history", "fn": "max"},
+            "30d": {"start": "-29d", "window": "1d", "bucket": "history", "fn": "max"},
         },
     },
     "energy_load_today": {
         "label": "Consum", "unit": "kWh", "chart": "bar",
         "ranges": {
-            # 2h: contoarele au pas de 0,1 kWh, prea grosier pe 10 min - integram puterea.
-            "2h": {"start": "-2h", "window": "10m", "bucket": "live", "integral_of": "output_power"},
-            "1d": {"start": "-25h", "window": "1h", "bucket": "history", "fn": "max", "diff": True},
-            "7d": {"start": "-7d", "window": "1d", "bucket": "history", "fn": "max"},
-            "30d": {"start": "-30d", "window": "1d", "bucket": "history", "fn": "max"},
+            "2h": {"start": "-110m", "window": "10m", "bucket": "live", "integral_of": "output_power"},
+            "1d": {"start": "-23h", "window": "1h", "bucket": "live", "integral_of": "output_power"},
+            "7d": {"start": "-6d", "window": "1d", "bucket": "history", "fn": "max"},
+            "30d": {"start": "-29d", "window": "1d", "bucket": "history", "fn": "max"},
         },
     },
     "inverter_temp": {
@@ -124,6 +128,60 @@ def latest():
     return jsonify(out)
 
 
+FLUX_HEADER = (
+    'import "timezone"\n'
+    'import "date"\n'
+    'option location = timezone.location(name: "Europe/Bucharest")\n'
+)
+
+
+def _bucket(name):
+    return BUCKET_HISTORY if name == "history" else BUCKET_LIVE
+
+
+def _range_start(cfg, chart):
+    # Barele incep la o granita de fereastra, ca prima sa nu acopere doar o parte din ea.
+    if chart == "bar":
+        return f'date.add(d: {cfg["start"]}, to: date.truncate(t: now(), unit: {cfg["window"]}))'
+    return cfg["start"]
+
+
+def _series_query(field, cfg, chart):
+    source = cfg.get("integral_of", field)
+    if cfg.get("integral_of"):
+        fn = "(column, tables=<-) => tables |> integral(unit: 1h, column: column)"
+    else:
+        fn = cfg["fn"]
+    time_src = ', timeSrc: "_start"' if chart == "bar" else ""
+    q = (
+        FLUX_HEADER
+        + f'from(bucket: "{_bucket(cfg["bucket"])}") |> range(start: {_range_start(cfg, chart)}) '
+        f'|> filter(fn: (r) => r._measurement == "inverter" and r._field == "{source}") '
+        f'|> aggregateWindow(every: {cfg["window"]}, fn: {fn}, createEmpty: false{time_src}) '
+    )
+    if cfg.get("integral_of"):
+        q += '|> map(fn: (r) => ({r with _value: r._value / 1000.0})) '  # Wh -> kWh
+    return q + '|> keep(columns: ["_time", "_value"])'
+
+
+def _exact_stats_query(field, cfg):
+    """Min/max/medie/ultima din datele brute, nu din punctele graficului.
+
+    Graficul de 24 h are medii orare: varful lor (2964 W) ascundea varful real (4720 W).
+    """
+    bucket = _bucket(cfg.get("stats_bucket", cfg["bucket"]))
+    return (
+        f'data = from(bucket: "{bucket}") |> range(start: {cfg["start"]}) '
+        f'|> filter(fn: (r) => r._measurement == "inverter" and r._field == "{field}")\n'
+        'union(tables: ['
+        'data |> min() |> set(key: "stat", value: "min"), '
+        'data |> max() |> set(key: "stat", value: "max"), '
+        'data |> mean() |> set(key: "stat", value: "avg"), '
+        'data |> last() |> set(key: "stat", value: "last")'
+        ']) |> keep(columns: ["stat", "_value"])'
+    )
+
+
 @app.get("/history")
 def history():
     field = request.args.get("field", "").strip()
@@ -136,37 +194,11 @@ def history():
         return jsonify({"error": "range nepermis", "allowed": sorted(field_cfg["ranges"].keys())}), 400
 
     range_cfg = field_cfg["ranges"][range_key]
-    bucket = BUCKET_HISTORY if range_cfg["bucket"] == "history" else BUCKET_LIVE
-    q = (
-        'import "timezone"\n'
-        'import "date"\n'
-        'option location = timezone.location(name: "Europe/Bucharest")\n'
-    )
-    if range_cfg.get("integral_of"):
-        # Energie (kWh) pe ferestre, din integrala puterii. Inceputul e aliniat la fereastra,
-        # altfel prima bara ar acoperi doar o parte din interval si ar parea o scadere.
-        window = range_cfg["window"]
-        q += (
-            f'from(bucket: "{bucket}") '
-            f'|> range(start: date.add(d: {range_cfg["start"]}, to: date.truncate(t: now(), unit: {window}))) '
-            f'|> filter(fn: (r) => r._measurement == "inverter" and r._field == "{range_cfg["integral_of"]}") '
-            f'|> aggregateWindow(every: {window}, '
-            'fn: (column, tables=<-) => tables |> integral(unit: 1h, column: column), createEmpty: false) '
-            '|> map(fn: (r) => ({r with _value: r._value / 1000.0})) '
-        )
-    else:
-        q += (
-            f'from(bucket: "{bucket}") |> range(start: {range_cfg["start"]}) '
-            f'|> filter(fn: (r) => r._measurement == "inverter" and r._field == "{field}") '
-            f'|> aggregateWindow(every: {range_cfg["window"]}, fn: {range_cfg["fn"]}, createEmpty: false) '
-        )
-    if range_cfg.get("diff"):
-        q += '|> difference(nonNegative: true) '
-    q += '|> keep(columns: ["_time", "_value"])'
+    chart = field_cfg["chart"]
 
     points = []
     try:
-        for table in client.query_api().query(q, org=ORG):
+        for table in client.query_api().query(_series_query(field, range_cfg, chart), org=ORG):
             for rec in table.records:
                 value = rec.get_value()
                 if value is None:
@@ -178,6 +210,7 @@ def history():
     values = [p["v"] for p in points]
     stats = None
     if values:
+        # Pentru bare (energie) punctele SUNT valorile exacte: total, medie pe bara, maxim, ultima.
         stats = {
             "min": min(values),
             "max": max(values),
@@ -185,12 +218,21 @@ def history():
             "sum": sum(values),
             "last": values[-1],
         }
+        if chart == "line":
+            try:
+                for table in client.query_api().query(_exact_stats_query(field, range_cfg), org=ORG):
+                    for rec in table.records:
+                        key, value = rec.values.get("stat"), rec.get_value()
+                        if key in stats and value is not None:
+                            stats[key] = float(value)
+            except Exception:
+                pass  # raman statisticile din punctele graficului
 
     return jsonify({
         "field": field,
         "label": field_cfg["label"],
         "unit": field_cfg["unit"],
-        "chart": field_cfg["chart"],
+        "chart": chart,
         "range": range_key,
         "window": range_cfg["window"],
         "points": points,

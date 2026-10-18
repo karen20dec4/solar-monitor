@@ -1542,3 +1542,49 @@ Telegram mesaj **120**, SHA-256 descărcat înapoi identic. API reconstruit pe s
 9. Simple: chipurile nu arată selecția, „Energie produsă/consumată" sunt ascunse în dreapta,
    subtitlul rămâne „ultimele zile" și la 2h, barele n-au axă de timp.
 Sistemul rămâne strict **READ-ONLY**.
+
+### 13.62 Pagina ENERGIE reorganizată, statistici exacte, release v3.28 (2026-10-18)
+
+Propunerea din 13.61, aprobată de utilizator. Pagina se citește de sus în jos în ambele teme:
+**CE** (CASA / PANOURI / BATERIE) → **CUM** (PUTERE · W / ENERGIE · kWh; la baterie doar
+TENSIUNE · V) → **CÂT** (2h / 1d / 7d) → grafic cu titlu complet → 4 cifre → starea datelor.
+
+**Model comun** (`EnergySelection.kt`): graficul rămâne un nume de câmp din API; `EnergySubject` +
+`EnergyMode` se traduc în câmp și înapoi. Schimbarea subiectului păstrează modul când există
+(CASA ENERGIE → PANOURI ENERGIE). Intervalul e ridicat în `App` (`energyRange`), comun temelor și
+păstrat la schimbarea graficului. `RetroEnergyTopSection` și helperii lui au fost scoși.
+
+**Retro** (fără asset nou, doar plăci native opace peste pixelii vechi):
+- fanta vechilor taburi PRODUCȚIE/CONSUM/ISTORIC = afișaj „ACTUALIZAT ACUM N S", roșu „DATE VECHI ·
+  ACUM N MIN" după 60 s fără date noi (înainte „Ultima actualizare: ACUM" era pictat, mereu ACUM);
+- ENERGIE ASTĂZI e doar informație (nu mai selectează grafice);
+- rândul „PRODUCȚIE ZILNICĂ / CONSUM ZILNIC" = PUTERE · W / ENERGIE · kWh (o singură placă
+  TENSIUNE · V la baterie), în interiorul ramei pictate;
+- titlu complet, scurt: „CASA · PUTERE · 2 ORE"; graficul mai scund, sub el cele 4 cifre
+  (linii: ULTIM / MIN / MEDIE / VÂRF; bare: TOTAL / MEDIE / MAX / ULTIM);
+- jos, peste „Ultima actualizare: ACUM": „DIN 13:30 · MEDII PE 1 MIN" / „DIN 12.10 · BARE PE ZI";
+- axa timpului doar pe ore rotunde (30 min la 2h, 4 h la 24h, miezul nopții la 7 zile), fără
+  suprapuneri; barele sunt etichetate în centrul lor.
+
+**Simple:** aceeași ordine: două plăci „Produs azi / Consumat azi", rândurile CE și CUM cu selecție
+vizibilă, intervalul, titlul + „din … · …", graficul (barele au acum axă de timp), 4 cifre,
+„Actualizat acum N s". `HistoryMenuSheet` (chipurile derulabile) și selectorul Retro nefolosit au fost scoase.
+
+**API** (`api/app.py`):
+- bare pe ferestre aliniate, cu ora de început (`timeSrc: "_start"`): 2h = 12 bare de 10 min,
+  1d = 24 bare orare, 7d = **exact 7 bare** (azi inclus; înainte 8);
+- energia pe 2h și 1d = integrala puterii din `live` (contorul are pas 0,1 kWh și se resetează la
+  23:51); 7d/30d = maximul zilnic al contorului; `diff`/`difference()` nu mai e folosit;
+- statisticile liniilor din datele brute (`_exact_stats_query`; la 1d din `live`, 1 s): vârful
+  consumului pe 24 h 5746 W în loc de 2964 W (maximul mediilor orare).
+- teste: `api/test_app.py` actualizat (11 teste, trec). Android: `EnergySelectionTest` nou, plus
+  reparat `RetroSystemReadingsTest` (rămăsese pe `batterySoc` și pragul 57,0 V din v3.27); 26 teste trec.
+
+**Verificat vizual** pe Pixel 6 și Note 9 (1440×2960 @560), ambele teme, toate combinațiile
+CE/CUM/CÂT relevante; `retro-tabs` trece, nicio pagină nu derulează; legătura din TABLOU deschide
+graficul potrivit; APK-ul release semnat instalat curat, fără `FATAL EXCEPTION`.
+
+**Release.** `versionCode` 32, `versionName` 3.28, `/opt/solar-monitor/SolarMonitor-v3.28.apk`,
+7.197.384 bytes, SHA-256 `91a71a2eb38d1e6ced6ad62b4d08bbb273412e257ab178b8889e4a2612d673a1`,
+Telegram mesaj **121**, SHA-256 descărcat înapoi identic. API reconstruit pe server.
+Sistemul rămâne strict **READ-ONLY**.

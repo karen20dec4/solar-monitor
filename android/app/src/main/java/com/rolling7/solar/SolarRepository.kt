@@ -38,6 +38,8 @@ data class HistorySeries(
     val unit: String,
     val chart: String,
     val range: String,
+    /** Fereastra de agregare a unui punct ("1m", "10m", "1h", "1d"). */
+    val window: String,
     val points: List<HistoryPoint>,
     val stats: HistoryStats?
 )
@@ -125,6 +127,7 @@ object SolarRepository {
                 unit = j.optString("unit", ""),
                 chart = j.optString("chart", "line"),
                 range = j.optString("range", range),
+                window = j.optString("window", ""),
                 points = points,
                 stats = stats
             )

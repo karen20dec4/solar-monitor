@@ -88,8 +88,17 @@ IndexError.
 
 ## Common commands
 
-There is **no test suite, linter, or CI** — this is a small operational stack. Iteration is via
-Docker and InfluxDB queries.
+There is **no linter or CI**, and the infrastructure itself is iterated via Docker and InfluxDB
+queries. Two unit-test suites do exist and must pass before a release:
+
+```bash
+# API (Flask is not on the host; the built API image has it)
+docker run --rm --network none -v /opt/solar-monitor/api:/src:ro -w /src --entrypoint python \
+  solar-monitor-api -m unittest
+# Android (pure Kotlin logic: energy page selection, axis ticks, readings)
+cd android && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ANDROID_HOME=/opt/android-sdk \
+  /opt/gradle-8.9/bin/gradle -q :app:testDebugUnitTest
+```
 
 ```bash
 # build + (re)start everything, or one service
@@ -143,8 +152,10 @@ the page content fits above the fixed photo navigation bar. Keep photographic ch
 live values, the gauge needle, LEDs, semantics and click targets must remain native Compose and dynamic.
 
 **Static labels are painted into the WebP, not rendered by Compose.** The tab names, the dial captions,
-the ENERGIE section titles — those are pixels. (Exception since v3.27: the ENERGIE range buttons are native
-plates with Compose labels laid over the painted `7d` / `30d`, one per entry in `RetroEnergyRanges`.) Changing the string in Kotlin
+the ENERGIE section titles — those are pixels. (Exceptions on ENERGIE since v3.28: the range buttons, the
+PUTERE/ENERGIE/TENSIUNE row, the status slot at the top and the line at the bottom are opaque native plates
+laid over old painted text — `7d`/`30d`, `PRODUCȚIE ZILNICĂ`, the old tabs, `Ultima actualizare: ACUM`.)
+Changing the string in Kotlin
 leaves the photo saying the old thing while the button does the new thing. Rule of thumb: if the text
 does not appear inside a `Text(...)` call, it is in the artwork and needs a repaint (ideally a fresh
 Photoshop export from the user). Coordinates and the check command are in `docs/DEZVOLTARE.md` §3.

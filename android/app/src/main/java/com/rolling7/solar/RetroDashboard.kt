@@ -19,6 +19,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -46,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -567,12 +569,12 @@ private fun RetroTemperatureTelemetryRow(
 @Composable
 internal fun RetroEnergyArtworkPage(
     data: SolarData?,
-    selectedTopSection: RetroEnergyTopSection,
     selectedField: String,
     selectedRange: String,
     chartTitle: String,
-    onTopSectionClick: (RetroEnergyTopSection) -> Unit,
-    onHistoryFieldClick: (String) -> Unit,
+    spanLabel: String,
+    stats: List<Pair<String, String>>,
+    onFieldClick: (String) -> Unit,
     onRangeClick: (String) -> Unit,
     chartContent: @Composable (Modifier) -> Unit
 ) {
@@ -584,15 +586,13 @@ internal fun RetroEnergyArtworkPage(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         RetroEnergyTopArtwork(
-            selectedSection = selectedTopSection,
-            onSectionClick = onTopSectionClick,
+            data = data,
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .aspectRatio(1_400f / 298f)
         )
         RetroEnergyTodayArtwork(
             data = data,
-            onHistoryFieldClick = onHistoryFieldClick,
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .aspectRatio(1_400f / 607f)
@@ -601,7 +601,9 @@ internal fun RetroEnergyArtworkPage(
             selectedField = selectedField,
             selectedRange = selectedRange,
             chartTitle = chartTitle,
-            onFieldClick = onHistoryFieldClick,
+            spanLabel = spanLabel,
+            stats = stats,
+            onFieldClick = onFieldClick,
             onRangeClick = onRangeClick,
             chartContent = chartContent,
             modifier = Modifier
@@ -611,12 +613,24 @@ internal fun RetroEnergyArtworkPage(
     }
 }
 
+/** Ora curenta, reimprospatata la o secunda - pentru "actualizat acum N s". */
+@Composable
+internal fun rememberNowMillis(): Long {
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            delay(1_000)
+            value = System.currentTimeMillis()
+        }
+    }
+    return now
+}
+
 @Composable
 private fun RetroEnergyTopArtwork(
-    selectedSection: RetroEnergyTopSection,
-    onSectionClick: (RetroEnergyTopSection) -> Unit,
+    data: SolarData?,
     modifier: Modifier = Modifier
 ) {
+    val freshness = energyFreshness(data?.timestamp, rememberNowMillis())
     BoxWithConstraints(modifier) {
         val scaleX = maxWidth / 1_400f
         val scaleY = maxHeight / 298f
@@ -626,36 +640,59 @@ private fun RetroEnergyTopArtwork(
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.FillBounds
         )
-        RetroEnergyTouchTarget(
-            description = "Productie",
-            selected = selectedSection == RetroEnergyTopSection.PRODUCTION,
-            accent = RetroSage,
-            dimWhenInactive = true,
+        // In fanta pictata stateau taburile PRODUCTIE / CONSUM / ISTORIC, care alegeau aceleasi
+        // grafice ca butoanele de jos (iar PRODUCTIE ramanea aprins, fiind pictat). Acum fanta e
+        // afisajul de stare al datelor live, langa LED.
+        RetroInsetReadout(
+            text = freshness.text,
+            color = if (freshness.stale) RetroRed else RetroSage,
+            dot = true,
             modifier = Modifier
-                .offset(x = scaleX * 62f, y = scaleY * 171f)
-                .width(scaleX * 377f)
-                .height(scaleY * 101f),
-            onClick = { onSectionClick(RetroEnergyTopSection.PRODUCTION) }
+                .offset(x = scaleX * 70f, y = scaleY * 180f)
+                .width(scaleX * 1_024f)
+                .height(scaleY * 90f)
+                .semantics { contentDescription = "Date live: ${freshness.text.lowercase()}" }
         )
-        RetroEnergyTouchTarget(
-            description = "Consum",
-            selected = selectedSection == RetroEnergyTopSection.CONSUMPTION,
-            accent = RetroHouseBlue,
-            modifier = Modifier
-                .offset(x = scaleX * 439f, y = scaleY * 171f)
-                .width(scaleX * 309f)
-                .height(scaleY * 101f),
-            onClick = { onSectionClick(RetroEnergyTopSection.CONSUMPTION) }
-        )
-        RetroEnergyTouchTarget(
-            description = "Istoric",
-            selected = selectedSection == RetroEnergyTopSection.HISTORY,
-            accent = RetroYellow,
-            modifier = Modifier
-                .offset(x = scaleX * 748f, y = scaleY * 171f)
-                .width(scaleX * 357f)
-                .height(scaleY * 101f),
-            onClick = { onSectionClick(RetroEnergyTopSection.HISTORY) }
+    }
+}
+
+/** Afisaj ingropat in sasiu: placa inchisa, opaca (acopera textul pictat de dedesubt), text mono. */
+@Composable
+private fun RetroInsetReadout(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+    dot: Boolean = false
+) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val radius = CornerRadius(4.dp.toPx())
+            drawRoundRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(Color(0xFF0E110B), Color(0xFF151810), Color(0xFF10130C))
+                ),
+                cornerRadius = radius
+            )
+            drawRoundRect(
+                color = Color.Black.copy(alpha = 0.55f),
+                cornerRadius = radius,
+                style = Stroke(width = 1.dp.toPx())
+            )
+            if (dot) {
+                val center = Offset(size.height * 0.62f, size.height / 2f)
+                drawCircle(color.copy(alpha = 0.25f), radius = size.height * 0.20f, center = center)
+                drawCircle(color, radius = size.height * 0.09f, center = center)
+            }
+        }
+        Text(
+            text = text,
+            color = color,
+            fontFamily = RetroMono,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.6.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -665,6 +702,8 @@ private fun RetroEnergyControlsArtwork(
     selectedField: String,
     selectedRange: String,
     chartTitle: String,
+    spanLabel: String,
+    stats: List<Pair<String, String>>,
     onFieldClick: (String) -> Unit,
     onRangeClick: (String) -> Unit,
     chartContent: @Composable (Modifier) -> Unit,
@@ -673,7 +712,9 @@ private fun RetroEnergyControlsArtwork(
     BoxWithConstraints(modifier) {
         val scaleX = maxWidth / 1_045f
         val scaleY = maxHeight / 1_292f
-        val selectedAccent = retroEnergyControlAccent(selectedField)
+        val subject = energySubjectForField(selectedField)
+        val mode = energyModeForField(selectedField)
+        val selectedAccent = retroEnergySubjectAccent(subject)
 
         Image(
             painter = painterResource(R.drawable.retro_energy_controls_chart_artwork),
@@ -682,60 +723,45 @@ private fun RetroEnergyControlsArtwork(
             contentScale = ContentScale.FillBounds
         )
 
-        RetroEnergyTouchTarget(
-            description = "Grafic Casa",
-            selected = selectedField == "output_power",
-            accent = RetroHouseBlue,
-            modifier = Modifier
-                .offset(x = scaleX * 55f, y = scaleY * 65f)
-                .width(scaleX * 295f)
-                .height(scaleY * 105f),
-            onClick = { onFieldClick("output_power") }
-        )
-        RetroEnergyTouchTarget(
-            description = "Grafic Panouri",
-            selected = selectedField == "pv_power",
-            accent = RetroSage,
-            modifier = Modifier
-                .offset(x = scaleX * 369f, y = scaleY * 65f)
-                .width(scaleX * 297f)
-                .height(scaleY * 105f),
-            onClick = { onFieldClick("pv_power") }
-        )
-        RetroEnergyTouchTarget(
-            description = "Grafic Baterie",
-            selected = selectedField == "battery_voltage",
-            accent = RetroYellow,
-            modifier = Modifier
-                .offset(x = scaleX * 688f, y = scaleY * 65f)
-                .width(scaleX * 302f)
-                .height(scaleY * 105f),
-            onClick = { onFieldClick("battery_voltage") }
-        )
-        RetroEnergyTouchTarget(
-            description = "Grafic Productie zilnica",
-            selected = selectedField == "energy_pv_today",
-            accent = RetroSage,
-            modifier = Modifier
-                .offset(x = scaleX * 71f, y = scaleY * 255f)
-                .width(scaleX * 454f)
-                .height(scaleY * 100f),
-            onClick = { onFieldClick("energy_pv_today") }
-        )
-        RetroEnergyTouchTarget(
-            description = "Grafic Consum zilnic",
-            selected = selectedField == "energy_load_today",
-            accent = RetroHouseBlue,
-            modifier = Modifier
-                .offset(x = scaleX * 525f, y = scaleY * 255f)
-                .width(scaleX * 451f)
-                .height(scaleY * 100f),
-            onClick = { onFieldClick("energy_load_today") }
-        )
-        // Rama pictata are doua butoane ("7d"/"30d" din fotografia veche); placile native le acopera
-        // si impart aceeasi latime (365..685) la cate intervale exista.
+        // 1. CE urmaresti: butoanele pictate CASA / PANOURI / BATERIE.
+        listOf(
+            Triple(EnergySubject.HOUSE, 55f, 295f),
+            Triple(EnergySubject.PANELS, 369f, 297f),
+            Triple(EnergySubject.BATTERY, 688f, 302f)
+        ).forEach { (option, x, width) ->
+            RetroEnergyTouchTarget(
+                description = "Grafic ${option.label.lowercase()}",
+                selected = option == subject,
+                accent = retroEnergySubjectAccent(option),
+                modifier = Modifier
+                    .offset(x = scaleX * x, y = scaleY * 65f)
+                    .width(scaleX * width)
+                    .height(scaleY * 105f),
+                onClick = { onFieldClick(energyFieldForSubject(option, selectedField)) }
+            )
+        }
+
+        // 2. CUM: placi native peste "PRODUCTIE ZILNICA / CONSUM ZILNIC" pictate. Ocupa doar
+        // interiorul ramei (82..967 x 263..345), ca rama de bronz sa ramana la vedere.
+        val modes = energyModesFor(subject)
+        val modeWidth = 885f / modes.size
+        modes.forEachIndexed { index, option ->
+            RetroEnergyTouchTarget(
+                description = "Mod ${option.label.lowercase()}",
+                selected = option == mode,
+                accent = selectedAccent,
+                labelText = "${option.label} · ${option.unit}",
+                modifier = Modifier
+                    .offset(x = scaleX * (82f + modeWidth * index), y = scaleY * 263f)
+                    .width(scaleX * modeWidth)
+                    .height(scaleY * 82f),
+                onClick = { onFieldClick(energyFieldFor(subject, option)) }
+            )
+        }
+
+        // 3. CAT timp: rama pictata are doua butoane ("7d"/"30d" din fotografia veche); placile
+        // native le acopera si impart aceeasi latime (365..685) la cate intervale exista.
         val ranges = retroEnergyRangesForField(selectedField)
-        val rangeLeft = 365f
         val rangeWidth = 320f / ranges.size
         ranges.forEachIndexed { index, range ->
             RetroEnergyTouchTarget(
@@ -744,7 +770,7 @@ private fun RetroEnergyControlsArtwork(
                 accent = selectedAccent,
                 labelText = range,
                 modifier = Modifier
-                    .offset(x = scaleX * (rangeLeft + rangeWidth * index), y = scaleY * 390f)
+                    .offset(x = scaleX * (365f + rangeWidth * index), y = scaleY * 390f)
                     .width(scaleX * rangeWidth)
                     .height(scaleY * 82f),
                 onClick = { onRangeClick(range) }
@@ -761,11 +787,7 @@ private fun RetroEnergyControlsArtwork(
             Canvas(Modifier.fillMaxSize()) {
                 drawRoundRect(
                     brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color(0xFF16180F).copy(alpha = 0.96f),
-                            Color(0xFF0C100A).copy(alpha = 0.98f),
-                            Color(0xFF15170E).copy(alpha = 0.96f)
-                        )
+                        colors = listOf(Color(0xFF16180F), Color(0xFF0C100A), Color(0xFF15170E))
                     ),
                     cornerRadius = CornerRadius(3.dp.toPx())
                 )
@@ -787,8 +809,76 @@ private fun RetroEnergyControlsArtwork(
             Modifier
                 .offset(x = scaleX * 79f, y = scaleY * 603f)
                 .width(scaleX * 887f)
-                .height(scaleY * 535f)
+                .height(scaleY * 410f)
         )
+
+        // Cifrele intervalului, in partea de jos a panoului graficului.
+        RetroEnergyStatsRow(
+            stats = stats,
+            accent = selectedAccent,
+            modifier = Modifier
+                .offset(x = scaleX * 100f, y = scaleY * 1_018f)
+                .width(scaleX * 845f)
+                .height(scaleY * 112f)
+        )
+
+        // Peste "Ultima actualizare: ACUM" pictat (scria ACUM si cu date vechi): de cand pornesc
+        // datele si ce reprezinta un punct. Prospetimea datelor e sus, langa LED.
+        RetroInsetReadout(
+            text = spanLabel,
+            color = RetroMuted,
+            modifier = Modifier
+                .offset(x = scaleX * 66f, y = scaleY * 1_178f)
+                .width(scaleX * 913f)
+                .height(scaleY * 60f)
+        )
+    }
+}
+
+@Composable
+private fun RetroEnergyStatsRow(
+    stats: List<Pair<String, String>>,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        stats.forEachIndexed { index, (label, value) ->
+            if (index > 0) {
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .fillMaxHeight(0.62f)
+                        .background(RetroOlive.copy(alpha = 0.38f))
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = label,
+                    color = RetroMuted,
+                    fontFamily = RetroMono,
+                    fontSize = 7.sp,
+                    lineHeight = 9.sp,
+                    letterSpacing = 0.8.sp,
+                    maxLines = 1
+                )
+                Text(
+                    text = value,
+                    color = accent,
+                    fontFamily = RetroMono,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+        }
     }
 }
 
@@ -799,7 +889,6 @@ private fun RetroEnergyTouchTarget(
     accent: Color,
     modifier: Modifier,
     labelText: String? = null,
-    dimWhenInactive: Boolean = false,
     onClick: () -> Unit
 ) {
     Box(
@@ -813,12 +902,9 @@ private fun RetroEnergyTouchTarget(
         if (labelText != null) {
             Canvas(Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp))) {
                 drawRoundRect(
+                    // Opac: dedesubt sunt etichete pictate vechi ("7d"/"30d", "PRODUCTIE ZILNICA").
                     brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color(0xFF22251A).copy(alpha = 0.95f),
-                            Color(0xFF14170E).copy(alpha = 0.98f),
-                            Color(0xFF1B1E14).copy(alpha = 0.95f)
-                        )
+                        colors = listOf(Color(0xFF22251A), Color(0xFF14170E), Color(0xFF1B1E14))
                     ),
                     cornerRadius = CornerRadius(6.dp.toPx())
                 )
@@ -855,54 +941,45 @@ private fun RetroEnergyTouchTarget(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
             )
-        } else if ((dimWhenInactive && !selected) || selected) {
+        } else if (selected) {
             Canvas(Modifier.fillMaxSize().clip(RoundedCornerShape(7.dp))) {
-                if (dimWhenInactive && !selected) {
-                    drawRoundRect(
-                        color = Color.Black.copy(alpha = 0.38f),
-                        cornerRadius = CornerRadius(7.dp.toPx())
-                    )
-                }
-                if (selected) {
-                    drawRoundRect(
-                        color = accent.copy(alpha = 0.075f),
-                        cornerRadius = CornerRadius(7.dp.toPx())
-                    )
-                    drawRoundRect(
-                        color = accent.copy(alpha = 0.42f),
-                        cornerRadius = CornerRadius(7.dp.toPx()),
-                        style = Stroke(width = 1.dp.toPx())
-                    )
-                    drawLine(
-                        color = accent.copy(alpha = 0.20f),
-                        start = Offset(size.width * 0.18f, size.height * 0.88f),
-                        end = Offset(size.width * 0.82f, size.height * 0.88f),
-                        strokeWidth = 6.dp.toPx(),
-                        cap = StrokeCap.Round
-                    )
-                    drawLine(
-                        color = accent,
-                        start = Offset(size.width * 0.22f, size.height * 0.88f),
-                        end = Offset(size.width * 0.78f, size.height * 0.88f),
-                        strokeWidth = 1.25.dp.toPx(),
-                        cap = StrokeCap.Round
-                    )
-                }
+                drawRoundRect(
+                    color = accent.copy(alpha = 0.075f),
+                    cornerRadius = CornerRadius(7.dp.toPx())
+                )
+                drawRoundRect(
+                    color = accent.copy(alpha = 0.42f),
+                    cornerRadius = CornerRadius(7.dp.toPx()),
+                    style = Stroke(width = 1.dp.toPx())
+                )
+                drawLine(
+                    color = accent.copy(alpha = 0.20f),
+                    start = Offset(size.width * 0.18f, size.height * 0.88f),
+                    end = Offset(size.width * 0.82f, size.height * 0.88f),
+                    strokeWidth = 6.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = accent,
+                    start = Offset(size.width * 0.22f, size.height * 0.88f),
+                    end = Offset(size.width * 0.78f, size.height * 0.88f),
+                    strokeWidth = 1.25.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
             }
         }
     }
 }
 
-private fun retroEnergyControlAccent(field: String): Color = when (field) {
-    "output_power", "energy_load_today" -> RetroHouseBlue
-    "battery_voltage" -> RetroYellow
-    else -> RetroSage
+private fun retroEnergySubjectAccent(subject: EnergySubject): Color = when (subject) {
+    EnergySubject.HOUSE -> RetroHouseBlue
+    EnergySubject.PANELS -> RetroSage
+    EnergySubject.BATTERY -> RetroYellow
 }
 
 @Composable
 private fun RetroEnergyTodayArtwork(
     data: SolarData?,
-    onHistoryFieldClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier) {
@@ -920,8 +997,7 @@ private fun RetroEnergyTodayArtwork(
             modifier = Modifier
                 .offset(x = scale * 112f, y = scale * 278f)
                 .width(scale * 528f)
-                .height(scale * 201f)
-                .clickable { onHistoryFieldClick("energy_pv_today") },
+                .height(scale * 201f),
             embedded = true,
             description = "Energie produsa astazi ${retroDecimal(data?.energyPvToday)} kWh"
         )
@@ -932,8 +1008,7 @@ private fun RetroEnergyTodayArtwork(
             modifier = Modifier
                 .offset(x = scale * 766f, y = scale * 278f)
                 .width(scale * 528f)
-                .height(scale * 201f)
-                .clickable { onHistoryFieldClick("energy_load_today") },
+                .height(scale * 201f),
             embedded = true,
             description = "Energie consumata astazi ${retroDecimal(data?.energyLoadToday)} kWh"
         )

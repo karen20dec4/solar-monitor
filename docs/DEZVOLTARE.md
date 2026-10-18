@@ -45,7 +45,13 @@ va exista dar va da mereu eroare.
 | Interval cerut | Bucket | De ce |
 |---|---|---|
 | ≤ 6 ore | `live` | are rezoluție 1 s, dar reține doar 48 h |
-| `2h` energie (kWh) | `live` | integrala puterii pe ferestre de 10 min (`integral_of` în `HISTORY_FIELDS`); contoarele au pas de 0,1 kWh, prea grosier |
+| `2h` / `1d` energie (kWh) | `live` | integrala puterii pe ferestre de 10 min / 1 h (`integral_of` în `HISTORY_FIELDS`); contoarele au pas de 0,1 kWh și se resetează la 23:51 |
+| `7d` energie (kWh) | `history` | maximul zilnic al contorului, ferestre aliniate la miezul nopții: exact 7 bare, inclusiv azi |
+
+Barele poartă ora de **început** a ferestrei (`timeSrc: "_start"`), iar intervalul lor e aliniat la
+fereastră. Pentru liniile de putere/tensiune, statisticile (min/max/medie/ultima) vin din datele
+brute (`_exact_stats_query`, `stats_bucket`), nu din punctele graficului: la `1d` vârful mediilor
+orare ascundea vârful real.
 | ≥ 24 ore | `history` | medii pe 60 s, reține 31 zile |
 | > 31 zile | **imposibil** | datele nu mai există; nu inventa un interval mai lung |
 
@@ -218,7 +224,11 @@ Apoi §4 (Release) și §5 (Telegram).
 Din v3.27 ele sunt acoperite de **plăci native** (`RetroEnergyTouchTarget` cu `labelText`),
 care împart lățimea ramei (365..685 în spațiul logic) la câte intervale are
 `RetroEnergyRanges` — acum trei: `2h`, `1d`, `7d`. Textul vizibil vine deci din Kotlin;
-pixelii vechi rămân doar sub plăci. Restul etichetelor de pe șasiu sunt în continuare pixeli.
+pixelii vechi rămân doar sub plăci. Din v3.28 la fel sunt acoperite rândul „PRODUCȚIE ZILNICĂ /
+CONSUM ZILNIC" (acum PUTERE · W / ENERGIE · kWh, sau TENSIUNE · V la baterie), fanta vechilor
+taburi PRODUCȚIE / CONSUM / ISTORIC (acum starea datelor live) și „Ultima actualizare: ACUM" de
+jos (acum de când pornesc datele și ce reprezintă un punct). Restul etichetelor de pe șasiu sunt
+în continuare pixeli.
 
 Asset: `android/app/src/main/res/drawable-nodpi/retro_energy_controls_chart_artwork.webp`
 — **1024 × 1266 px**, desenat în spațiul logic 1045 × 1292 folosit de Compose
