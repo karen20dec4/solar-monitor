@@ -271,24 +271,23 @@ cd /opt/solar-monitor
 ```
 
 Subcomenzi: `doctor`, `start`, `wait`, `build`, `install`, `launch`, `screenshot`,
-`retro-tabs`, `status`, `stop`.
+`retro-tabs`, `profile`, `layout-check`, `pinch`, `status`, `stop`.
 
 - SDK `/opt/android-sdk`, emulator 36.6.11, platform-tools 37.0.0
 - AVD `SolarMonitor_API_34` (Pixel 6, Android 14 / API 34, x86_64, 1080×2400)
 - Renderer headless stabil: **`swangle`**. Nu folosi `swiftshader_indirect` — pe gazda asta
   a omorât repetat emulatorul cu `SIGSEGV`.
 - Artefactele (PNG, ierarhie UI, logcat) merg în `android/build/emulator-artifacts/` (gitignored).
-- ⚠️ **AVD-ul implicit NU e telefonul utilizatorului.** Pixel 6 = 393×873 dp; telefonul real e un
-  **Samsung Note 9, 1440×2960 la densitate 560 = 411×846 dp**, adică 27 dp mai scurt. Un layout
-  care încape pe Pixel 6 poate fi tăiat pe telefon — s-a întâmplat deja (vezi
-  `COPILOT_CONTEXT.md` §13.56). Verifică **ambele** profile:
-  ```bash
-  ADB=/opt/android-sdk/platform-tools/adb
-  $ADB shell wm size 1440x2960 && $ADB shell wm density 560   # profilul Note 9
-  $ADB shell wm size reset     && $ADB shell wm density reset # inapoi la Pixel 6
-  ```
-  Readu întotdeauna profilul implicit la final. Și mai bine: fă layout-ul adaptiv (`weight`,
-  `BoxWithConstraints`) în loc să calibrezi înălțimi fixe pe un singur ecran.
+- ⚠️ **AVD-ul brut NU e telefonul utilizatorului.** Telefonul e un **Samsung Galaxy Note 9**: 1080×2220,
+  420 dpi, butoane de navigare Android (48 dp), font de sistem ~130%. Pixel 6 are bara de stare mai înaltă
+  (45 dp față de ~25 dp) și navigare prin gesturi, deci pe el layout-ul are cu 20–45 dp *mai mult* loc.
+  De aceea `emulator-check.sh verify` și `layout-check` aplică **singure** profilul `note9-large`
+  (1080×2272, 420 dpi, butoane, font 130% — zona utilă a aplicației iese ~2028 px, ca pe telefon);
+  `SOLAR_EMULATOR_PROFILE=none` îl sare, `profile note9|reset` îl schimbă. Utilizatorul va trece
+  ulterior pe un Samsung S22 FE și va anunța și trimite o captură: atunci se adaugă profilul lui.
+  `profile reset` la final (suprascrierile rămân în datele AVD). Vezi `COPILOT_CONTEXT.md` §13.56, §13.66.
+  Zoom-ul cu două degete se verifică cu `emulator-check.sh pinch` (`zoom-held.png` mărit,
+  `zoom-after.png` revenit).
 - **La finalul oricărei sarcini cu emulatorul rulează `stop`** și verifică oprirea. AVD-ul
   idle mănâncă mai multe nuclee CPU și ~5 GB RAM.
 
@@ -355,6 +354,10 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   (`AlarmSettings.batteryEnabled`, implicit oprit); `SolarAlarmService` rulează cât timp e pornită oricare
   alarmă, interoghează `/bms` la 4 s și sună (același sunet/vibrație/cooldown ca la consum) o singură dată
   per alarmă cu `prio` urgent/high (`BmsAlarmTracker`). Pragurile sunt pe server, nu în aplicație.
+- Zoom elastic (v3.31): `ElasticZoom.kt` înfășoară tot tabloul de bord. Cu două degete aplicația se mărește
+  (până la ~3×, limită moale) și se mută odată cu degetele; la ridicarea degetelor revine singură, cu un mic
+  resort, la mărimea inițială — nu rămâne nimic mărit. Un deget singur trece neschimbat (atingeri, glisare între
+  taburi); gestul cu două degete e consumat în pasul Initial, deci butoanele și glisarea nu se declanșează.
 - Teste (fără Bluetooth): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
   Citire unică pentru depanare: `python3 -I bms/jk_bms_reader.py --once` (oprește întâi
   serviciul). Jurnal: `journalctl -u solar-bms`.

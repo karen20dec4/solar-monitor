@@ -148,7 +148,10 @@ Run the complete build/install/render/crash check with:
 ```
 
 Useful subcommands are `doctor`, `start`, `wait`, `build`, `install`, `launch`, `screenshot`, `retro-tabs`,
-`status` and `stop`. `retro-tabs` captures all four Retro pages and rejects accidental scrolling. The
+`profile`, `layout-check`, `pinch`, `status` and `stop`. `verify` and `layout-check` apply the user's phone profile
+(`note9-large`: Galaxy Note 9, 1080×2220, 420 dpi, three-button navigation, font 130%) by themselves;
+`SOLAR_EMULATOR_PROFILE=none` skips it. The user will move to a Samsung S22 FE later and will send a screenshot.
+`pinch` checks the two-finger zoom. `retro-tabs` captures all four Retro pages and rejects accidental scrolling. The
 emulator is intentionally started on demand rather than as a boot service. A successful Gradle build is
 not enough for UI work: inspect the captured PNG after `verify`.
 
@@ -267,6 +270,9 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   BATERIE" with its own toggle (`AlarmSettings.batteryEnabled`, default off); `SolarAlarmService` runs while
   either alarm is on, polls `/bms` every 4 s and rings (same sound/vibration/cooldown as the consumption
   alarm) once per alarm with `prio` urgent/high (`BmsAlarmTracker`). Thresholds live on the server, not in the app.
+- Elastic zoom (v3.31): `ElasticZoom.kt` wraps the whole dashboard. Two fingers magnify it (up to ~3×, soft limit) and
+  pan it; when the fingers lift it springs back to the original size, nothing is kept. One finger is untouched (taps,
+  tab swipes); the two-finger gesture is consumed in the Initial pass so buttons and swipes do not fire.
 - Tests (no Bluetooth needed): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
   One-shot read for debugging: `python3 -I bms/jk_bms_reader.py --once` (stop the service first).
   Logs: `journalctl -u solar-bms`.

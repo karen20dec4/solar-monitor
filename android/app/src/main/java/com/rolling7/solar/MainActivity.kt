@@ -403,41 +403,44 @@ fun App() {
             )
         }
 
-        when (dashboardStyle) {
-            DashboardStyle.RETRO -> RetroDashboard(
-                data = data,
-                bms = bms,
-                alarmThresholdW = alarmSettings.thresholdW,
-                selectedTab = RetroTab.valueOf(retroTabName),
-                onTabSelected = { tab -> retroTabName = tab.name },
-                onEnergyFieldClick = { field ->
-                    selectedEnergyField = field
-                    retroTabName = RetroTab.ENERGY.name
-                },
-                energyContent = {
-                    RetroEnergyPage(
-                        data = data,
-                        selectedField = normalizedEnergyField(selectedEnergyField),
-                        selectedRange = normalizedRetroEnergyRange(energyRange),
-                        onFieldSelected = { selectedEnergyField = it },
-                        onRangeSelected = { energyRange = it }
-                    )
-                },
-                settingsContent = simpleSettingsContent
-            )
-            DashboardStyle.SIMPLE -> SimpleDashboard(
-                data = data,
-                bms = bms,
-                selectedTab = RetroTab.valueOf(retroTabName),
-                onTabSelected = { tab -> retroTabName = tab.name },
-                onHistoryFieldClick = {
-                    selectedEnergyField = it.field
-                    retroTabName = RetroTab.ENERGY.name
-                },
-                energyContent = simpleEnergyContent,
-                systemContent = simpleSystemContent,
-                settingsContent = simpleSettingsContent
-            )
+        // Zoom elastic cu doua degete peste toata aplicatia; la ridicarea degetelor revine la marimea initiala.
+        ElasticZoom(Modifier.fillMaxSize(), backgroundColor = chrome.background) {
+            when (dashboardStyle) {
+                DashboardStyle.RETRO -> RetroDashboard(
+                    data = data,
+                    bms = bms,
+                    alarmThresholdW = alarmSettings.thresholdW,
+                    selectedTab = RetroTab.valueOf(retroTabName),
+                    onTabSelected = { tab -> retroTabName = tab.name },
+                    onEnergyFieldClick = { field ->
+                        selectedEnergyField = field
+                        retroTabName = RetroTab.ENERGY.name
+                    },
+                    energyContent = {
+                        RetroEnergyPage(
+                            data = data,
+                            selectedField = normalizedEnergyField(selectedEnergyField),
+                            selectedRange = normalizedRetroEnergyRange(energyRange),
+                            onFieldSelected = { selectedEnergyField = it },
+                            onRangeSelected = { energyRange = it }
+                        )
+                    },
+                    settingsContent = simpleSettingsContent
+                )
+                DashboardStyle.SIMPLE -> SimpleDashboard(
+                    data = data,
+                    bms = bms,
+                    selectedTab = RetroTab.valueOf(retroTabName),
+                    onTabSelected = { tab -> retroTabName = tab.name },
+                    onHistoryFieldClick = {
+                        selectedEnergyField = it.field
+                        retroTabName = RetroTab.ENERGY.name
+                    },
+                    energyContent = simpleEnergyContent,
+                    systemContent = simpleSystemContent,
+                    settingsContent = simpleSettingsContent
+                )
+            }
         }
 
         if (alarmRinging) {

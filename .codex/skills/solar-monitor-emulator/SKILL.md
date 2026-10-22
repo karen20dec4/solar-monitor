@@ -47,6 +47,7 @@ $SCRIPT screenshot
 $SCRIPT retro-tabs
 $SCRIPT profile note9-large   # sau note9 / reset
 $SCRIPT layout-check
+$SCRIPT pinch                  # zoom elastic cu doua degete (needs adb root)
 $SCRIPT status
 $SCRIPT stop
 ```
@@ -83,6 +84,13 @@ their uiautomator bounds, so it also works with three-button navigation) and `ch
 the TABLOU BMS strip overlaps the Bat/Inv plates or the navigation bar, the SISTEM BMS monitor leaves its panel,
 or the SETARI "Alarma baterie" row overlaps the alarm card or the navigation bar. Run it on `note9-large`,
 `note9` and `reset` for any change to the Retro pages.
+
+`verify` and `layout-check` apply `note9-large` by themselves (`SOLAR_EMULATOR_PROFILE=none` skips it): the user
+said to keep testing on this profile until they move to a Samsung S22 FE, and they will send a screenshot then.
+
+`pinch` tests the app-wide two-finger elastic zoom (`ElasticZoom.kt`): it needs `adb root` (done by the command), holds
+two fingers down with `sendevent` (`pinch.py hold CX CY D0 D1`), saves `zoom-held.png` (magnified), lifts them and
+saves `zoom-after.png` 2.5 s later (back to normal size). `pinch.py release` lifts the fingers by hand.
 
 Playwright does not apply here: the app is native Compose, not a web page. The end-to-end check is the real app
 in the emulator against the real API, with the UI hierarchy asserted by `layout-check` and the PNGs inspected.

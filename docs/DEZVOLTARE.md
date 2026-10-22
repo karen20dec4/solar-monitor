@@ -200,19 +200,15 @@ Vezi §3 de mai jos. **Fără el, butonul va scrie „7d" și va cere `1d`.**
 .codex/skills/solar-monitor-emulator/scripts/emulator-check.sh stop
 ```
 
-⚠️ **Verifică pe două profile de ecran, nu doar pe AVD.** Pixel 6 = 393×873 dp, dar telefonul
-utilizatorului e un **Samsung Note 9 = 411×846 dp**, cu 27 dp mai scurt. Un layout care încape pe
-emulator poate fi tăiat pe telefon — exact ce s-a întâmplat cu rândul de citiri gravate de pe
-TABLOU (`COPILOT_CONTEXT.md` §13.56):
+⚠️ **Testează pe telefonul utilizatorului, nu pe AVD-ul brut.** Telefonul e un Samsung Galaxy Note 9:
+1080×2220, 420 dpi, butoane de navigare (48 dp), font ~130%. Pixel 6 are bara de stare de 45 dp și gesturi, deci
+un layout care încape pe el poate fi tăiat pe telefon (`COPILOT_CONTEXT.md` §13.56, §13.66). `verify` și
+`layout-check` aplică singure profilul `note9-large` (`SOLAR_EMULATOR_PROFILE=none` îl sare); mai sunt
+`profile note9|note9-large|reset`. Utilizatorul trece mai târziu pe un Samsung S22 FE și va trimite o captură —
+atunci se adaugă profilul lui.
 
-```bash
-ADB=/opt/android-sdk/platform-tools/adb
-$ADB shell wm size 1440x2960 && $ADB shell wm density 560   # profilul Note 9
-$ADB shell wm size reset     && $ADB shell wm density reset # inapoi la Pixel 6
-```
-
-Readu profilul implicit la final. Soluția durabilă nu e calibrarea de `dp` pe un singur ecran, ci
-layout adaptiv cu `weight` și `BoxWithConstraints`.
+Readu profilul implicit la final (`profile reset`). Soluția durabilă nu e calibrarea de `dp` pe un singur ecran,
+ci layout adaptiv cu `weight` și `BoxWithConstraints`.
 
 Apoi §4 (Release) și §5 (Telegram).
 
@@ -398,8 +394,8 @@ scripts/send-android-release-telegram.sh --dry-run
 4. Commit cu mesaj în stil conventional commits (`feat(android):`, `fix(api):`, `docs:`),
    corpul în română.
 5. `git push`.
-5b. Pentru orice modificare a paginilor Retro: `emulator-check.sh profile note9-large` apoi `layout-check`
-   (și pe `note9`, `reset`) — telefonul utilizatorului e un Note 9 (1080×2220, butoane de navigare, font
+5b. Pentru orice modificare a paginilor Retro: `emulator-check.sh layout-check` (aplică singur `note9-large`;
+   la nevoie și pe `note9`, `reset`) — telefonul utilizatorului e un Note 9 (1080×2220, butoane de navigare, font
    ~130%), nu Pixel 6; vezi `.codex/skills/solar-monitor-emulator/SKILL.md`. La final `profile reset`.
 6. Dacă ai folosit emulatorul: `emulator-check.sh stop` și confirmă că
    `solar-monitor-emulator.service` e inactiv și nu mai există proces `qemu-system-x86`.

@@ -9,6 +9,9 @@ EMULATOR="$SDK_ROOT/emulator/emulator"
 AVD_NAME="${SOLAR_AVD_NAME:-SolarMonitor_API_34}"
 GPU_MODE="${SOLAR_EMULATOR_GPU:-swangle}"
 SYSTEMD_UNIT="${SOLAR_EMULATOR_SYSTEMD_UNIT:-solar-monitor-emulator}"
+# Profilul de ecran pe care se testeaza implicit: telefonul utilizatorului (Galaxy Note 9, font 130%).
+# `none` il sare (ecranul AVD-ului ramane cum e). Se schimba cand utilizatorul trece pe alt telefon.
+DEFAULT_PROFILE="${SOLAR_EMULATOR_PROFILE:-note9-large}"
 PACKAGE="com.rolling7.solar"
 ACTIVITY="$PACKAGE/.MainActivity"
 APK="$REPO_ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
@@ -17,7 +20,7 @@ EMULATOR_LOG="$ARTIFACT_DIR/emulator.log"
 
 usage() {
     printf '%s\n' \
-        "Usage: $0 doctor|start|wait|build|install|launch|screenshot|retro-tabs|profile|layout-check|status|verify|stop [arg]" \
+        "Usage: $0 doctor|start|wait|build|install|launch|screenshot|retro-tabs|profile|layout-check|pinch|status|verify|stop [arg]" \
         "" \
         "  doctor      Verify SDK, emulator, KVM and AVD prerequisites" \
         "  start       Start the configured AVD headlessly" \
@@ -27,10 +30,13 @@ usage() {
         "  launch      Force-stop and launch Solar Monitor" \
         "  screenshot  Save a PNG and UI hierarchy under android/build" \
         "  retro-tabs  Capture and validate all four fixed Retro tabs" \
+        "  (verify si layout-check aplica singure profilul SOLAR_EMULATOR_PROFILE, implicit note9-large; none = nu)" \
         "  profile     note9|note9-large|reset: ecranul telefonului utilizatorului (1080x2220, 420 dpi," \
         "              butoane de navigare Android, font 100% / 130%) sau ecranul implicit al AVD-ului" \
         "  layout-check  retro-tabs + verifica ca banda BMS, monitorul BMS si randul Alarma baterie" \
         "              nu se suprapun si nu intra in bara de navigare (check-layout.py)" \
+        "  pinch       Ciupire cu doua degete (zoom elastic): tine degetele jos, face captura zoom-held.png" \
+        "              le ridica si dupa 2,5 s face zoom-after.png (trebuie sa fie la marimea initiala)" \
         "  status      Show AVD, adb, Android, app and saved-theme status" \
         "  verify      Run doctor, start, wait, build, install, launch and capture" \
         "  stop        Shut down the running emulator"
@@ -263,8 +269,15 @@ set_profile() {
     printf '\n'
 }
 
+apply_default_profile() {
+    if [[ "$DEFAULT_PROFILE" != "none" ]]; then
+        set_profile "$DEFAULT_PROFILE"
+    fi
+}
+
 layout_check() {
     local label
+    apply_default_profile
     capture_retro_tabs
     for label in TABLOU SISTEM SETARI; do
         local center x y
@@ -275,6 +288,20 @@ layout_check() {
         capture_screen "$ARTIFACT_DIR/layout-${label,,}.png" >/dev/null
         python3 "$SCRIPT_DIR/check-layout.py" "$LAST_HIERARCHY" "$label"
     done
+}
+
+pinch_check() {
+    local serial
+    serial="$(require_online_serial)"
+    "$ADB" -s "$serial" root >/dev/null 2>&1 || true   # sendevent cere root (imaginea Google APIs il permite)
+    sleep 3
+    python3 "$SCRIPT_DIR/pinch.py" hold 540 1200 200 700
+    sleep 1
+    capture_screen "$ARTIFACT_DIR/zoom-held.png" >/dev/null
+    python3 "$SCRIPT_DIR/pinch.py" release
+    sleep 2.5
+    capture_screen "$ARTIFACT_DIR/zoom-after.png" >/dev/null
+    printf 'Zoom elastic: vezi zoom-held.png (marit) si zoom-after.png (revenit) in %s.\n' "$ARTIFACT_DIR"
 }
 
 show_status() {
@@ -318,6 +345,7 @@ verify_all() {
     wait_for_boot
     build_app
     install_app
+    apply_default_profile
     local serial
     serial="$(require_online_serial)"
     "$ADB" -s "$serial" logcat -c
@@ -348,6 +376,7 @@ case "$command" in
     retro-tabs) capture_retro_tabs ;;
     profile) set_profile "${2:-}" ;;
     layout-check) layout_check ;;
+    pinch) pinch_check ;;
     status) doctor; show_status ;;
     verify) verify_all "${2:-}" ;;
     stop) stop_emulator ;;

@@ -1735,3 +1735,37 @@ Pe TABLOU rămân ~22 dp între FLUX și placa Bat (erau ~43 dp): strâns, dar f
 SHA-256 `2f8263a1dfa8796436dcdd7ee71665be10201a014728aad604929866b64e2a5d`, Telegram mesaj **126** (SHA descărcat
 identic), capturi 127–131. Fără rebuild de server în plus față de §13.65 (API-ul cu `/bms` era deja pe server).
 Sistemul rămâne strict **READ-ONLY**.
+
+### 13.67 Zoom elastic cu două degete, temperatura invertorului mai vizibilă, profil Note 9 implicit, release v3.31 (2026-10-22)
+
+**Cerere.** Utilizatorul a instalat v3.30 pe Note 9 și a confirmat că se potrivește exact; profilul `note9-large` rămâne
+profilul de test până trece pe un Samsung S22 FE (va anunța și va trimite o captură). Temperatura invertorului („29°C"
+sub „Inv") abia se vedea: font mai mare și mai intens. Zoom elastic cu două degete pe toată aplicația; la ridicarea
+degetelor revine la mărimea inițială. Release pe Telegram.
+
+**Ce s-a făcut (aplicația, v3.31 / 35).**
+- `ElasticZoom.kt` (nou): înfășoară `RetroDashboard`/`SimpleDashboard` în `App()` (alarma rămâne deasupra, nemărită).
+  `pointerInput` în pasul **Initial**: un deget trece neschimbat spre conținut; de la două degete în jos gestul e
+  al zoom-ului (`calculateZoom` + `calculatePan`, modificările consumate → butoanele/glisarea între taburi primesc
+  anulare și nu se declanșează). Scara afișată = `elasticScale(raw)`: ~1:1 aproape de 1×, apoi `tanh` spre
+  `ElasticZoomMax = 3×` (limită moale); sub 1× cedează doar un sfert. La ridicare (sub două degete) → `animate`
+  spring (damping 0,72, `StiffnessMediumLow`) înapoi la 1× și pan 0. Degetul rămas după zoom nu mai acționează până
+  nu se ridică tot. O prindere nouă în timpul revenirii păstrează pivotul și pornește de la scara curentă
+  (`elasticRawFor`). Randare: `graphicsLayer` (vectori/text redesenați la scara nouă, rămân clari). 5 teste noi
+  (`ElasticZoomTest`), 40 în total.
+- Temperatura invertorului pe TABLOU: 6 sp / alfa 0,62 → **10 sp, ExtraBold, alfa 1** (încape între „Inv" și cifrele
+  VFD și la fontul 130%).
+
+**Unelte.** `emulator-check.sh`: `verify` și `layout-check` aplică singure profilul `SOLAR_EMULATOR_PROFILE`
+(implicit `note9-large`, `none` îl sare); subcomanda nouă `pinch` (+ `pinch.py`, `sendevent` pe
+`/dev/input/event2`, cere `adb root`, imaginea Google APIs îl permite) ține două degete jos, face `zoom-held.png`,
+le ridică și face `zoom-after.png` la 2,5 s. Documentat în SKILL.md, CLAUDE.md, GEMINI.md, DEZVOLTARE.md (textele
+vechi despre profilul 1440×2960 erau perimate și au fost înlocuite).
+
+**Verificare (note9-large).** Pinch real în emulator: ~2,5× cu degetele jos, la 0,25 s după ridicare scara e încă
+în revenire, la 2,5 s e identic cu cea inițială; atingerile pe taburi funcționează după zoom; `layout-check`
+TABLOU/SISTEM/SETARI ok; fără `FATAL EXCEPTION`.
+
+**Release.** `versionCode` 35, `versionName` 3.31, `/opt/solar-monitor/SolarMonitor-v3.31.apk`, 7.173.607 bytes,
+SHA-256 `aecf41aad52b3433767c9ec4e42449ee52eebe53b79e9da4fd42d20ca1e0e14a`, Telegram mesaj **132** (SHA descărcat
+identic), capturi 133–136. Fără rebuild de server. Sistemul rămâne strict **READ-ONLY**.

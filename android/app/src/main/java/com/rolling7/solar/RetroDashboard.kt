@@ -501,11 +501,11 @@ private fun RetroCompactTelemetryDial(
                     .align(Alignment.CenterStart)
                     .offset(x = maxWidth * 0.085f, y = maxHeight * 0.20f)
                     .offset { IntOffset(x = 20, y = -20) },
-                color = RetroSage.copy(alpha = 0.62f),
+                color = RetroSage,
                 fontFamily = RetroMono,
-                fontSize = 6.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.2.sp,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.sp,
                 maxLines = 1
             )
         }
