@@ -253,7 +253,10 @@ Două teme, comutabile din SETĂRI, alegerea persistată de `DashboardStyleStore
    sunt plăci native opace peste text pictat vechi („7d"/„30d", „PRODUCȚIE ZILNICĂ", „Ultima
    actualizare: ACUM"). Din v3.29 fanta vechilor taburi de sus e scoasă din asset (petic
    ImageMagick, `scripts/patch-retro-energy-top.py`), iar LED-ul verde pictat primește o
-   suprapunere recolorată portocaliu/roșu când datele live întârzie. Dacă schimbi valoarea din Kotlin,
+   suprapunere recolorată portocaliu/roșu când datele live întârzie. Din v3.30 placa temperaturii de pe
+   TABLOU nu mai e folosită ca atare: `scripts/make-retro-blank-dial.py` îi șterge „°C"-ul pictat și face
+   `retro_dashboard_dial_blank.webp`, pe care Compose scrie unitățile (%, A, mV) ale citirilor BMS.
+   Dacă schimbi valoarea din Kotlin,
    trebuie să repictezi și asset-ul, altfel butonul scrie una și face alta. **Vezi
    `docs/DEZVOLTARE.md` §„Capcana etichetelor din poze".**
 4. **Un build Gradle reușit nu e dovadă vizuală.** Rulează emulatorul și **uită-te la PNG**.
@@ -344,6 +347,14 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
 - Serviciul se oprește curat (`systemctl stop solar-bms` deconectează BMS-ul). Un BMS rămas „conectat"
   după un proces ucis nu mai face reclamă; cititorul se conectează atunci direct după adresă, iar
   `bluetoothctl disconnect <adresa>` îl eliberează manual.
+- Aplicația (v3.30, temele Retro și Simple): `GET /solar/bms` se interoghează la 2 s
+  (`SolarRepository.fetchBms`, parser în `BmsModel.kt`). TABLOU: bandă BMS (SOC, curent, diferența dintre
+  celule + LED de stare) sub Bat/Inv, atingerea duce pe SISTEM; placa „Temperatura" a dispărut, iar
+  temperatura invertorului e un „29°C" mic sub „Inv". SISTEM: `RetroBmsMonitor` ia locul fostei console
+  (bare pe celule + cifre). SETARI: rând nativ „ALARMĂ BATERIE" cu întrerupător propriu
+  (`AlarmSettings.batteryEnabled`, implicit oprit); `SolarAlarmService` rulează cât timp e pornită oricare
+  alarmă, interoghează `/bms` la 4 s și sună (același sunet/vibrație/cooldown ca la consum) o singură dată
+  per alarmă cu `prio` urgent/high (`BmsAlarmTracker`). Pragurile sunt pe server, nu în aplicație.
 - Teste (fără Bluetooth): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
   Citire unică pentru depanare: `python3 -I bms/jk_bms_reader.py --once` (oprește întâi
   serviciul). Jurnal: `journalctl -u solar-bms`.

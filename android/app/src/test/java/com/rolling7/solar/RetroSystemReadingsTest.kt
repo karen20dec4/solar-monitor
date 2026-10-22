@@ -47,25 +47,9 @@ class RetroSystemReadingsTest {
     }
 
     @Test
-    fun `diagnostic console reports health battery grid and uptime without guessing`() {
-        val data = sampleData()
-
-        assertEquals("STATUS OPTIM · COD 12", retroSystemHealthText(data))
-        assertEquals("DESCARCARE 36W · 55.92V", retroSystemBatteryText(data))
-        assertEquals("CONECTATA · 237.9V", retroSystemGridText(data))
-        assertEquals("UP 2z 0h", retroSystemUptimeText(data.serverUptimeSeconds))
+    fun `uptime text is days and hours without guessing`() {
+        assertEquals("UP 2z 0h", retroSystemUptimeText(sampleData().serverUptimeSeconds))
         assertEquals("UP —", retroSystemUptimeText(null))
-    }
-
-    @Test
-    fun `diagnostic console exposes explicit warning states`() {
-        val hot = sampleData().copy(inverterTemp = 56.0)
-        val batteryHigh = sampleData().copy(batteryVoltage = 57.6)
-        val disconnectedGrid = sampleData().copy(gridVoltage = 0.0)
-
-        assertEquals("ATENTIE TEMP · COD 12", retroSystemHealthText(hot))
-        assertEquals("ATENTIE BATERIE · COD 12", retroSystemHealthText(batteryHigh))
-        assertEquals("DECONECTATA · 0.0V", retroSystemGridText(disconnectedGrid))
     }
 
     private fun sampleData() = SolarData(

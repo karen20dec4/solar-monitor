@@ -31,6 +31,7 @@ class SolarAlarmService : Service() {
     private var consecutiveHigh = 0
     private var armed = true
     private var lastAlarmAt = 0L
+    private val bmsTracker = BmsAlarmTracker()
 
     override fun onCreate() {
         super.onCreate()
@@ -51,7 +52,7 @@ class SolarAlarmService : Service() {
                 val settings = AlarmSettingsStore.read(this)
                 startInForeground(settings, null)
                 triggerAlarm(settings, null, test = true)
-                if (!settings.enabled) {
+                if (!settings.anyEnabled) {
                     scope.launch {
                         delay(ALARM_SOUND_MS)
                         stopEverything()
@@ -80,21 +81,39 @@ class SolarAlarmService : Service() {
     private fun startMonitorLoop() {
         if (monitorJob?.isActive == true) return
         monitorJob = scope.launch {
+            var cycle = 0
             while (isActive) {
                 val settings = AlarmSettingsStore.read(this@SolarAlarmService)
-                if (!settings.enabled) {
+                if (!settings.anyEnabled) {
                     stopEverything()
                     break
                 }
 
                 val data = SolarRepository.fetch()
                 updateMonitorNotification(settings, data)
-                if (data != null) {
+                if (data != null && settings.enabled) {
                     evaluateAlarm(settings, data.house)
                 }
+                // BMS-ul se interogheaza la fiecare al doilea ciclu (4 s): o deconectare apare
+                // oricum cu cateva secunde de debounce pe server.
+                if (settings.batteryEnabled && cycle % 2 == 0) {
+                    SolarRepository.fetchBms()?.let { evaluateBmsAlarm(settings, it) }
+                }
+                cycle++
                 delay(2_000)
             }
         }
+    }
+
+    private fun evaluateBmsAlarm(settings: AlarmSettings, state: BmsState) {
+        val toRing = bmsTracker.evaluate(
+            alarms = state.alarms,
+            nowMs = System.currentTimeMillis(),
+            cooldownMs = settings.cooldownS * 1000L
+        )
+        if (toRing.isEmpty()) return
+        val body = toRing.joinToString("\n") { "${it.title} ${it.message}".trim() }
+        triggerBmsAlarm(settings, body)
     }
 
     private fun evaluateAlarm(settings: AlarmSettings, houseW: Double) {
@@ -131,7 +150,14 @@ class SolarAlarmService : Service() {
 
         notify(ALERT_ID, alertNotification(title, body))
         playAlarmSound(settings)
-        AlarmState.onRingStart(body)
+        AlarmState.onRingStart(if (test) "Test alarma" else "Alarma consum mare", body)
+        if (settings.vibrate) vibrate()
+    }
+
+    private fun triggerBmsAlarm(settings: AlarmSettings, body: String) {
+        notify(ALERT_ID + 1, alertNotification("Alarma baterie", body))
+        playAlarmSound(settings)
+        AlarmState.onRingStart("Alarma baterie", body)
         if (settings.vibrate) vibrate()
     }
 
@@ -158,11 +184,14 @@ class SolarAlarmService : Service() {
         } else {
             "Solar - astept date"
         }
-        val threshold = formatKw(settings.thresholdW.toDouble())
+        val watching = buildList {
+            if (settings.enabled) add("consum ${formatKw(settings.thresholdW.toDouble())}")
+            if (settings.batteryEnabled) add("baterie")
+        }.joinToString(" · ")
         return NotificationCompat.Builder(this, CHANNEL_MONITOR)
             .setSmallIcon(R.drawable.ic_stat_solar)
             .setContentTitle(title)
-            .setContentText("Prag alarma: $threshold")
+            .setContentText("Alarme: $watching")
             .setContentIntent(openAppIntent())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -259,7 +288,7 @@ class SolarAlarmService : Service() {
             NotificationChannel(CHANNEL_MONITOR, "Monitorizare solar", NotificationManager.IMPORTANCE_LOW)
         )
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ALERTS, "Alarme consum solar", NotificationManager.IMPORTANCE_HIGH).apply {
+            NotificationChannel(CHANNEL_ALERTS, "Alarme solar", NotificationManager.IMPORTANCE_HIGH).apply {
                 setSound(null, null)
                 enableVibration(true)
             }

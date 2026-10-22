@@ -190,14 +190,12 @@ install -m 0644 "$DESIGN_DIR/text-display/cadran-baterie-optimized.png" \
     "$OUTPUT_DIR/retro_dashboard_dial_battery.png"
 install -m 0644 "$DESIGN_DIR/text-display/cadran-invertor-optimized.png" \
     "$OUTPUT_DIR/retro_dashboard_dial_inverter.png"
-install -m 0644 "$DESIGN_DIR/text-display/cadran-temperatura-optimized.png" \
-    "$OUTPUT_DIR/retro_dashboard_dial_temperature.png"
+# Placa temperaturii nu mai e folosita ca atare (v3.30): din ea se face placa goala a citirilor BMS,
+# retro_dashboard_dial_blank.webp, cu scripts/make-retro-blank-dial.py.
 install -m 0644 "$DESIGN_DIR/text-display/text-baterie-optimized.png" \
     "$OUTPUT_DIR/retro_dashboard_label_battery.png"
 install -m 0644 "$DESIGN_DIR/text-display/text-Invertor-optimized.png" \
     "$OUTPUT_DIR/retro_dashboard_label_inverter.png"
-install -m 0644 "$DESIGN_DIR/text-display/text-temperatura-optimized.png" \
-    "$OUTPUT_DIR/retro_dashboard_label_temperature.png"
 
 printf 'Resurse Retro pregatite in %s:\n' "$OUTPUT_DIR"
 printf '  %s\n' \
@@ -208,7 +206,5 @@ printf '  %s\n' \
     retro_bottom_navigation_artwork.webp \
     retro_dashboard_dial_battery.png \
     retro_dashboard_dial_inverter.png \
-    retro_dashboard_dial_temperature.png \
     retro_dashboard_label_battery.png \
-    retro_dashboard_label_inverter.png \
-    retro_dashboard_label_temperature.png
+    retro_dashboard_label_inverter.png

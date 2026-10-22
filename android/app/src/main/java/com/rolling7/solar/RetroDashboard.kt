@@ -221,32 +221,6 @@ internal fun retroSystemTemperatureColor(value: Double?): Color = when {
     else -> RetroSage
 }
 
-internal fun retroSystemHealthText(data: SolarData?): String = when {
-    data == null -> "FARA DATE"
-    data.inverterTemp >= 55.0 -> "ATENTIE TEMP · COD ${data.status.roundToInt()}"
-    data.batteryVoltage <= 48.0 || data.batteryVoltage >= 57.5 ->
-        "ATENTIE BATERIE · COD ${data.status.roundToInt()}"
-    else -> "STATUS OPTIM · COD ${data.status.roundToInt()}"
-}
-
-internal fun retroSystemBatteryText(data: SolarData?): String {
-    if (data == null) return "FARA DATE"
-    val voltage = String.format(Locale.US, "%.2f", data.batteryVoltage)
-    return when {
-        data.batteryDisplay > 0.0 ->
-            "INCARCARE ${data.batteryDisplay.roundToInt()}W · ${voltage}V"
-        data.batteryDisplay < 0.0 ->
-            "DESCARCARE ${(-data.batteryDisplay).roundToInt()}W · ${voltage}V"
-        else -> "REPAUS · ${voltage}V"
-    }
-}
-
-internal fun retroSystemGridText(data: SolarData?): String {
-    if (data == null) return "FARA DATE"
-    val voltage = String.format(Locale.US, "%.1f", data.gridVoltage)
-    return if (data.gridVoltage >= 100.0) "CONECTATA · ${voltage}V" else "DECONECTATA · ${voltage}V"
-}
-
 internal fun retroSystemUptimeText(seconds: Double?): String {
     if (seconds == null) return "UP —"
     val totalHours = (seconds / 3_600.0).toInt().coerceAtLeast(0)
@@ -258,6 +232,7 @@ internal fun retroSystemUptimeText(seconds: Double?): String {
 @Composable
 internal fun RetroDashboard(
     data: SolarData?,
+    bms: BmsState?,
     alarmThresholdW: Int,
     selectedTab: RetroTab,
     onTabSelected: (RetroTab) -> Unit,
@@ -309,12 +284,16 @@ internal fun RetroDashboard(
                     when (visibleTab) {
                         RetroTab.DASHBOARD -> RetroOverviewPage(
                             data = data,
+                            bms = bms,
                             alarmThresholdW = alarmThresholdW,
-                            onEnergyFieldClick = onEnergyFieldClick
+                            onEnergyFieldClick = onEnergyFieldClick,
+                            // Detaliul bateriei sta pe SISTEM.
+                            onBmsClick = { onTabSelected(RetroTab.SYSTEM) }
                         )
                         RetroTab.ENERGY -> energyContent()
                         RetroTab.SYSTEM -> RetroSystemPage(
                             data = data,
+                            bms = bms,
                             onEnergyFieldClick = onEnergyFieldClick
                         )
                         RetroTab.SETTINGS -> settingsContent()
@@ -372,8 +351,10 @@ internal fun Modifier.retroSwipeNavigation(
 @Composable
 private fun RetroOverviewPage(
     data: SolarData?,
+    bms: BmsState?,
     alarmThresholdW: Int,
-    onEnergyFieldClick: (String) -> Unit
+    onEnergyFieldClick: (String) -> Unit,
+    onBmsClick: () -> Unit
 ) {
     BoxWithConstraints(
         Modifier
@@ -409,7 +390,9 @@ private fun RetroOverviewPage(
         )
         RetroOverviewTelemetry(
             data = data,
+            bms = bms,
             onBatteryClick = { onEnergyFieldClick("battery_voltage") },
+            onBmsClick = onBmsClick,
             modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
@@ -418,12 +401,16 @@ private fun RetroOverviewPage(
 @Composable
 private fun RetroOverviewTelemetry(
     data: SolarData?,
+    bms: BmsState?,
     onBatteryClick: () -> Unit,
+    onBmsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val batteryVoltage = data?.let { String.format(Locale.US, "%.1f", it.batteryVoltage) } ?: "—"
     val inverterLoss = data?.let { it.inverterLoss.roundToInt().toString() } ?: "—"
     val inverterTemperature = data?.let { String.format(Locale.US, "%.1f", it.inverterTemp) } ?: "—"
+    // Temperatura invertorului nu mai are placa proprie: apare discret sub eticheta "Inv".
+    val inverterTemperatureShort = data?.let { "${it.inverterTemp.roundToInt()}°C" }
 
     BoxWithConstraints(
         modifier = modifier
@@ -433,8 +420,8 @@ private fun RetroOverviewTelemetry(
         val primaryGap = 20.dp
         val primaryDialWidth = (maxWidth - primaryGap) / 2f
         val primaryDialHeight = primaryDialWidth / (600f / 190f)
-        // Bat/Inv raman exact cu 20% mai inalte decat cadranul temperaturii.
-        val temperatureDialHeight = primaryDialHeight / 1.2f
+        // Placile BMS pastreaza inaltimea fostei placi a temperaturii (Bat/Inv cu 20% mai inalte).
+        val bmsPlateHeight = primaryDialHeight / 1.2f
 
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
@@ -454,18 +441,19 @@ private fun RetroOverviewTelemetry(
                 )
                 RetroCompactTelemetryDial(
                     shortLabel = "Inv",
+                    subLabel = inverterTemperatureShort,
                     dialRes = R.drawable.retro_dashboard_dial_inverter,
                     value = inverterLoss,
-                    description = "Consum propriu invertor $inverterLoss W",
+                    description = "Consum propriu invertor $inverterLoss W, temperatura $inverterTemperature grade Celsius",
                     modifier = Modifier
                         .width(primaryDialWidth)
                         .height(primaryDialHeight)
                 )
             }
-            RetroTemperatureTelemetryRow(
-                value = inverterTemperature,
-                dialHeight = temperatureDialHeight,
-                description = "Temperatura invertor $inverterTemperature grade Celsius"
+            RetroBmsStrip(
+                state = bms,
+                plateHeight = bmsPlateHeight,
+                onClick = onBmsClick
             )
         }
     }
@@ -478,6 +466,7 @@ private fun RetroCompactTelemetryDial(
     value: String,
     description: String,
     modifier: Modifier = Modifier,
+    subLabel: String? = null,
     onClick: (() -> Unit)? = null
 ) {
     BoxWithConstraints(
@@ -505,6 +494,21 @@ private fun RetroCompactTelemetryDial(
             letterSpacing = 0.35.sp,
             maxLines = 1
         )
+        if (subLabel != null) {
+            Text(
+                text = subLabel,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .offset(x = maxWidth * 0.085f, y = maxHeight * 0.20f)
+                    .offset { IntOffset(x = 20, y = -20) },
+                color = RetroSage.copy(alpha = 0.62f),
+                fontFamily = RetroMono,
+                fontSize = 6.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.2.sp,
+                maxLines = 1
+            )
+        }
         RetroVfdDisplay(
             value = value,
             unit = "",
@@ -517,56 +521,6 @@ private fun RetroCompactTelemetryDial(
             embedded = true,
             description = description
         )
-    }
-}
-
-@Composable
-private fun RetroTemperatureTelemetryRow(
-    value: String,
-    dialHeight: Dp,
-    description: String
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(dialHeight)
-            .semantics { contentDescription = description },
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Image(
-            painter = painterResource(R.drawable.retro_dashboard_label_temperature),
-            contentDescription = null,
-            modifier = Modifier
-                .height(dialHeight * 0.76f)
-                .aspectRatio(271f / 55f)
-                .alpha(0.7f),
-            contentScale = ContentScale.FillBounds
-        )
-        Spacer(Modifier.weight(1f))
-        BoxWithConstraints(
-            modifier = Modifier
-                .height(dialHeight)
-                .aspectRatio(477f / 190f)
-        ) {
-            Image(
-                painter = painterResource(R.drawable.retro_dashboard_dial_temperature),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.FillBounds
-            )
-            RetroVfdDisplay(
-                value = value,
-                unit = "",
-                color = RetroSage,
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .offset(x = maxWidth * 0.10f)
-                    .width(maxWidth * 0.64f)
-                    .height(maxHeight * 0.66f),
-                embedded = true,
-                description = description
-            )
-        }
     }
 }
 
@@ -1031,7 +985,7 @@ private fun RetroEnergyTodayArtwork(
 }
 
 @Composable
-private fun RetroSystemPage(data: SolarData?, onEnergyFieldClick: (String) -> Unit) {
+private fun RetroSystemPage(data: SolarData?, bms: BmsState?, onEnergyFieldClick: (String) -> Unit) {
     var batteryHistory by remember { mutableStateOf<List<HistoryPoint>>(emptyList()) }
     var temperatureHistory by remember { mutableStateOf<List<HistoryPoint>>(emptyList()) }
 
@@ -1095,6 +1049,7 @@ private fun RetroSystemPage(data: SolarData?, onEnergyFieldClick: (String) -> Un
         }
         RetroSystemMonitorArtwork(
             data = data,
+            bms = bms,
             batteryHistory = batteryHistory,
             temperatureHistory = temperatureHistory,
             modifier = Modifier
@@ -1292,6 +1247,7 @@ private fun RetroSystemLiveDisplay(
 @Composable
 private fun RetroSystemMonitorArtwork(
     data: SolarData?,
+    bms: BmsState?,
     batteryHistory: List<HistoryPoint>,
     temperatureHistory: List<HistoryPoint>,
     modifier: Modifier = Modifier
@@ -1387,8 +1343,8 @@ private fun RetroSystemMonitorArtwork(
             )
         }
 
-        RetroSystemConsole(
-            data = data,
+        RetroBmsMonitor(
+            state = bms,
             modifier = Modifier
                 .offset(x = scaleX * 74f, y = scaleY * 205f)
                 .width(scaleX * 882f)
@@ -1497,83 +1453,6 @@ private fun RetroMiniTrend(
     }
 }
 
-@Composable
-private fun RetroSystemConsole(
-    data: SolarData?,
-    modifier: Modifier = Modifier
-) {
-    val time = retroTimestamp(data?.timestamp)
-    val upload = data?.serverUploadKbps?.let {
-        String.format(Locale.US, "API ONLINE · %.1f KB/s UP", it)
-    } ?: "ASTEPT METRICI SERVER"
-    val batteryColor = when {
-        data == null -> RetroOlive
-        data.batteryDisplay > 0.0 -> RetroSage
-        data.batteryDisplay < 0.0 -> RetroYellow
-        else -> RetroOlive
-    }
-    val health = retroSystemHealthText(data)
-    val lines = listOf(
-        Triple("TEMPERATURA", data?.let { String.format(Locale.US, "%.1f °C", it.inverterTemp) } ?: "— °C", retroSystemTemperatureColor(data?.inverterTemp)),
-        Triple("TELEMETRIE", upload, RetroHouseBlue),
-        Triple("INVERTOR", health, if (health.startsWith("STATUS OPTIM")) RetroSage else RetroRed),
-        Triple("BATERIE", retroSystemBatteryText(data), batteryColor),
-        Triple("RETEA", retroSystemGridText(data), RetroRed)
-    )
-    Column(modifier) {
-        Text(
-            "CONSOLE / LIVE",
-            color = RetroMuted,
-            fontFamily = RetroMono,
-            fontSize = 11.sp,
-            lineHeight = 13.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.8.sp
-        )
-        Spacer(Modifier.height(2.dp))
-        lines.forEach { (label, value, color) ->
-            Row(
-                modifier = Modifier.fillMaxWidth().height(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    time,
-                    color = RetroOlive,
-                    fontFamily = RetroMono,
-                    fontSize = 10.sp,
-                    lineHeight = 12.sp,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .width(60.dp)
-                        .padding(end = 4.dp)
-                )
-                Text(
-                    "$label:",
-                    color = RetroMuted,
-                    fontFamily = RetroMono,
-                    fontSize = 10.sp,
-                    lineHeight = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .width(90.dp)
-                        .padding(end = 4.dp)
-                )
-                Text(
-                    value,
-                    color = color,
-                    fontFamily = RetroMono,
-                    fontSize = 10.sp,
-                    lineHeight = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
 private fun retroSystemPercentText(value: Double?): String =
     value?.let { "${it.roundToInt()}%" } ?: "—"
 
@@ -1584,6 +1463,7 @@ internal fun RetroSettingsArtworkPage(
     ringtoneTitle: String,
     onDashboardStyleChange: (DashboardStyle) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
+    onBatteryEnabledChange: (Boolean) -> Unit,
     onThresholdChange: (Int) -> Unit,
     onCooldownChange: (Int) -> Unit,
     onVibrateChange: (Boolean) -> Unit,
@@ -1599,13 +1479,19 @@ internal fun RetroSettingsArtworkPage(
         val topOffset = with(density) { 40.toDp() }
         val topToThemeGap = with(density) { 12.toDp() }
         val themeToAlarmGap = with(density) { 20.toDp() }
+        val alarmToBatteryGap = with(density) { 20.toDp() }
+        // Randul "Alarma baterie" intra in aceeasi socoteala de inaltime ca cardurile pictate, deci
+        // pe un telefon scurt cardurile se micsoreaza putin, nu iese nimic din ecran.
+        val batteryRowRatio = 0.13f
         val heightPerWidth =
             (361f / 1_380f) +
                 (408f / 1_119f) +
-                (1_077f / 960f)
+                (1_077f / 960f) +
+                batteryRowRatio
         val naturalWidth = maxWidth * 0.95f
         val availableHeight =
-            (maxHeight - topOffset - topToThemeGap - themeToAlarmGap).coerceAtLeast(1.dp)
+            (maxHeight - topOffset - topToThemeGap - themeToAlarmGap - alarmToBatteryGap)
+                .coerceAtLeast(1.dp)
         val widthLimitedByHeight = availableHeight / heightPerWidth
         val cardWidth = if (naturalWidth <= widthLimitedByHeight) {
             naturalWidth
@@ -1645,6 +1531,14 @@ internal fun RetroSettingsArtworkPage(
                 modifier = Modifier
                     .width(cardWidth)
                     .aspectRatio(960f / 1_077f)
+            )
+            Spacer(Modifier.height(alarmToBatteryGap))
+            RetroBatteryAlarmRow(
+                enabled = settings.batteryEnabled,
+                onEnabledChange = onBatteryEnabledChange,
+                modifier = Modifier
+                    .width(cardWidth)
+                    .height(cardWidth * batteryRowRatio)
             )
         }
     }
@@ -1902,7 +1796,7 @@ private fun RetroSettingsArtworkSliderThumb(
 }
 
 @Composable
-private fun RetroSettingsAnimatedToggle(
+internal fun RetroSettingsAnimatedToggle(
     checked: Boolean,
     description: String,
     modifier: Modifier,

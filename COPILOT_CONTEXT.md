@@ -1697,3 +1697,41 @@ găsit (telefonul conectat la el?)" a rămas valabil și pentru telefonul conect
 **De făcut (aplicația).** Alegerea locului pentru datele BMS, alarma BMS în `SolarAlarmService` (ar suna la
 `prio` urgent/high din `/solar/bms`), setările alarmei, câmpuri BMS în `/solar/history`. Sistemul rămâne
 strict **READ-ONLY**.
+
+### 13.66 BMS în aplicație: banda de pe TABLOU, monitorul din SISTEM, „Alarmă baterie", release v3.30 (2026-10-22)
+
+**Cerere.** „A pe TABLOU", apoi rând nou „Alarmă baterie" în SETARI cu întrerupător propriu; BMS și în SISTEM
+în locul consolei; scos cuvântul și placa „Temperatura" de pe TABLOU, temperatura invertorului afișată discret
+altundeva; verificare pe rezoluția telefonului lui (poza `/opt/logs/aplicatie-mobil.jpg`).
+
+**Ce s-a făcut (aplicația, v3.30 / 34).**
+- `BmsModel.kt`: `parseBmsState` (`/solar/bms` → `BmsReading` + alarme), `bmsLevel`, texte, abaterile celulelor,
+  `BmsAlarmTracker` (o alarmă sună o dată cât e activă, rearmare la dispariție, cooldown păstrat). 10 teste noi.
+- `RetroBms.kt`: banda TABLOU (titlu + LED + 3 plăci: SOC %, curent A, Δ mV), `RetroBmsMonitor` (SISTEM: bare pe
+  celulă ±15 mV, SOC·curent·tensiune, Δ·temperaturi·MOS, MOSFET/echilibrare/Ah/cicluri sau mesajul alarmei),
+  `RetroBatteryAlarmRow` (SETARI, întrerupătorul fotografic existent).
+- TABLOU: placa temperaturii și cuvântul pictat scoase; „29°C" mic sub „Inv"; atingerea benzii duce pe SISTEM.
+  Placa BMS = `retro_dashboard_dial_blank.webp` (placa temperaturii cu „°C" șters, `scripts/make-retro-blank-dial.py`).
+- SISTEM: consola scoasă (și `retroSystemHealthText/BatteryText/GridText` + testele lor).
+- SETARI: rândul intră în socoteala de înălțime a cardurilor (pe telefon scurt cardurile se micșorează puțin).
+- Alarma: `AlarmSettings.batteryEnabled` (implicit oprit), serviciul rulează cât e pornită oricare alarmă, la 4 s
+  citește `/solar/bms` și sună la `prio` urgent/high cu același sunet/vibrație/cooldown; titlul ferestrei de
+  alarmă urmează alarma („Alarma baterie" / „Alarma consum mare").
+- Tema Simple: card „Baterie (BMS)" pe SISTEM (pagina Simple acum derulează), eticheta „BAT · 85%" pe tablou,
+  întrerupător în setări. (Un rând BMS separat pe tabloul Simple strivea cadranul la font mare: scos.)
+
+**Verificare (Note 9).** Telefonul utilizatorului: 1080×2220, 420 dpi, butoane de navigare (48 dp), font ~130%
+(`V3.29` din poză are lățimea de la 130%). AVD-ul Pixel 6 are bara de stare de 45 dp (decupaj) față de ~25 dp la
+Note 9 și navigare prin gesturi, deci pe el aveam ~20–45 dp *mai mult* loc decât pe telefon. Adăugat în
+`emulator-check.sh`: `profile note9|note9-large|reset` (1080×2272 ca zona utilă să fie ~2028 px ca pe telefon),
+`retro-tabs` pe bounds uiautomator, `layout-check` + `check-layout.py` (fără suprapuneri/ieșiri din ecran).
+Rezultat: TABLOU/SISTEM/SETARI trec pe note9-large, note9 și Pixel; nicio pagină Retro nu derulează; fără
+`FATAL EXCEPTION`. Playwright nu se aplică (aplicație nativă): verificarea e aplicația reală în emulator pe API-ul
+real. Alarma testată cu o alertă sintetică (`bms_alert` scrisă 1/s, ștearsă după): notificare „Alarma baterie",
+fereastră de alarmă, bandă și monitor roșii; fără date (mod avion): „FARA DATE", liniuțe, LED gri.
+Pe TABLOU rămân ~22 dp între FLUX și placa Bat (erau ~43 dp): strâns, dar fără suprapunere.
+
+**Release.** `versionCode` 34, `versionName` 3.30, `/opt/solar-monitor/SolarMonitor-v3.30.apk`, 7.157.219 bytes,
+SHA-256 `2f8263a1dfa8796436dcdd7ee71665be10201a014728aad604929866b64e2a5d`, Telegram mesaj **126** (SHA descărcat
+identic), capturi 127–131. Fără rebuild de server în plus față de §13.65 (API-ul cu `/bms` era deja pe server).
+Sistemul rămâne strict **READ-ONLY**.

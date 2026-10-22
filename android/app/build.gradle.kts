@@ -22,8 +22,8 @@ android {
         applicationId = "com.rolling7.solar"
         minSdk = 26
         targetSdk = 34
-        versionCode = 33
-        versionName = "3.29"
+        versionCode = 34
+        versionName = "3.30"
     }
 
     signingConfigs {
@@ -80,4 +80,6 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     testImplementation("junit:junit:4.13.2")
+    // org.json din android.jar e doar stub in testele JVM; pentru parserul BMS trebuie cel real.
+    testImplementation("org.json:json:20231013")
 }

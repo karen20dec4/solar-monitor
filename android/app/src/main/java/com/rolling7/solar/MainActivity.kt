@@ -211,6 +211,7 @@ class MainActivity : ComponentActivity() {
 fun App() {
     val context = LocalContext.current
     var data by remember { mutableStateOf<SolarData?>(null) }
+    var bms by remember { mutableStateOf<BmsState?>(null) }
     var showHistoryMenu by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var retroTabName by rememberSaveable { mutableStateOf(RetroTab.DASHBOARD.name) }
@@ -219,9 +220,11 @@ fun App() {
     var energyRange by rememberSaveable { mutableStateOf(RetroEnergyDefaultRange) }
     var alarmSettings by remember { mutableStateOf(AlarmSettingsStore.read(context)) }
     var dashboardStyle by remember { mutableStateOf(DashboardStyleStore.read(context)) }
-    var enableAfterNotificationPermission by remember { mutableStateOf(false) }
+    // Ce alarma se activa dupa ce se acorda permisiunea de notificari ("consum" / "baterie").
+    var enableAfterNotificationPermission by remember { mutableStateOf<String?>(null) }
     val alarmRinging by AlarmState.ringing.collectAsState()
     val alarmMessage by AlarmState.message.collectAsState()
+    val alarmTitle by AlarmState.title.collectAsState()
     val retro = dashboardStyle == DashboardStyle.RETRO
     val chrome = dashboardChrome(retro)
     val view = LocalView.current
@@ -266,10 +269,13 @@ fun App() {
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted && enableAfterNotificationPermission) {
-            saveAlarmSettings(alarmSettings.copy(enabled = true))
+        if (granted) {
+            when (enableAfterNotificationPermission) {
+                "consum" -> saveAlarmSettings(alarmSettings.copy(enabled = true))
+                "baterie" -> saveAlarmSettings(alarmSettings.copy(batteryEnabled = true))
+            }
         }
-        enableAfterNotificationPermission = false
+        enableAfterNotificationPermission = null
     }
 
     val ringtoneLauncher = rememberLauncherForActivityResult(
@@ -280,13 +286,29 @@ fun App() {
     }
 
     LaunchedEffect(Unit) {
-        if (alarmSettings.enabled) {
+        if (alarmSettings.anyEnabled) {
             AlarmSettingsStore.applyServiceState(context, alarmSettings)
         }
         while (true) {
             val d = withContext(Dispatchers.IO) { SolarRepository.fetch() }
             if (d != null) {
                 data = d
+            }
+            delay(2000)
+        }
+    }
+
+    // Bateria vazuta de BMS, intr-o bucla separata: un raspuns lent de la /bms nu intarzie restul.
+    LaunchedEffect(Unit) {
+        var lastOk = 0L
+        while (true) {
+            val state = withContext(Dispatchers.IO) { SolarRepository.fetchBms() }
+            val now = System.currentTimeMillis()
+            if (state != null) {
+                bms = state
+                lastOk = now
+            } else if (now - lastOk > 20_000L) {
+                bms = null // fara raspuns de 20 s: nu lasam pe ecran o valoare veche drept live
             }
             delay(2000)
         }
@@ -337,13 +359,15 @@ fun App() {
         
         val simpleSystemContent: @Composable () -> Unit = {
             Column(
-                Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+                // Tema Simple poate derula (doar Retro e fix): cu BMS-ul si fontul mare nu mai incape.
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 SystemDetails(data = data, onHistoryClick = {
                     selectedEnergyField = it.field
                     retroTabName = RetroTab.ENERGY.name
                 })
+                SimpleBmsCard(state = bms)
                 SimpleServerMetrics(data = data)
             }
         }
@@ -357,10 +381,18 @@ fun App() {
                 onDashboardStyleChange = ::changeDashboardStyle,
                 onEnabledChange = { enabled ->
                     if (enabled && !hasNotificationPermission(context)) {
-                        enableAfterNotificationPermission = true
+                        enableAfterNotificationPermission = "consum"
                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     } else {
                         saveAlarmSettings(alarmSettings.copy(enabled = enabled))
+                    }
+                },
+                onBatteryEnabledChange = { enabled ->
+                    if (enabled && !hasNotificationPermission(context)) {
+                        enableAfterNotificationPermission = "baterie"
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        saveAlarmSettings(alarmSettings.copy(batteryEnabled = enabled))
                     }
                 },
                 onThresholdChange = { saveAlarmSettings(alarmSettings.copy(thresholdW = it), applyService = false) },
@@ -374,6 +406,7 @@ fun App() {
         when (dashboardStyle) {
             DashboardStyle.RETRO -> RetroDashboard(
                 data = data,
+                bms = bms,
                 alarmThresholdW = alarmSettings.thresholdW,
                 selectedTab = RetroTab.valueOf(retroTabName),
                 onTabSelected = { tab -> retroTabName = tab.name },
@@ -394,6 +427,7 @@ fun App() {
             )
             DashboardStyle.SIMPLE -> SimpleDashboard(
                 data = data,
+                bms = bms,
                 selectedTab = RetroTab.valueOf(retroTabName),
                 onTabSelected = { tab -> retroTabName = tab.name },
                 onHistoryFieldClick = {
@@ -408,6 +442,7 @@ fun App() {
 
         if (alarmRinging) {
             AlarmOverlay(
+                title = alarmTitle,
                 message = alarmMessage,
                 onStop = {
                     context.startService(
@@ -1148,6 +1183,7 @@ private fun SimpleGauge(
 @Composable
 private fun SimpleDashboard(
     data: SolarData?,
+    bms: BmsState?,
     selectedTab: RetroTab,
     onTabSelected: (RetroTab) -> Unit,
     onHistoryFieldClick: (HistoryMetric) -> Unit,
@@ -1297,7 +1333,20 @@ private fun SimpleDashboard(
                                         val invW = data?.inverterLoss?.roundToInt()?.toString() ?: "--"
                                         val tempC = data?.let { String.format(Locale.US, "%.1f", it.inverterTemp) } ?: "--"
 
-                                        EngravedReadout(R.drawable.ic_simple_battery, "BATERIE", batV, "V", CHouse, Modifier.weight(1f))
+                                        // Bateria vazuta de BMS e in eticheta (SOC) si in culoarea valorii (stare);
+                                        // atingerea duce pe SISTEM, unde e detaliul.
+                                        val bmsReading = bms?.reading
+                                        val bmsColor = when (bmsLevel(bms)) {
+                                            BmsLevel.ALARM -> CGrid
+                                            BmsLevel.WARNING -> CBat
+                                            else -> CHouse
+                                        }
+                                        EngravedReadout(
+                                            R.drawable.ic_simple_battery,
+                                            if (bmsReading != null) "BAT · ${bmsSocText(bmsReading.soc)}%" else "BATERIE",
+                                            batV, "V", bmsColor,
+                                            Modifier.weight(1f).clickable { onTabSelected(RetroTab.SYSTEM) }
+                                        )
                                         EngravedReadout(R.drawable.ic_simple_inverter, "INVERTOR", invW, "W", CHouse, Modifier.weight(1f))
                                         EngravedReadout(R.drawable.ic_simple_thermo, "TEMP", tempC, "°C", CBat, Modifier.weight(1f))
                                     }
@@ -1319,7 +1368,7 @@ private fun SimpleDashboard(
 }
 
 @Composable
-private fun AlarmOverlay(message: String?, onStop: () -> Unit) {
+private fun AlarmOverlay(title: String, message: String?, onStop: () -> Unit) {
     Dialog(onDismissRequest = onStop) {
         Column(
             Modifier
@@ -1331,7 +1380,7 @@ private fun AlarmOverlay(message: String?, onStop: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                "⚠ Alarma consum mare",
+                "⚠ $title",
                 color = CGrid,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
@@ -1339,7 +1388,7 @@ private fun AlarmOverlay(message: String?, onStop: () -> Unit) {
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                message ?: "Consum mare casa",
+                message ?: title,
                 color = CText,
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center
@@ -1809,6 +1858,7 @@ private fun RetroSettingsPage(
     @Suppress("UNUSED_PARAMETER") version: String,
     onDashboardStyleChange: (DashboardStyle) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
+    onBatteryEnabledChange: (Boolean) -> Unit,
     onThresholdChange: (Int) -> Unit,
     onCooldownChange: (Int) -> Unit,
     onVibrateChange: (Boolean) -> Unit,
@@ -1821,6 +1871,7 @@ private fun RetroSettingsPage(
         ringtoneTitle = ringtoneTitle,
         onDashboardStyleChange = onDashboardStyleChange,
         onEnabledChange = onEnabledChange,
+        onBatteryEnabledChange = onBatteryEnabledChange,
         onThresholdChange = onThresholdChange,
         onCooldownChange = onCooldownChange,
         onVibrateChange = onVibrateChange,
@@ -1837,6 +1888,7 @@ private fun SettingsSheet(
     version: String,
     onDashboardStyleChange: (DashboardStyle) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
+    onBatteryEnabledChange: (Boolean) -> Unit,
     onThresholdChange: (Int) -> Unit,
     onCooldownChange: (Int) -> Unit,
     onVibrateChange: (Boolean) -> Unit,
@@ -1852,6 +1904,7 @@ private fun SettingsSheet(
             version = version,
             onDashboardStyleChange = onDashboardStyleChange,
             onEnabledChange = onEnabledChange,
+            onBatteryEnabledChange = onBatteryEnabledChange,
             onThresholdChange = onThresholdChange,
             onCooldownChange = onCooldownChange,
             onVibrateChange = onVibrateChange,
@@ -1959,6 +2012,25 @@ private fun SettingsSheet(
                 Switch(
                     checked = settings.vibrate,
                     onCheckedChange = onVibrateChange,
+                    colors = if (retro) retroSwitchColors() else SwitchDefaults.colors()
+                )
+            }
+        }
+
+        SettingsGroup(retro) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Alarma baterie", color = chrome.text, fontFamily = chrome.font, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (settings.batteryEnabled) "Activa - BMS, temperatura, celule" else "Oprita",
+                        color = if (settings.batteryEnabled) (if (retro) RetroSage else CPv) else chrome.muted,
+                        fontFamily = chrome.font,
+                        fontSize = 12.sp
+                    )
+                }
+                Switch(
+                    checked = settings.batteryEnabled,
+                    onCheckedChange = onBatteryEnabledChange,
                     colors = if (retro) retroSwitchColors() else SwitchDefaults.colors()
                 )
             }
@@ -2954,6 +3026,68 @@ private fun SimpleBottomNavigation(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+private fun simpleBmsColor(level: BmsLevel): Color = when (level) {
+    BmsLevel.OK -> CPv
+    BmsLevel.WARNING -> CBat
+    BmsLevel.ALARM -> CGrid
+    BmsLevel.NO_DATA -> CMuted
+}
+
+/** Detaliul bateriei pe SISTEM (tema Simple): cifre, temperaturi, MOSFET-uri si mesajul alarmei. */
+@Composable
+private fun SimpleBmsCard(state: BmsState?) {
+    val reading = state?.reading
+    val level = bmsLevel(state)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        color = CPanel,
+        tonalElevation = 1.dp
+    ) {
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Baterie (BMS)", color = CText, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.weight(1f))
+                Text(retroBmsStatusText(state), color = simpleBmsColor(level), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(12.dp))
+            if (reading == null) {
+                Text("Astept date de la BMS.", color = CMuted, fontSize = 13.sp)
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SimpleMetricBox(Modifier.weight(1f), "SOC", "${bmsSocText(reading.soc)} %", CPv)
+                    SimpleMetricBox(Modifier.weight(1f), "CURENT", "${bmsCurrentText(reading.current)} A", CHouse)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SimpleMetricBox(Modifier.weight(1f), "TENSIUNE", String.format(Locale.US, "%.2f V", reading.voltage), CHouse)
+                    SimpleMetricBox(
+                        Modifier.weight(1f), "DIFERENTA CELULE", "${bmsDeltaText(reading.deltaMv)} mV",
+                        if (reading.deltaMv >= 50.0) CBat else CPv
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    String.format(
+                        Locale.US, "Celule %.3f – %.3f V · T %.1f / %.1f °C · MOS %.1f °C",
+                        reading.cellMin, reading.cellMax, reading.tempBattery1, reading.tempBattery2, reading.tempMos
+                    ),
+                    color = CMuted, fontSize = 12.sp
+                )
+                Text(
+                    "Incarcare ${if (reading.chargeOn) "ON" else "OFF"} · Descarcare ${if (reading.dischargeOn) "ON" else "OFF"}" +
+                        " · ${reading.cycles} cicluri",
+                    color = CMuted, fontSize = 12.sp
+                )
+            }
+            state?.alarms?.forEach { alarm ->
+                Spacer(Modifier.height(8.dp))
+                Text("${alarm.title} ${alarm.message}".trim(), color = CGrid, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }

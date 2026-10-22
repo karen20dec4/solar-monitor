@@ -15,7 +15,11 @@ object AlarmState {
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message
 
-    fun onRingStart(message: String?) {
+    private val _title = MutableStateFlow("Alarma")
+    val title: StateFlow<String> = _title
+
+    fun onRingStart(title: String, message: String?) {
+        _title.value = title
         _message.value = message
         _ringing.value = true
     }

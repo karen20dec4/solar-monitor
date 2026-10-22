@@ -161,7 +161,9 @@ the ENERGIE section titles — those are pixels. (Exceptions on ENERGIE since v3
 PUTERE/ENERGIE/TENSIUNE row and the line at the bottom are opaque native plates laid over old painted
 text — `7d`/`30d`, `PRODUCȚIE ZILNICĂ`, `Ultima actualizare: ACUM`. Since v3.29 the old tab slot at the
 top is gone from the asset itself (ImageMagick patch, `scripts/patch-retro-energy-top.py`), and the
-painted green LED gets a recoloured orange/red overlay when live data is late.)
+painted green LED gets a recoloured orange/red overlay when live data is late. TABLOU's BMS plates reuse
+`retro_dashboard_dial_blank.webp` — the old temperature plate with its painted "°C" erased by
+`scripts/make-retro-blank-dial.py` — so units are Compose text.)
 Changing the string in Kotlin
 leaves the photo saying the old thing while the button does the new thing. Rule of thumb: if the text
 does not appear inside a `Text(...)` call, it is in the artwork and needs a repaint (ideally a fresh
@@ -258,6 +260,13 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
 - The service stops cleanly (`systemctl stop solar-bms` disconnects from the BMS). A BMS left "connected" by
   a killed process stops advertising; the reader then falls back to connecting by address, and
   `bluetoothctl disconnect <addr>` clears it by hand.
+- Phone app (v3.30, Retro + Simple themes): `GET /solar/bms` is polled every 2 s (`SolarRepository.fetchBms`,
+  parser `BmsModel.kt`). TABLOU: BMS strip (SOC, current, cell delta + status LED) under Bat/Inv, tap opens
+  SISTEM; the old "Temperatura" plate is gone and the inverter temperature is a small "29°C" under "Inv".
+  SISTEM: `RetroBmsMonitor` replaces the old console (cell bars + figures). SETARI: native row "ALARMĂ
+  BATERIE" with its own toggle (`AlarmSettings.batteryEnabled`, default off); `SolarAlarmService` runs while
+  either alarm is on, polls `/bms` every 4 s and rings (same sound/vibration/cooldown as the consumption
+  alarm) once per alarm with `prio` urgent/high (`BmsAlarmTracker`). Thresholds live on the server, not in the app.
 - Tests (no Bluetooth needed): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
   One-shot read for debugging: `python3 -I bms/jk_bms_reader.py --once` (stop the service first).
   Logs: `journalctl -u solar-bms`.

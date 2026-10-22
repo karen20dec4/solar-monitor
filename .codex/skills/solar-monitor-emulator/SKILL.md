@@ -45,6 +45,8 @@ $SCRIPT install
 $SCRIPT launch
 $SCRIPT screenshot
 $SCRIPT retro-tabs
+$SCRIPT profile note9-large   # sau note9 / reset
+$SCRIPT layout-check
 $SCRIPT status
 $SCRIPT stop
 ```
@@ -69,6 +71,25 @@ Pass a PNG path as the second argument to `screenshot` or `verify` when a stable
 For the fixed Retro layout, run `retro-tabs` after any Compose or Photoshop-asset change. It taps all four
 navigation regions on the pinned Pixel 6 AVD, saves `retro-tab-{tablou,energie,sistem,setari}.png`, confirms
 the selected-tab semantics, and fails if Android exposes a scrollable container on any Retro page.
+
+**Verify on the user's phone, not on the Pixel 6 default.** The user's phone is a Galaxy Note 9: 1080×2220,
+420 dpi, three-button Android navigation (48 dp), system font ~130% (read from their screenshot
+`/opt/logs/aplicatie-mobil.jpg`). The Pixel 6 AVD has a 45 dp status bar (cutout) against the Note 9's ~25 dp and
+gesture navigation, so the same layout has ~20–45 dp *more* room there. `profile note9-large` sets
+1080×2272 (the extra 52 px make the app's usable height equal the phone's, ~2028 px), 420 dpi, three-button
+navigation and font 130%; `profile note9` is the same at 100%; `profile reset` restores the AVD (do it before
+`stop`, the overrides persist in the AVD data). `layout-check` then runs `retro-tabs` (which now taps tabs by
+their uiautomator bounds, so it also works with three-button navigation) and `check-layout.py`, which fails if
+the TABLOU BMS strip overlaps the Bat/Inv plates or the navigation bar, the SISTEM BMS monitor leaves its panel,
+or the SETARI "Alarma baterie" row overlaps the alarm card or the navigation bar. Run it on `note9-large`,
+`note9` and `reset` for any change to the Retro pages.
+
+Playwright does not apply here: the app is native Compose, not a web page. The end-to-end check is the real app
+in the emulator against the real API, with the UI hierarchy asserted by `layout-check` and the PNGs inspected.
+
+To see alarm states without a real fault, write a synthetic `bms_alert` point once a second into the `live`
+bucket (measurement `bms_alert`, tag `key`, string fields `title`/`msg`/`prio`, `active=1.0`), look at the app,
+then delete the measurement (`influx delete ... --predicate '_measurement="bms_alert"'`).
 
 The emulator uses the app's existing read-only HTTPS API. Do not add inverter writes or direct serial access.
 

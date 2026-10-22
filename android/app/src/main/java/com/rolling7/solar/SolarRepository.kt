@@ -48,6 +48,7 @@ object SolarRepository {
     // Endpoint JSON expus prin Caddy (HTTPS self-signed, CA inclus in app).
     private const val URL_LATEST = "https://vyra.go.ro:31443/solar/latest"
     private const val URL_HISTORY = "https://vyra.go.ro:31443/solar/history"
+    private const val URL_BMS = "https://vyra.go.ro:31443/solar/bms"
 
     /** Apel de retea sincron - apelat pe Dispatchers.IO. Returneaza null la eroare. */
     fun fetch(): SolarData? {
@@ -82,6 +83,27 @@ object SolarRepository {
                 status = d("status"), houseSource = d("house_source"),
                 timestamp = if (j.isNull("timestamp")) null else j.optString("timestamp").ifBlank { null }
             )
+        } catch (e: Exception) {
+            null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    /**
+     * Bateria vazuta de BMS (citita pe server prin Bluetooth, scrisa in InfluxDB) si alarmele ei active.
+     * Returneaza null la eroare de retea; fara date de la BMS intoarce o stare cu `reading == null`.
+     */
+    fun fetchBms(): BmsState? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL(URL_BMS).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 5000
+                readTimeout = 5000
+                requestMethod = "GET"
+            }
+            if (conn.responseCode != 200) return null
+            parseBmsState(conn.inputStream.bufferedReader().use { it.readText() })
         } catch (e: Exception) {
             null
         } finally {

@@ -92,10 +92,12 @@ Valorile din FLUX folosesc 18 sp bold (cu 20% peste vechiul 15 sp). Eticheta din
 `Versiune V${BuildConfig.VERSION_NAME}`, astfel incat afisajul urmeaza automat versiunea reala a APK-ului,
 fara text duplicat in layout.
 
-Sub FLUX, TABLOU afiseaza trei instrumente esentiale fara card suplimentar: Baterie, Invertor si
-Temperatura. Cadranele au exact 42 dp inaltime si aceeasi margine dreapta; cadrul de temperatura isi
-pastraza raportul mai ingust 477:190. Etichetele au 30 dp, 29 dp si 34 dp. Ramele si textele sunt PNG
-fotografice, iar tensiunea bateriei, pierderea invertorului si temperatura raman valori VFD dinamice Compose.
+Sub FLUX, TABLOU afiseaza doua placi (Baterie, Invertor) si, de la v3.30, banda BMS: titlu + LED de stare
+si trei placi mai mici (SOC, curent, diferenta intre celule). Ramele sunt PNG fotografice, iar valorile sunt
+VFD dinamic Compose. Placa temperaturii si cuvantul „Temperatura" au fost scoase; temperatura invertorului
+apare discret, ca „29°C", sub eticheta „Inv". Placile BMS folosesc `retro_dashboard_dial_blank.webp` = placa
+temperaturii cu „°C"-ul sters (`scripts/make-retro-blank-dial.py`), ca Compose sa scrie %, A, mV peste ea.
+Atingerea benzii BMS duce pe SISTEM.
 
 Implementarea este impartita astfel:
 
@@ -416,6 +418,8 @@ Cele două mini-grafice citesc `battery_voltage` și `inverter_temp` pe interval
 este vizibilă, Compose încarcă seriile la intrare și apoi la fiecare 60 secunde. Plecarea din tab oprește
 automat coroutine-ul. Telemetria principală rămâne la polling-ul existent de două secunde.
 
-Consola nu este un log de comandă și nu acceptă input. Este un sumar READ-ONLY cu temperatura, API/upload,
-starea invertorului, bateria și rețeaua. Codurile colorate păstrează convenția globală și nu adaugă nicio
-funcție de control.
+Până la v3.29 sub mini-grafice era o „consolă" cu temperatura, API/upload, starea invertorului, bateria și
+rețeaua. De la v3.30 locul ei îl ia monitorul BMS (`RetroBmsMonitor` în `RetroBms.kt`): titlu și LED de
+stare, câte o bară pe celulă (abaterea de la medie, ±15 mV scară plină; galben ≥ 10 mV, roșu ≥ 30 mV),
+apoi SOC · curent · tensiune, diferența · temperaturi · MOSFET și un rând cu MOSFET-uri, echilibrare, Ah
+și cicluri; la alarmă ultimul rând devine mesajul alarmei. Totul e READ-ONLY, din `/solar/bms`.

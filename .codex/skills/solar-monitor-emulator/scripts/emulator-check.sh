@@ -17,7 +17,7 @@ EMULATOR_LOG="$ARTIFACT_DIR/emulator.log"
 
 usage() {
     printf '%s\n' \
-        "Usage: $0 doctor|start|wait|build|install|launch|screenshot|retro-tabs|status|verify|stop [screenshot.png]" \
+        "Usage: $0 doctor|start|wait|build|install|launch|screenshot|retro-tabs|profile|layout-check|status|verify|stop [arg]" \
         "" \
         "  doctor      Verify SDK, emulator, KVM and AVD prerequisites" \
         "  start       Start the configured AVD headlessly" \
@@ -27,6 +27,10 @@ usage() {
         "  launch      Force-stop and launch Solar Monitor" \
         "  screenshot  Save a PNG and UI hierarchy under android/build" \
         "  retro-tabs  Capture and validate all four fixed Retro tabs" \
+        "  profile     note9|note9-large|reset: ecranul telefonului utilizatorului (1080x2220, 420 dpi," \
+        "              butoane de navigare Android, font 100% / 130%) sau ecranul implicit al AVD-ului" \
+        "  layout-check  retro-tabs + verifica ca banda BMS, monitorul BMS si randul Alarma baterie" \
+        "              nu se suprapun si nu intra in bara de navigare (check-layout.py)" \
         "  status      Show AVD, adb, Android, app and saved-theme status" \
         "  verify      Run doctor, start, wait, build, install, launch and capture" \
         "  stop        Shut down the running emulator"
@@ -169,8 +173,25 @@ capture_screen() {
     printf 'Screenshot: %s\nUI hierarchy: %s\nLogcat: %s\n' "$screenshot" "$hierarchy" "$logcat_file"
 }
 
+# Centrul unui tab din bara de navigare a aplicatiei, din dump-ul uiautomator (nu din procente de ecran:
+# cu butoanele de navigare Android bara de sistem ia din inaltime si procentele nimeresc alt element).
+tab_center() {
+    local serial="$1" label="$2" dump="$ARTIFACT_DIR/tabs.xml"
+    "$ADB" -s "$serial" shell uiautomator dump /sdcard/solar-tabs.xml >/dev/null
+    "$ADB" -s "$serial" pull /sdcard/solar-tabs.xml "$dump" >/dev/null
+    python3 - "$dump" "$label" <<'PY'
+import re, sys
+xml = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r'content-desc="Tab ' + re.escape(sys.argv[2]) + r'[^"]*"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+if not m:
+    sys.exit(1)
+x0, y0, x1, y1 = map(int, m.groups())
+print((x0 + x1) // 2, (y0 + y1) // 2)
+PY
+}
+
 capture_retro_tabs() {
-    local serial physical_size width height nav_y index x label expected output
+    local serial physical_size width height nav_y index x label expected output center
     local -a labels=(TABLOU ENERGIE SISTEM SETARI)
     serial="$(require_online_serial)"
     physical_size="$($ADB -s "$serial" shell wm size | sed -n 's/.*: \([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' | head -1)"
@@ -184,6 +205,11 @@ capture_retro_tabs() {
     for index in 0 1 2 3; do
         label="${labels[$index]}"
         x=$((width * (index * 2 + 1) / 8))
+        if center="$(tab_center "$serial" "$label")"; then
+            read -r x nav_y <<<"$center"
+        else
+            nav_y=$((height * 93 / 100))
+        fi
         "$ADB" -s "$serial" shell input tap "$x" "$nav_y"
         sleep 1
         output="$ARTIFACT_DIR/retro-tab-${label,,}.png"
@@ -199,6 +225,56 @@ capture_retro_tabs() {
         fi
     done
     printf 'Toate cele patru taburi Retro sunt fixe si au fost capturate in %s.\n' "$ARTIFACT_DIR"
+}
+
+set_profile() {
+    local serial
+    serial="$(require_online_serial)"
+    case "${1:-}" in
+        note9|note9-large)
+            # Galaxy Note 9 (FHD+ 1080x2220, 420 dpi) cu butoane de navigare (48 dp), nu gesturi.
+            # AVD-ul Pixel 6 are bara de stare de 45 dp (decupaj), Note 9 are ~25 dp: adaug 52 px la
+            # inaltime ca zona utila a aplicatiei sa iasa identica cu a telefonului (verificat pe poza
+            # utilizatorului: ~2028 px). Pe telefonul lui fontul de sistem e ~130% (note9-large).
+            "$ADB" -s "$serial" shell wm size 1080x2272
+            "$ADB" -s "$serial" shell wm density 420
+            "$ADB" -s "$serial" shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.threebutton >/dev/null
+            if [[ "$1" == "note9-large" ]]; then
+                "$ADB" -s "$serial" shell settings put system font_scale 1.3
+            else
+                "$ADB" -s "$serial" shell settings put system font_scale 1.0
+            fi
+            ;;
+        reset)
+            "$ADB" -s "$serial" shell wm size reset
+            "$ADB" -s "$serial" shell wm density reset
+            "$ADB" -s "$serial" shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.gestural >/dev/null
+            "$ADB" -s "$serial" shell settings put system font_scale 1.0
+            ;;
+        *)
+            printf 'Usage: %s profile note9|note9-large|reset\n' "$0" >&2
+            exit 2
+            ;;
+    esac
+    sleep 3
+    printf 'Profil: %s | ' "$1"
+    "$ADB" -s "$serial" shell wm size | tr '\n' ' '
+    "$ADB" -s "$serial" shell wm density | tr '\n' ' '
+    printf '\n'
+}
+
+layout_check() {
+    local label
+    capture_retro_tabs
+    for label in TABLOU SISTEM SETARI; do
+        local center x y
+        center="$(tab_center "$(require_online_serial)" "$label")"
+        read -r x y <<<"$center"
+        "$ADB" -s "$(require_online_serial)" shell input tap "$x" "$y"
+        sleep 2
+        capture_screen "$ARTIFACT_DIR/layout-${label,,}.png" >/dev/null
+        python3 "$SCRIPT_DIR/check-layout.py" "$LAST_HIERARCHY" "$label"
+    done
 }
 
 show_status() {
@@ -270,6 +346,8 @@ case "$command" in
     launch) launch_app ;;
     screenshot) capture_screen "${2:-}" ;;
     retro-tabs) capture_retro_tabs ;;
+    profile) set_profile "${2:-}" ;;
+    layout-check) layout_check ;;
     status) doctor; show_status ;;
     verify) verify_all "${2:-}" ;;
     stop) stop_emulator ;;

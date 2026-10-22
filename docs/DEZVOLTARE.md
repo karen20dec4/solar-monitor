@@ -238,6 +238,12 @@ peste LED-ul verde pictat când ultimele date live au peste 10 s, respectiv pest
 (`liveLedFor` în `EnergySelection.kt`). Dacă vine un export Photoshop nou al plăcii, regenerează
 și suprapunerile din el.
 
+Din v3.30 TABLOU nu mai are placa „Temperatura" (nici cuvântul pictat, `retro_dashboard_label_temperature`):
+citirile BMS (SOC, curent, diferența dintre celule) folosesc `retro_dashboard_dial_blank.webp`, adică placa
+temperaturii cu „°C"-ul pictat șters de `scripts/make-retro-blank-dial.py` (intrarea e PNG-ul original din
+commit-ul `dd0aaf5`). Unitățile sunt text Compose, deci se pot schimba din cod. Rândul „ALARMĂ BATERIE"
+din SETARI și monitorul BMS din SISTEM sunt Compose pur (fără pixeli noi), deci nu cer export Photoshop.
+
 Asset: `android/app/src/main/res/drawable-nodpi/retro_energy_controls_chart_artwork.webp`
 — **1024 × 1266 px**, desenat în spațiul logic 1045 × 1292 folosit de Compose
 (factor 1024/1045 ≈ **0,9799**).
@@ -392,6 +398,9 @@ scripts/send-android-release-telegram.sh --dry-run
 4. Commit cu mesaj în stil conventional commits (`feat(android):`, `fix(api):`, `docs:`),
    corpul în română.
 5. `git push`.
+5b. Pentru orice modificare a paginilor Retro: `emulator-check.sh profile note9-large` apoi `layout-check`
+   (și pe `note9`, `reset`) — telefonul utilizatorului e un Note 9 (1080×2220, butoane de navigare, font
+   ~130%), nu Pixel 6; vezi `.codex/skills/solar-monitor-emulator/SKILL.md`. La final `profile reset`.
 6. Dacă ai folosit emulatorul: `emulator-check.sh stop` și confirmă că
    `solar-monitor-emulator.service` e inactiv și nu mai există proces `qemu-system-x86`.
 7. Raportează: versiunea finală, calea APK, SHA-256, id-ul livrării Telegram, hash-ul de

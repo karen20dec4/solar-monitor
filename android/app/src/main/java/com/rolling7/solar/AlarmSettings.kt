@@ -11,9 +11,14 @@ data class AlarmSettings(
     val thresholdW: Int,
     val cooldownS: Int,
     val vibrate: Boolean,
-    val ringtoneUri: String?
+    val ringtoneUri: String?,
+    /** Alarma bateriei (BMS), cu intrerupator propriu; foloseste acelasi sunet, vibratie si cooldown. */
+    val batteryEnabled: Boolean = false
 ) {
     val clearThresholdW: Int get() = (thresholdW - 200).coerceAtLeast(0)
+
+    /** Serviciul din prim-plan ruleaza cat timp e pornita cel putin una dintre alarme. */
+    val anyEnabled: Boolean get() = enabled || batteryEnabled
 }
 
 object AlarmSettingsStore {
@@ -23,6 +28,7 @@ object AlarmSettingsStore {
     private const val KEY_COOLDOWN_S = "cooldown_s"
     private const val KEY_VIBRATE = "vibrate"
     private const val KEY_RINGTONE_URI = "ringtone_uri"
+    private const val KEY_BATTERY_ENABLED = "battery_enabled"
 
     fun read(context: Context): AlarmSettings {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -31,7 +37,8 @@ object AlarmSettingsStore {
             thresholdW = prefs.getInt(KEY_THRESHOLD_W, 5000),
             cooldownS = prefs.getInt(KEY_COOLDOWN_S, 300),
             vibrate = prefs.getBoolean(KEY_VIBRATE, true),
-            ringtoneUri = prefs.getString(KEY_RINGTONE_URI, null)
+            ringtoneUri = prefs.getString(KEY_RINGTONE_URI, null),
+            batteryEnabled = prefs.getBoolean(KEY_BATTERY_ENABLED, false)
         )
     }
 
@@ -42,6 +49,7 @@ object AlarmSettingsStore {
             .putInt(KEY_COOLDOWN_S, settings.cooldownS)
             .putBoolean(KEY_VIBRATE, settings.vibrate)
             .putString(KEY_RINGTONE_URI, settings.ringtoneUri)
+            .putBoolean(KEY_BATTERY_ENABLED, settings.batteryEnabled)
             .apply()
     }
 
@@ -56,7 +64,7 @@ object AlarmSettingsStore {
     }
 
     fun applyServiceState(context: Context, settings: AlarmSettings) {
-        if (settings.enabled) {
+        if (settings.anyEnabled) {
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, SolarAlarmService::class.java).setAction(SolarAlarmService.ACTION_START)
