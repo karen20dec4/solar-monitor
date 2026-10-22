@@ -1660,3 +1660,40 @@ până se testează, `systemctl stop solar-bms` înainte de aplicația JK. (2) S
 `discharge_mosfet` = 0 și pe `alarm_bits` ≠ 0, integrare în aplicația Android: neîncepute.
 (4) SOC-ul BMS va deriva, fiindcă invertorul încarcă doar până la 56 V (4,0 V/celulă), sub pragul
 de 100% al BMS-ului (4,19 V). Sistemul rămâne strict **READ-ONLY**.
+
+### 13.65 BMS: panouri Grafana, alerte, endpoint `/solar/bms` (2026-10-22)
+
+**Cerere.** Panouri în Grafana, alertă „ca la depășirea consumului" și datele BMS în aplicația mobilă.
+Locul din aplicație nu e ales încă (utilizatorul așteaptă sugestii); partea de aplicație nu e începută.
+
+**Grafana** (`grafana/dashboards/solar.json`, v27, 34 panouri). Rând nou „BMS baterie (JK) - timp real",
+între „Timp real - putere" și „Istoric" (rândurile de dedesubt coboară cu 27): 6 statistici (SOC, tensiune,
+curent, diferență celule, temperatură max, MOSFET), tensiunile celor 14 celule, diferența dintre celule în
+mV, curentul BMS vs invertor, temperaturi, linie de stare MOSFET/echilibrare. La capătul rândului „Istoric":
+celule min/max, diferență max, temperaturi (bucket `history`). Toate interogările verificate prin
+`/api/ds/query`; randare verificată vizual cu `scripts/grafana-screenshot.py` (nu există plugin de randare,
+deci Chromium + DevTools). Capcană: linia de stare cu culori `thresholds` ignoră mapările de valori și scrie
+„1+" / „< 1"; folosește `palette-classic`.
+Constatări din grafice: curentul BMS și cel al invertorului se suprapun (≈ 0,5 A diferență la 50 A);
+diferența dintre celule oscilează 10–20 mV sub sarcină mare și 1–5 mV în repaus; `balancing` ia valorile 1 și 2.
+
+**Alerte** (`bms/bms_alerts.py`, 10 teste noi). Șapte reguli: MOSFET oprit, `alarm_bits` ≠ 0, celulă ≥ 4,12 V,
+celulă ≤ 3,20 V, diferență ≥ 100 mV (60 s), temperatură baterie ≥ 45 °C sau MOSFET ≥ 80 °C, baterie ≤ 2 °C,
+plus „fără date" după 3 min. Push ntfy pe topicul existent (`127.0.0.1:8088`, verificat pe un topic de test) și,
+cât timp condiția ține, scriere în fiecare secundă ca `bms_alert` în `live`. Pragurile sunt în `.env`
+(`.env.example`). Alertele sunt condiție cu debounce, fără cooldown: cooldown-ul alarmei din aplicație îl
+va ține aplicația, după setările ei.
+
+**API** (`api/app.py`, 4 teste noi, 15 în total): `GET /solar/bms` = ultimele câmpuri `bms` plate + `timestamp`
+(null fără date din ultimele 15 s) + `alarms` (alertele active, scrise în ultimele 6 s). Verificat prin Caddy
+cu o alertă sintetică, ștearsă apoi din `live`. Containerul `solar-api` reconstruit.
+
+**Bug găsit și reparat în cititor.** La oprire sesiunea BLE nu era închisă (taskul sesiunii nu era anulat și
+așteptat), deci BMS-ul rămânea „conectat" la adaptor, nu mai făcea reclamă și cititorul repornit zicea
+„nu a fost găsit". Acum oprirea deconectează (verificat cu `bluetoothctl devices Connected` după `systemctl
+stop`), iar dacă BMS-ul nu apare la scanare se încearcă conectarea direct după adresă. Mesajul „nu a fost
+găsit (telefonul conectat la el?)" a rămas valabil și pentru telefonul conectat.
+
+**De făcut (aplicația).** Alegerea locului pentru datele BMS, alarma BMS în `SolarAlarmService` (ar suna la
+`prio` urgent/high din `/solar/bms`), setările alarmei, câmpuri BMS în `/solar/history`. Sistemul rămâne
+strict **READ-ONLY**.

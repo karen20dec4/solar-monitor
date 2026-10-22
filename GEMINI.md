@@ -327,6 +327,23 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
 - Se presupune un singur client BLE odată (netestat): oprește serviciul
   (`systemctl stop solar-bms`) înainte de aplicația JK de pe telefon și repornește-l după.
   Aplicația JK cere și locația pornită pe telefon.
+- Alerte: regulile și motorul sunt în `bms/bms_alerts.py` (debounce/cooldown/histerezis ca în
+  collector): MOSFET oprit (bateria deconectată), `alarm_bits` ≠ 0, celulă prea sus/jos, diferență între
+  celule (60 s), temperatură mare/mică, fără date de la BMS 3 min. Fiecare trimite push ntfy pe același
+  topic (de pe host, prin `127.0.0.1:8088`) și, cât timp condiția e adevărată, se scrie în fiecare secundă
+  ca măsurătoarea `bms_alert` (tag `key`; câmpuri text `title`/`msg`/`prio`, `active=1.0`). `solar-api` o
+  servește: `GET /solar/bms` întoarce ultimele câmpuri `bms`, `timestamp` (null fără date în ultimele 15 s)
+  și `alarms` (alertele active, adică scrise în ultimele 6 s). Aplicația sună la `prio` urgent/high.
+  Pragurile se reglează în `.env` (`BMS_CELL_HIGH_V`, `BMS_CELL_LOW_V`, `BMS_DELTA_HIGH_V`, `BMS_TEMP_HIGH`,
+  `BMS_MOS_TEMP_HIGH`, `BMS_TEMP_LOW`, `BMS_LINK_LOST_S`, fiecare cu valoare de revenire `_CLR` — vezi
+  `.env.example`).
+- Grafana: rândul „BMS baterie (JK)" (live: SOC, tensiune, curent, diferență celule, temperatură, MOSFET;
+  tensiuni celule, diferență, curent BMS vs invertor, temperaturi, linie de stare MOSFET/echilibrare) și
+  trei panouri BMS la capătul rândului de istoric. Linia de stare trebuie să folosească culori
+  `palette-classic`: în modul `thresholds` Grafana ignoră mapările de valori și scrie „1+" / „< 1".
+- Serviciul se oprește curat (`systemctl stop solar-bms` deconectează BMS-ul). Un BMS rămas „conectat"
+  după un proces ucis nu mai face reclamă; cititorul se conectează atunci direct după adresă, iar
+  `bluetoothctl disconnect <adresa>` îl eliberează manual.
 - Teste (fără Bluetooth): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
   Citire unică pentru depanare: `python3 -I bms/jk_bms_reader.py --once` (oprește întâi
   serviciul). Jurnal: `journalctl -u solar-bms`.

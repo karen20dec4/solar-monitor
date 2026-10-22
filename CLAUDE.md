@@ -242,6 +242,22 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   `alarm_bits` (u16@166, always 0 so far) are **not** verified yet.
 - One BLE client at a time is assumed (untested): stop the service (`systemctl stop solar-bms`) before using
   the JK phone app, and start it again after. The phone app also needs the phone's location turned on.
+- Alerts: rules and engine in `bms/bms_alerts.py` (debounce/cooldown/hysteresis like the collector):
+  MOSFET off (battery disconnected), `alarm_bits` != 0, cell high/low, cell delta (60 s), temperature
+  high/low, no BMS data for 3 min. Each sends an ntfy push on the same topic (from the host, via
+  `127.0.0.1:8088`) and, while the condition holds, is written every second as measurement `bms_alert`
+  (tag `key`; string fields `title`/`msg`/`prio`, `active=1.0`). `solar-api` serves it: `GET /solar/bms`
+  returns the latest `bms` fields flat, `timestamp` (null without data in the last 15 s) and
+  `alarms` (active alerts, i.e. written in the last 6 s). The phone app rings on `prio` urgent/high.
+  Thresholds are tunable in `.env` (`BMS_CELL_HIGH_V`, `BMS_CELL_LOW_V`, `BMS_DELTA_HIGH_V`, `BMS_TEMP_HIGH`,
+  `BMS_MOS_TEMP_HIGH`, `BMS_TEMP_LOW`, `BMS_LINK_LOST_S`, each with a `_CLR` clear value — see `.env.example`).
+- Grafana: row "BMS baterie (JK)" (live: SOC, voltage, current, cell delta, temperature, MOSFET stats; cell
+  voltages, delta, BMS-vs-inverter current, temperatures, MOSFET/balancing state timeline) and three BMS
+  panels at the end of the history row. The state timeline must use `palette-classic` colours: in
+  `thresholds` colour mode Grafana ignores the value mappings and prints "1+" / "< 1".
+- The service stops cleanly (`systemctl stop solar-bms` disconnects from the BMS). A BMS left "connected" by
+  a killed process stops advertising; the reader then falls back to connecting by address, and
+  `bluetoothctl disconnect <addr>` clears it by hand.
 - Tests (no Bluetooth needed): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
   One-shot read for debugging: `python3 -I bms/jk_bms_reader.py --once` (stop the service first).
   Logs: `journalctl -u solar-bms`.

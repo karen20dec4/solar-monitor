@@ -2,7 +2,7 @@
 """
 Micro-API READ-ONLY pentru aplicatia mobila.
 Citeste ultimele valori din InfluxDB (bucket live) si le returneaza ca JSON.
-Expus prin Caddy la https://vyra.go.ro:31443/solar/latest (handle_path strip /solar).
+Expus prin Caddy la https://vyra.go.ro:31443/solar/latest si /solar/bms (handle_path strip /solar).
 NU vorbeste cu invertorul; doar cu InfluxDB.
 """
 import os
@@ -125,6 +125,37 @@ def latest():
         return jsonify({"error": str(e)}), 503
     out.update(host_metrics.snapshot())
     out["timestamp"] = ts.isoformat() if ts else None
+    return jsonify(out)
+
+
+@app.get("/bms")
+def bms():
+    """Bateria vazuta de BMS-ul JK (masuratoarea `bms`, scrisa de serviciul solar-bms de pe host).
+
+    Campuri plate ca la /latest (+ `timestamp`, null fara date proaspete) si `alarms`: alertele
+    BMS active chiar acum, cu titlu/mesaj/prioritate, evaluate pe server (pragurile sunt in .env).
+    """
+    out, ts, alarms = {}, None, {}
+    try:
+        q = (f'from(bucket: "{BUCKET_LIVE}") |> range(start: -15s) '
+             '|> filter(fn: (r) => r._measurement == "bms") |> last()')
+        for table in client.query_api().query(q, org=ORG):
+            for rec in table.records:
+                out[rec.get_field()] = rec.get_value()
+                ts = rec.get_time()
+        # Cat dureaza o alerta, cititorul o rescrie in fiecare secunda; ce nu mai apare s-a stins.
+        q = (f'from(bucket: "{BUCKET_LIVE}") |> range(start: -6s) '
+             '|> filter(fn: (r) => r._measurement == "bms_alert") |> last()')
+        for table in client.query_api().query(q, org=ORG):
+            for rec in table.records:
+                alarms.setdefault(rec.values.get("key"), {})[rec.get_field()] = rec.get_value()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+    out["timestamp"] = ts.isoformat() if ts else None
+    out["alarms"] = [
+        {"key": key, "title": a.get("title", key), "msg": a.get("msg", ""), "prio": a.get("prio", "default")}
+        for key, a in sorted(alarms.items()) if key and a.get("active") == 1
+    ]
     return jsonify(out)
 
 

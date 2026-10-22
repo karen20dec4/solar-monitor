@@ -20,6 +20,46 @@ class _FakeInfluxClient:
         return _FakeQueryApi(self.queries)
 
 
+class _Rec:
+    def __init__(self, field, value, time, **tags):
+        self._field, self._value, self._time = field, value, time
+        self.values = dict(tags)
+
+    def get_field(self):
+        return self._field
+
+    def get_value(self):
+        return self._value
+
+    def get_time(self):
+        return self._time
+
+
+class _Table:
+    def __init__(self, records):
+        self.records = records
+
+
+class _ScriptedQueryApi:
+    """Raspunde dupa masuratoarea ceruta in query."""
+
+    def __init__(self, bms, alerts, fail=False):
+        self.bms, self.alerts, self.fail = bms, alerts, fail
+
+    def query(self, query, org=None):
+        if self.fail:
+            raise RuntimeError("influx jos")
+        return [_Table(self.alerts if '"bms_alert"' in query else self.bms)]
+
+
+class _ScriptedClient:
+    def __init__(self, **kwargs):
+        self.api = _ScriptedQueryApi(**kwargs)
+
+    def query_api(self):
+        return self.api
+
+
 class _FakeHostMetrics:
     def snapshot(self):
         return {
@@ -192,6 +232,61 @@ class ExactStatsTest(unittest.TestCase):
         self.assertEqual(1, len(self.queries))
         self.assertEqual(3964.0, payload["stats"]["sum"])
         self.assertEqual(2964.0, payload["stats"]["max"])
+
+
+class BmsApiTest(unittest.TestCase):
+    def setUp(self):
+        self.original_client = api_module.client
+        self.client = api_module.app.test_client()
+
+    def tearDown(self):
+        api_module.client = self.original_client
+
+    def _now(self):
+        from datetime import datetime, timezone
+        return datetime(2026, 10, 22, 18, 0, 0, tzinfo=timezone.utc)
+
+    def test_bms_returns_flat_fields_timestamp_and_active_alarms(self):
+        now = self._now()
+        api_module.client = _ScriptedClient(
+            bms=[_Rec("voltage", 55.8, now), _Rec("current", -47.7, now), _Rec("soc", 95.0, now)],
+            alerts=[
+                _Rec("title", "BMS: bateria deconectata!", now, key="bms_mosfet"),
+                _Rec("msg", "MOSFET incarcare oprit", now, key="bms_mosfet"),
+                _Rec("prio", "urgent", now, key="bms_mosfet"),
+                _Rec("active", 1.0, now, key="bms_mosfet"),
+                _Rec("active", 0.0, now, key="bms_vechi"),
+            ])
+        payload = self.client.get("/bms").get_json()
+        self.assertEqual(55.8, payload["voltage"])
+        self.assertEqual(-47.7, payload["current"])
+        self.assertEqual("2026-10-22T18:00:00+00:00", payload["timestamp"])
+        self.assertEqual(
+            [{"key": "bms_mosfet", "title": "BMS: bateria deconectata!",
+              "msg": "MOSFET incarcare oprit", "prio": "urgent"}],
+            payload["alarms"])
+
+    def test_bms_without_fresh_data_has_null_timestamp_and_no_alarms(self):
+        api_module.client = _ScriptedClient(bms=[], alerts=[])
+        response = self.client.get("/bms")
+        self.assertEqual(200, response.status_code)
+        payload = response.get_json()
+        self.assertIsNone(payload["timestamp"])
+        self.assertEqual([], payload["alarms"])
+
+    def test_bms_reports_influx_failure_as_503(self):
+        api_module.client = _ScriptedClient(bms=[], alerts=[], fail=True)
+        self.assertEqual(503, self.client.get("/bms").status_code)
+
+    def test_bms_reads_only_live_bucket_measurements_bms_and_bms_alert(self):
+        queries = []
+        api_module.client = _FakeInfluxClient(queries)
+        self.client.get("/bms")
+        self.assertEqual(2, len(queries))
+        self.assertIn('r._measurement == "bms"', queries[0])
+        self.assertIn('r._measurement == "bms_alert"', queries[1])
+        for q in queries:
+            self.assertIn('from(bucket: "live")', q)
 
 
 if __name__ == "__main__":

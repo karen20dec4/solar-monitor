@@ -24,10 +24,14 @@ import os
 import signal
 import struct
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from collections import deque
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from bms_alerts import AlertEngine, build_alerts  # noqa: E402
 
 # ---------------------------------------------------------------- protocol --
 NOTIFY_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
@@ -220,6 +224,36 @@ class InfluxWriter:
             pass
 
 
+def _quoted(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def alert_line(alert: dict, ts_ns: int) -> str:
+    """O alerta ACTIVA, scrisa la fiecare secunda cat dureaza; API-ul citeste ultimele secunde."""
+    return (f"bms_alert,key={alert['key']} title={_quoted(alert['title'])},"
+            f"msg={_quoted(alert['msg'])},prio={_quoted(alert['prio'])},active=1.0 {ts_ns}")
+
+
+def make_notifier(cfg):
+    """Push ntfy pe acelasi topic ca alertele din collector (de pe host: portul publicat)."""
+    topic = cfg.get("NTFY_TOPIC", "Alerta_6Kw")
+    url = cfg.get("BMS_NTFY_URL") or f"http://127.0.0.1:8088/{topic}"
+
+    def notify(title, message, priority="default", tags=""):
+        def send():
+            try:
+                req = urllib.request.Request(
+                    url, data=message.encode("utf-8"), method="POST",
+                    headers={"Title": title, "Priority": priority, "Tags": tags})
+                urllib.request.urlopen(req, timeout=5).close()
+            except Exception as exc:  # noqa: BLE001
+                logging.warning("ntfy POST esuat: %s", exc)
+        logging.info("ALERTA: %s - %s", title, message)
+        threading.Thread(target=send, daemon=True).start()
+
+    return notify
+
+
 # ------------------------------------------------------------------ config --
 def load_env(path):
     env = {}
@@ -243,7 +277,9 @@ def load_config():
 
 # -------------------------------------------------------------------- main --
 async def run_session(cfg, device, on_fields):
-    """O conexiune BLE: trimite cererile de date si preda fiecare cadru decodat."""
+    """O conexiune BLE: trimite cererile de date si preda fiecare cadru decodat.
+
+    `device` e un BLEDevice sau doar adresa (BlueZ il stie deja)."""
     from bleak import BleakClient
 
     lost = asyncio.Event()
@@ -267,7 +303,7 @@ async def run_session(cfg, device, on_fields):
 
     async with BleakClient(device, disconnected_callback=lambda _: lost.set(),
                            timeout=30) as client:
-        logging.info("conectat la BMS %s", device.address)
+        logging.info("conectat la BMS %s", getattr(device, "address", device))
         await client.start_notify(NOTIFY_UUID, on_notify)
         await client.write_gatt_char(NOTIFY_UUID, request_frame(CMD_DEVICE_INFO), response=False)
         await asyncio.sleep(1)
@@ -296,12 +332,15 @@ async def main_loop(cfg, once):
     history_every = float(cfg.get("BMS_HISTORY_INTERVAL_S", cfg.get("HISTORY_INTERVAL", 60)))
     buckets = {"live": cfg.get("INFLUXDB_BUCKET_LIVE", "live"),
                "history": cfg.get("INFLUXDB_BUCKET_HISTORY", "history")}
-    writer = None
+    writer = engine = None
     if not once:
         writer = InfluxWriter(cfg.get("BMS_INFLUX_URL", "http://127.0.0.1:8086"),
                               cfg.get("INFLUXDB_ORG", "casa"), cfg["INFLUXDB_TOKEN"], buckets)
+        engine = AlertEngine(build_alerts(cfg), make_notifier(cfg),
+                             debounce_s=float(cfg.get("ALERT_DEBOUNCE_S", 3)),
+                             cooldown_s=float(cfg.get("ALERT_COOLDOWN_S", 300)))
     averager = Averager()
-    clock = {"live": 0.0, "history": time.monotonic()}
+    clock = {"live": 0.0, "history": time.monotonic(), "last_frame": time.monotonic()}
     done = asyncio.Event()
     health = {"failures": 0}
 
@@ -312,8 +351,10 @@ async def main_loop(cfg, once):
             done.set()
             return
         now = time.monotonic()
+        clock["last_frame"] = now
         ts_ns = time.time_ns()
         averager.add(fields)
+        engine.update(fields, now)
         if now - clock["live"] >= live_every:
             clock["live"] = now
             writer.push(buckets["live"], line_protocol(fields, ts_ns))
@@ -321,36 +362,51 @@ async def main_loop(cfg, once):
             clock["history"] = now
             writer.push(buckets["history"], line_protocol(averager.pop(), ts_ns))
 
-    while not done.is_set():
-        try:
-            device = await BleakScanner.find_device_by_address(address, timeout=20)
-            if device is None:
-                raise ConnectionError(f"BMS {address} nu a fost gasit (telefonul conectat la el?)")
-            session = asyncio.create_task(run_session(cfg, device, on_fields))
-            finished = asyncio.create_task(done.wait())
-            flusher = asyncio.create_task(_flush_loop(writer)) if writer else None
-            await asyncio.wait({session, finished}, return_when=asyncio.FIRST_COMPLETED)
-            if flusher:
-                flusher.cancel()
-            if finished.done():
-                session.cancel()
-                break
-            session.result()  # ridica motivul intreruperii
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - orice eroare BLE => reconectare
-            health["failures"] += 1
-            wait = min(5 * health["failures"], 60)
-            logging.warning("BMS: %s; reincerc in %d s", exc, wait)
-            if writer:
-                await asyncio.to_thread(writer.flush)
-            await asyncio.sleep(wait)
+    async def background():
+        """Ceasul de legatura, alertele active -> InfluxDB si trimiterea cozii, o data pe secunda."""
+        while True:
+            await asyncio.sleep(1)
+            now = time.monotonic()
+            engine.update({"link_age": now - clock["last_frame"]}, now, group="link")
+            ts_ns = time.time_ns()
+            for alert in engine.active_payload():
+                writer.push(buckets["live"], alert_line(alert, ts_ns))
+            await asyncio.to_thread(writer.flush)
 
-
-async def _flush_loop(writer):
-    while True:
-        await asyncio.sleep(1)
-        await asyncio.to_thread(writer.flush)
+    worker = None if once else asyncio.create_task(background())
+    session = None
+    try:
+        while not done.is_set():
+            try:
+                device = await BleakScanner.find_device_by_address(address, timeout=10)
+                if device is None:
+                    # Un BMS deja conectat (legatura ramasa de la un proces oprit) nu mai face
+                    # reclama; BlueZ il stie totusi dupa adresa.
+                    device = address
+                session = asyncio.create_task(run_session(cfg, device, on_fields))
+                finished = asyncio.create_task(done.wait())
+                await asyncio.wait({session, finished}, return_when=asyncio.FIRST_COMPLETED)
+                if finished.done():
+                    session.cancel()
+                    break
+                finished.cancel()
+                session.result()  # ridica motivul intreruperii
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - orice eroare BLE => reconectare
+                health["failures"] += 1
+                wait = min(5 * health["failures"], 60)
+                logging.warning("BMS: %s; reincerc in %d s", exc, wait)
+                await asyncio.sleep(wait)
+    finally:
+        # Oprire curata: sesiunea BLE trebuie sa inchida legatura, altfel BMS-ul ramane
+        # "conectat" la adaptor si nu mai poate fi gasit de procesul urmator.
+        if session is not None and not session.done():
+            session.cancel()
+        if session is not None:
+            await asyncio.gather(session, return_exceptions=True)
+        if worker:
+            worker.cancel()
 
 
 def main():
