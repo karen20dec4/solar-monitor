@@ -48,6 +48,11 @@ asks and accepts the risk.
 > utility so PV dedicates to the battery) was **rejected by the user** (grid consumption not worth
 > ~0.5V). Final: no button, no writes, READ-ONLY stands. Full research in `COPILOT_CONTEXT.md` §13.17.
 > Do not reopen without new information (e.g. new firmware with documented charge-control registers).
+>
+> **BMS reader (2026-10-22):** the battery's JK BMS is read over Bluetooth LE by `bms/jk_bms_reader.py`
+> (see "BMS reader" below). It is **READ-ONLY** too: the only thing it may send are the data requests
+> `0x96`/`0x97`. The JK protocol also has write commands (thresholds, balancer, charge/discharge MOSFETs,
+> password) — never add them. `request_frame()` rejects every other command and a unit test enforces it.
 
 ## Architecture
 
@@ -214,6 +219,32 @@ status codes and `battery_soc` keep the last value) → `InfluxSink.flush()`.
 > its register table are **stale** — e.g. it documents battery power via register 90, but the code
 > moved to the official Bat_Watt registers 77/78 (commit "Use official battery watt registers").
 > When they disagree, **`collector.py` is the source of truth.**
+
+## BMS reader (`bms/`)
+
+Battery BMS: JK `JK_BD6A20S12P` (hw 11U, sw 11.54), 14S pack. Read over Bluetooth LE from the host's USB
+dongle (TP-Link UB500, Realtek RTL8761B; needs `firmware-realtek`) by `bms/jk_bms_reader.py` — a **host**
+systemd service (`deploy/solar-bms.service`, installed in `/etc/systemd/system/`), not a container, because it
+needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env` as `BMS_ADDRESS`.
+
+- Writes measurement `bms` (tag `device=jk_bms`, all fields float) to `live` (~1 s) and `history` (60 s mean;
+  `soc`/cycles/capacity keep the last value, `charge_mosfet`/`discharge_mosfet` the **minimum** and
+  `alarm_bits` the maximum, so a few seconds of disconnect stay visible). Fields: `cell_01..cell_14`,
+  `cell_min/max/avg/delta`, `voltage`, `current`, `power`, `temp_mos/1/2`, `soc`, `soh`,
+  `capacity_remaining_ah`, `capacity_nominal_ah`, `cycles`, `cycle_capacity_ah`, `charge_mosfet`,
+  `discharge_mosfet`, `balancing`, `alarm_bits`.
+- Sign: `current`/`power` **positive = charging, negative = discharging**, same as the inverter fields
+  (checked against the inverter on 2026-10-22: -47.7 A vs 48.2 A discharge). The BMS reads ~0.5 V above the
+  inverter at 48 A (cable/fuse loop ≈ 10 mΩ).
+- Verified offsets (JK02_32S frame, 300 bytes): cells u16@6, enabled mask u32@70, MOS temp@144, voltage
+  u32@150, current s32@158, T1@162, T2@164, SOC u8@173, remaining/nominal Ah@174/178, cycles@182,
+  SOH@190, MOSFETs@198/199. `balancing` (u8@172, was 2 with a 16–19 mV delta) and the meaning of the bits in
+  `alarm_bits` (u16@166, always 0 so far) are **not** verified yet.
+- One BLE client at a time is assumed (untested): stop the service (`systemctl stop solar-bms`) before using
+  the JK phone app, and start it again after. The phone app also needs the phone's location turned on.
+- Tests (no Bluetooth needed): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
+  One-shot read for debugging: `python3 -I bms/jk_bms_reader.py --once` (stop the service first).
+  Logs: `journalctl -u solar-bms`.
 
 ## Conventions
 

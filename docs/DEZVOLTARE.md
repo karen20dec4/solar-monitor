@@ -406,6 +406,8 @@ decizii deja luate, nu scăpări.
 
 - **Nicio scriere către invertor.** Fără FC06/FC16, fără control de mod/prioritate,
   fără „încarcă bateria acum". Subiect închis; vezi `GEMINI.md`.
+- **Nicio scriere către BMS.** Cititorul `bms/jk_bms_reader.py` trimite doar cererile de date
+  `0x96`/`0x97`; fără comenzi JK de setări (praguri, balansare, MOSFET-uri, parolă).
 - Fără cloud Growatt / ShineServer, fără MQTT, fără dongle ShineWiFi, fără Modbus TCP.
 - Fără derulare verticală în UI-ul Retro.
 - Fără valori „coapte" în bitmap — datele rămân dinamice, Compose nativ.

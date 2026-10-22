@@ -51,6 +51,10 @@ explicită a utilizatorului care își asumă riscul.
   cu prag intern de re-încărcare nesetabil (≈ float − 2 V). Singurul workaround
   (scriere în holding register 1, comutare ieșire pe rețea) a fost **refuzat de utilizator**.
   (`COPILOT_CONTEXT.md` §13.17)
+- *2026-10-22* — **cititorul BMS** (`bms/jk_bms_reader.py`, bateria JK prin Bluetooth LE) e
+  tot **READ-ONLY**: trimite doar cererile de date `0x96`/`0x97`. Protocolul JK are și comenzi
+  de scriere (praguri, balansare, MOSFET-uri de încărcare/descărcare, parolă) — nu le adăuga.
+  `request_frame()` refuză orice altă comandă, iar un test unitar verifică asta.
 
 Recon-ul FC03 (citire holding registers) e o *citire* și nu încalcă invariantul.
 
@@ -294,6 +298,38 @@ Doar un build local de diagnostic, nelivrat, poate păstra versiunea curentă.
 
 Procedura completă (build, verificare `aapt`, SHA-256, trimitere Telegram, consemnare în
 `COPILOT_CONTEXT.md`) e în **`docs/DEZVOLTARE.md` §„Release Android"**.
+
+---
+
+## Cititorul BMS (`bms/`)
+
+BMS-ul bateriei: JK `JK_BD6A20S12P` (hw 11U, sw 11.54), pachet 14S. Citit prin Bluetooth LE
+cu dongle-ul USB al serverului (TP-Link UB500, Realtek RTL8761B; cere `firmware-realtek`) de
+`bms/jk_bms_reader.py` — serviciu systemd **pe host** (`deploy/solar-bms.service`, instalat în
+`/etc/systemd/system/`), nu container: are nevoie de BlueZ și de dongle. Dependență: pachetul
+Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
+
+- Scrie măsurătoarea `bms` (tag `device=jk_bms`, toate câmpurile float) în `live` (~1 s) și
+  `history` (medie pe 60 s; `soc`, cicluri și capacități păstrează ultima valoare,
+  `charge_mosfet`/`discharge_mosfet` **minimul**, `alarm_bits` maximul — ca o deconectare de
+  câteva secunde să rămână vizibilă). Câmpuri: `cell_01..cell_14`, `cell_min/max/avg/delta`,
+  `voltage`, `current`, `power`, `temp_mos/1/2`, `soc`, `soh`, `capacity_remaining_ah`,
+  `capacity_nominal_ah`, `cycles`, `cycle_capacity_ah`, `charge_mosfet`, `discharge_mosfet`,
+  `balancing`, `alarm_bits`.
+- Semn: `current`/`power` **pozitiv = încarcă, negativ = descarcă**, ca la invertor
+  (verificat 2026-10-22: -47,7 A la BMS față de 48,2 A descărcare la invertor). BMS-ul vede ~0,5 V
+  peste invertor la 48 A (cabluri + siguranță ≈ 10 mΩ).
+- Offseturi verificate (cadru JK02_32S, 300 de octeți): celule u16@6, mască celule u32@70,
+  temperatură MOS@144, tensiune u32@150, curent s32@158, T1@162, T2@164, SOC u8@173,
+  rămas/nominal Ah@174/178, cicluri@182, SOH@190, MOSFET-uri@198/199. `balancing` (u8@172, a fost
+  2 cu delta de 16–19 mV) și sensul biților din `alarm_bits` (u16@166, încă mereu 0) **nu** sunt
+  verificate.
+- Se presupune un singur client BLE odată (netestat): oprește serviciul
+  (`systemctl stop solar-bms`) înainte de aplicația JK de pe telefon și repornește-l după.
+  Aplicația JK cere și locația pornită pe telefon.
+- Teste (fără Bluetooth): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
+  Citire unică pentru depanare: `python3 -I bms/jk_bms_reader.py --once` (oprește întâi
+  serviciul). Jurnal: `journalctl -u solar-bms`.
 
 ---
 

@@ -1617,3 +1617,46 @@ din titlu dubla butonul aprins, utilizatorul a ales să fie scos.
 Telegram mesaj **122**, SHA-256 descărcat înapoi identic; capturile (LED verde/portocaliu/roșu,
 pagina, Note 9 cu font mare) ca album, mesajele 123–125. Fără schimbări pe server.
 Sistemul rămâne strict **READ-ONLY**.
+
+### 13.64 Baterie: cititor JK BMS prin Bluetooth, serviciul `solar-bms` (2026-10-22)
+
+**Context.** Utilizatorul vrea să citim BMS-ul bateriei (JK, pachet 14S din module de mașină electrică,
+~9 kWh) și plănuiește un al doilea pachet 14S. Aplicația JK de pe telefon se conectează doar cu
+locația pornită (cerință Android pentru scanare BLE) — asta a fost și cauza că „nu se putea conecta".
+
+**Incidentul de azi (explicat).** Cele două întreruperi de încărcare (12:36:42 și 12:41:46 ora
+locală, 09:36/09:41 UTC; curentul de încărcare la 0 pentru 3–6 s, magistrala la 58,3 V cât pachetul
+rămânea la ~52,3 V, PV 1080 → 141 W) au fost apăsările lungi pe butonul de pe firul negru al BMS-ului
+(cilindrul metalic din `setup/2.jpg`), ținut până a țiuit invertorul. Nu a fost declanșare de protecție.
+Singurele evenimente de acest fel în 47 h.
+
+**Hardware.** Dongle USB TP-Link UB500 (Realtek RTL8761B, `2357:0604`), BLE 5.0. Debian 13 are
+`firmware-realtek` instalat; kernelul încarcă `rtl8761bu_fw.bin` singur (`hci0` UP). `bluetooth.service`
+activat; `python3-bleak` 0.22.3 din Debian. Serverul vede BMS-ul la RSSI ≈ −78 dBm (slab, dar stabil).
+
+**BMS.** `JK_BD6A20S12P`, hw 11U, sw 11.54, fabricat 2024-11, serviciu BLE `FFE0`/caracteristica
+`FFE1` (notify + write), protocol JK02_32S, cadre de 300 de octeți în notificări de 20, checksum =
+suma primilor 299 de octeți. După cererea `0x96` BMS-ul trimite singur un cadru de celule ~1,6/s.
+
+**Verificări pe date reale (2026-10-22 ~21:10 ora locală).** Celule 14 × ~3,98–3,99 V, voltaj pachet
+55,80 V, curent −47,7 A, putere −2,66 kW, SOC BMS 95%, rămas 171,5 / 180 Ah, 219 cicluri, MOSFET
+încărcare/descărcare pornite, T1/T2/MOS 21,2/19,6/25,4 °C. Invertorul în același moment: 48,2 A /
+−2666 W / 55,33 V. Semnul JK e deja „pozitiv = încarcă". Diferența de 0,47 V la 48 A (BMS peste invertor)
+= buclă de cablu + siguranță ≈ 10 mΩ. Delta celulelor 16–19 mV la sarcină, `balancing` = 2 în acel
+moment (BMS-ul echilibra); în primul cadru captat (4,03 V/celulă, sarcină mică) delta era de 5 mV.
+
+**Cod.** `bms/jk_bms_reader.py` (serviciu pe host, `deploy/solar-bms.service`, `.env`: `BMS_ADDRESS`),
+`bms/test_jk_bms_reader.py` (9 teste, cadru real de test). Scrie măsurătoarea `bms` (tag `device=jk_bms`)
+în `live` (~1 s) și `history` (media pe 60 s, cu minim pentru MOSFET-uri și maxim pentru `alarm_bits`).
+Verificat: ~27 puncte/30 s în `live`, primul punct `history` după 60 s. Câmpurile sunt în `CLAUDE.md` §„BMS reader".
+
+**Siguranță.** Strict READ-ONLY. Singurele scrieri BLE sunt cererile `0x96`/`0x97`
+(`request_frame()` refuză restul; un test verifică și că orice `write_gatt_char` trece prin ea).
+Cadrul de tip 3 conține parola BMS-ului: cititorul nu o decodează și nu o scrie nicăieri.
+
+**Neverificat / de făcut.** (1) Dacă BMS-ul acceptă simultan telefonul și serverul — presupus că nu;
+până se testează, `systemctl stop solar-bms` înainte de aplicația JK. (2) Sensul biților din
+`alarm_bits` și valorile lui `balancing` (0/1/2). (3) Panouri Grafana, alertă pe `charge_mosfet`/
+`discharge_mosfet` = 0 și pe `alarm_bits` ≠ 0, integrare în aplicația Android: neîncepute.
+(4) SOC-ul BMS va deriva, fiindcă invertorul încarcă doar până la 56 V (4,0 V/celulă), sub pragul
+de 100% al BMS-ului (4,19 V). Sistemul rămâne strict **READ-ONLY**.

@@ -1,0 +1,17 @@
+[Unit]
+Description=Solar Monitor - citire baterie JK BMS prin Bluetooth (READ-ONLY -> InfluxDB)
+Documentation=file:/opt/solar-monitor/docs/DEZVOLTARE.md
+After=bluetooth.service network-online.target docker.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /opt/solar-monitor/bms/jk_bms_reader.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
