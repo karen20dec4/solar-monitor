@@ -287,6 +287,9 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
 - Elastic zoom (v3.31): `ElasticZoom.kt` wraps the whole dashboard. Two fingers magnify it (up to ~3×, soft limit) and
   pan it; when the fingers lift it springs back to the original size, nothing is kept. One finger is untouched (taps,
   tab swipes); the two-finger gesture is consumed in the Initial pass so buttons and swipes do not fire.
+- Battery capacity / LiFePO4 decision (open, 2026-10-23): **`docs/BATERIE.md`** (current pack facts, the OLX
+  listings compared, why chemistries must not share a bus, what the BMS reader would need for a second pack).
+  Nothing is decided yet; do not start work on a second BMS or on LFP thresholds without the user's go-ahead.
 - Tests (no Bluetooth needed): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
   One-shot read for debugging: `python3 -I bms/jk_bms_reader.py --once` (stop the service first).
   Logs: `journalctl -u solar-bms`.

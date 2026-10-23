@@ -33,6 +33,7 @@ Toate fișierele de documentație din repo, în ordinea în care le citești:
 | **`COPILOT_CONTEXT.md`** | Jurnal de sesiuni și decizii (secțiunile `13.x`): istoricul descoperirii registrelor, fiecare release, incidente. Tabelul de registre are porțiuni **învechite** — `collector/collector.py` e sursa de adevăr. |
 | **`deploy/README-firewalld.md`** | firewalld, rețeaua Docker, sonda end-to-end. De citit la orice problemă de trafic între containere. |
 | **`bms/jk_bms_reader.py`** | Cititorul bateriei: BMS JK prin Bluetooth LE → InfluxDB (măsurătoarea `bms`). Serviciu systemd pe host (`deploy/solar-bms.service`), strict READ-ONLY. Detalii în `CLAUDE.md` §„BMS reader". |
+| **`docs/BATERIE.md`** | Bateria: ce avem (NMC 14S, 9,3 kWh, 220 cicluri), anunțurile OLX discutate (al doilea pachet NMC sau trecere la LiFePO4), de ce nu se amestecă chimiile, ce se verifică la ridicare, ce ar însemna pentru software. **Decizia nu e luată.** |
 | **`android/DASHBOARD_REDESIGN.md`** | Design-ul temelor `Simple` și `Retro`, arhitectura hibridă fotografie + Compose, lista resurselor. |
 | **`deploy-windows.md`** | Fluxul de lucru de pe stația Windows (Android Studio, scp către server). |
 | **`.codex/skills/solar-monitor-emulator/SKILL.md`** | Emulatorul Android headless: comenzi, AVD, renderer, politica de oprire. |

@@ -66,7 +66,7 @@ intentionat pentru un viitor grup compact de informatii esentiale; nu este umplu
 carduri provizorii.
 
 - TABLOU — consum live, PV si flux energetic;
-- ENERGIE — productie/consum zilnic, totaluri, cinci selectoare si graficul ales;
+- ENERGIE — patru subiecte (CASA, PANOURI, BATERIE, RETEA), doua moduri, trei intervale si graficul ales;
 - SISTEM — stare invertor, baterie, retea, temperatura si pierderi;
 - SETARI — tema, alarma, cooldown, vibratie, sunet si informatii aplicatie.
 
@@ -113,25 +113,44 @@ zone tactile proporționale cu dimensiunea plăcii, folosind `BoxWithConstraints
 înmulțite separat cu `scaleX` și `scaleY`, deci butoanele rămân aliniate chiar când ultimul card primește
 numai înălțimea disponibilă.
 
-Controalele aleg una dintre cele cinci serii:
+Controalele sunt trei rânduri, citite de sus în jos (`EnergySelection.kt`): CE urmărești (subiect), CUM (mod) și CÂT
+timp (interval). Fiecare combinație e un câmp al API-ului:
 
-- CASA — consumul casei în W;
-- PANOURI — producția PV în W;
-- BATERIE — tensiunea în V;
-- PRODUCTIE ZILNICĂ — kWh produși pe zi;
-- CONSUM ZILNIC — kWh consumați pe zi.
+| Subiect | Mod | Câmp API | Grafic |
+|---|---|---|---|
+| CASA | PUTERE · W | `output_power` | linie |
+| CASA | ENERGIE · kWh | `energy_load_today` | bare |
+| PANOURI | PUTERE · W | `pv_power` | linie |
+| PANOURI | ENERGIE · kWh | `energy_pv_today` | bare |
+| BATERIE | TENSIUNE · V | `battery_voltage` | linie |
+| RETEA (v3.32) | PUTERE · W | `grid_power` | linie |
+| RETEA (v3.32) | ENERGIE · kWh | `energy_grid` | bare |
 
-`7d` și `30d` pornesc o citire nouă prin `SolarRepository.fetchHistory`. Schimbarea seriei sau a
-intervalului activează `LaunchedEffect`, afișează starea de încărcare și înlocuiește graficul numai după
-răspuns. Dacă API-ul nu răspunde, mesajul din rama graficului poate fi apăsat pentru reîncercare.
+Intervalele sunt 2h, 1d și 7d la toate. Rândul de subiecte are, din v3.32, patru plăci: poza șasiului a fost
+peticită (`scripts/patch-retro-energy-subjects.py`) ca să aibă patru plăci goale, iar pictograma și numele le
+desenează Compose (`RetroSubjectLabel`); celelalte două rânduri (moduri, intervale) sunt plăci native opace peste
+textul pictat vechi. Accentul subiectului: CASA albastru, PANOURI verde, BATERIE galben, RETEA roșu (ca rețeaua în FLUX).
+Valorile sub 1 kWh au două zecimale, iar axele cu pas sub 0,1 la fel.
 
-Graficele sunt desenate nativ cu `Canvas`, direct în fereastra goală a ramei: bare pentru valorile zilnice,
-linie cu umplere discretă pentru putere și tensiune, grilă, axe și pragurile bateriei. Datele, titlul,
-unitatea și selecțiile nu sunt lipite în bitmap. Pagina nu folosește `verticalScroll`.
+Schimbarea seriei sau a intervalului activează `LaunchedEffect`, afișează starea de încărcare și înlocuiește
+graficul numai după răspuns. Dacă API-ul nu răspunde, mesajul din rama graficului poate fi apăsat pentru reîncercare.
 
-API-ul rămâne READ-ONLY și citește numai InfluxDB. Pentru seriile Casa/Panouri/Baterie, 7 zile folosesc
-agregare medie la 30 minute, iar 30 zile agregare medie la 2 ore. Seria zilnică folosește în continuare
-maximul fiecărei zile, pentru că registrele `*_today` se resetează la miezul nopții.
+Graficele sunt desenate nativ cu `Canvas`, direct în fereastra goală a ramei: bare pentru energie, linie cu umplere
+discretă pentru putere și tensiune, grilă, axe și pragurile bateriei. Datele, titlul, unitatea și selecțiile nu sunt
+lipite în bitmap. Pagina nu folosește `verticalScroll`.
+
+API-ul rămâne READ-ONLY și citește numai InfluxDB. Barele de energie integrează puterea (2h: bare de 10 minute, 1d: pe
+oră, ambele din `live`; 7d: pe zi, din `history`); la CASA și PANOURI 7d/30d iau maximul zilnic al contorului invertorului
+(`*_today` se resetează la miezul nopții). Pentru RETEA nu există contor: `grid_power` (import pe bypass + încărcare AC)
+îl scrie collector-ul, iar barele îl integrează și la 7d.
+
+### Zoom elastic (v3.31)
+
+`ElasticZoom.kt` înfășoară tot tabloul de bord (Retro și Simple; fereastra de alarmă rămâne deasupra, nemărită). Cu două
+degete aplicația se mărește până la ~3× (limită moale, `elasticScale`) și se mută odată cu degetele; la ridicare revine,
+cu un mic resort, la mărimea inițială, fără nicio stare „mărit". Un deget singur trece neschimbat spre conținut (atingeri,
+glisare între taburi); gestul cu două degete e consumat în pasul `Initial`, deci butoanele și glisarea nu se declanșează.
+Se verifică în emulator cu `emulator-check.sh pinch`.
 
 ### Pagina SISTEM: structură fotografică V5
 

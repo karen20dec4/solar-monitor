@@ -1809,3 +1809,25 @@ cu date reale; Simple ok; `pinch` ok pe ENERGIE; fără `FATAL EXCEPTION`. Inv �
 **Release.** `versionCode` 36, `versionName` 3.32, `/opt/solar-monitor/SolarMonitor-v3.32.apk`, 7.227.599 bytes,
 SHA-256 `a45abd90173cb93735ccf8d0c3651746b90c7f3cc5e9d1521b08ea8f2d26fdda`, Telegram mesaj **138** (SHA descărcat
 identic), capturi 139–143. Sistemul rămâne strict **READ-ONLY**.
+
+### 13.69 Discuție despre capacitate: al doilea pachet NMC sau trecere la LiFePO4 — **nedecis** (2026-10-23)
+
+Rezumatul complet, cu anunțurile OLX, cifrele și ce ar însemna pentru software, e în **`docs/BATERIE.md`**. Pe scurt:
+
+- **Ce avem:** pachet 14S **NMC** (etichetă „LIION 14S MIN 48V MAX 57V"; în 30 de zile celula max 3,985 V, pachet max
+  55,7 V, deci nu LiFePO4), 180 Ah ≈ 9,3 kWh, JK BMS, **220 de cicluri** (39.644 Ah ÷ 180 Ah; contorul pornește de la
+  punerea BMS-ului, capacitatea și SOH „100%" sunt valori setate, nu măsurate). BMS-ul nu are câmp „chimie" în cadrele
+  citite (doar `0x96`/`0x97`).
+- **De ce acum:** 2026-10-23 bateria a ajuns la 47,58 V pe la 8:05 și invertorul a stat ~4 h pe bypass (~1,1 kWh din rețea).
+- **Anunțuri:** (A) NMC Hyundai/Kia HL GreenPower BK330-B0000, 14S 180 Ah 9,3 kWh, Căteasca (Argeș), persoană fizică,
+  2.500 lei fără BMS / 3.000 cu JK, 81–188 cicluri, fără garanție, doar ridicare, preț pe banc neclar (~53 €/kWh);
+  (B1) LFP sVolt 135 Ah 16S 7 kWh, Făgăraș, firmă, 2.499 lei/modul + BMS JK 380 lei, factură + garanție (durată
+  necunoscută) + retur 14 zile (~80 €/kWh cu BMS); (B2) LFP „13kw" Târgu Neamț, persoană fizică, 5.000 lei, descriere
+  de o linie, fără date — nu se evaluează așa cum e scris.
+- **Concluzii tehnice:** LFP și NMC nu se pun în paralel pe aceeași magistrală (14S vs 16S, curbe diferite, o singură
+  tensiune de încărcare în invertor: 56 V = 4,0 V pe celulă la NMC, 3,5 V la LFP); LFP ar însemna **în locul** NMC-ului.
+  Al doilea NMC: un BMS și o siguranță pe pachet, egalizare de tensiune înainte de legare, cabluri egale; aș lua un
+  singur banc. LFP: doar anunțul B1, cu garanția în scris și un test de capacitate.
+- **Software după decizie:** al doilea JK = a doua instanță a cititorului (alt `BMS_ADDRESS`/`device`) + panouri Grafana
+  și zone în aplicație; praguri `BMS_*` pe chimie. Nimic din asta nu s-a început.
+- **Rămâne de decis:** drum 1 (NMC în plus) sau drum 2 (LFP) și bugetul.
