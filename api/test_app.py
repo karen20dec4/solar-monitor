@@ -162,6 +162,36 @@ class HistoryApiTest(unittest.TestCase):
         self.assertIn("date.add(d: -6d, to: date.truncate(t: now(), unit: 1d))", query)
         self.assertNotIn("integral(", query)
 
+    def test_grid_consumption_is_a_line_power_and_a_bar_energy_metric(self):
+        for range_key in ("2h", "1d", "7d"):
+            response = self.client.get(f"/history?field=grid_power&range={range_key}")
+            self.assertEqual(200, response.status_code)
+            payload = response.get_json()
+            self.assertEqual(("line", "W"), (payload["chart"], payload["unit"]))
+            self.assertIn('r._field == "grid_power"', self.queries[-1])
+        response = self.client.get("/history?field=energy_grid&range=1d")
+        self.assertEqual(200, response.status_code)
+        payload = response.get_json()
+        self.assertEqual(("bar", "kWh"), (payload["chart"], payload["unit"]))
+
+    def test_grid_energy_integrates_grid_power_live_for_short_ranges_and_history_for_days(self):
+        for range_key, bucket, start, window in (
+            ("2h", "live", "-110m", "10m"),
+            ("1d", "live", "-23h", "1h"),
+            ("7d", "history", "-6d", "1d"),
+            ("30d", "history", "-29d", "1d"),
+        ):
+            with self.subTest(range=range_key):
+                response = self.client.get(f"/history?field=energy_grid&range={range_key}")
+                self.assertEqual(200, response.status_code)
+                self.assertEqual(window, response.get_json()["window"])
+                query = self.queries[-1]
+                self.assertIn(f'from(bucket: "{bucket}")', query)
+                self.assertIn('r._field == "grid_power"', query)
+                self.assertIn("integral(unit: 1h", query)
+                self.assertIn(f"date.add(d: {start}, to: date.truncate(t: now(), unit: {window}))", query)
+                self.assertIn('timeSrc: "_start"', query)
+
     def test_line_ranges_keep_window_end_timestamps(self):
         response = self.client.get("/history?field=pv_power&range=2h")
         self.assertEqual(200, response.status_code)

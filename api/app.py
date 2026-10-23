@@ -91,6 +91,31 @@ HISTORY_FIELDS = {
             "30d": {"start": "-29d", "window": "1d", "bucket": "history", "fn": "max"},
         },
     },
+    # Consumul din retea (casa pe bypass + incarcare AC a bateriei). `grid_power` il scrie collectorul
+    # din v3.32; istoricul de dinainte a fost completat o data cu aceeasi formula. Nu exista contor al
+    # invertorului pentru asta, deci barele integreaza puterea, ca la 2h/1d la celelalte: 2h/1d din `live`,
+    # 7d/30d din `history` (medii pe 60 s), pe zile intregi aliniate la miezul noptii.
+    "grid_power": {
+        "label": "Retea", "unit": "W", "chart": "line",
+        "ranges": {
+            "2h": {"start": "-2h", "window": "1m", "bucket": "live", "fn": "mean"},
+            "1h": {"start": "-1h", "window": "30s", "bucket": "live", "fn": "mean"},
+            "6h": {"start": "-6h", "window": "2m", "bucket": "live", "fn": "mean"},
+            "24h": {"start": "-24h", "window": "5m", "bucket": "history", "fn": "mean"},
+            "1d": {"start": "-1d", "window": "1h", "bucket": "history", "fn": "mean", "stats_bucket": "live"},
+            "7d": {"start": "-7d", "window": "30m", "bucket": "history", "fn": "mean"},
+            "30d": {"start": "-30d", "window": "2h", "bucket": "history", "fn": "mean"},
+        },
+    },
+    "energy_grid": {
+        "label": "Consum din retea", "unit": "kWh", "chart": "bar",
+        "ranges": {
+            "2h": {"start": "-110m", "window": "10m", "bucket": "live", "integral_of": "grid_power"},
+            "1d": {"start": "-23h", "window": "1h", "bucket": "live", "integral_of": "grid_power"},
+            "7d": {"start": "-6d", "window": "1d", "bucket": "history", "integral_of": "grid_power"},
+            "30d": {"start": "-29d", "window": "1d", "bucket": "history", "integral_of": "grid_power"},
+        },
+    },
     "inverter_temp": {
         "label": "Temperatura invertor", "unit": "°C", "chart": "line",
         "ranges": {

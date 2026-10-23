@@ -207,6 +207,18 @@ contoarele de energie, codurile de stare și `battery_soc` păstrează ultima va
   și rutează `output_power` către exact unul dintre `house_pv`/`house_bat`/`house_grid` la fiecare
   ciclu. Cu ambele setări pe 0, rezultatul e identic cu logica veche nefiltrată (verificat pe 26 h
   de date reale).
+- **Bypass** (status 8–11, rețea prezentă): casa e direct pe rețea, sarcina nu trece prin invertor. Reziduul de mai
+  sus iese atunci negativ (pierdere 0, import prea mic exact cu autoconsumul invertorului). De aceea pe bypass:
+  `inverter_loss` = mediana pe 60 s (fereastră proprie, golită la ieșirea din bypass) a părții PV fără sarcină
+  (`PV + descărcare + rețea→baterie − încărcare`; dacă iese ≤ 0, estimarea `INVERTER_LOSS_ESTIMATE_W` cu
+  `inverter_loss_estimated=1`), iar `grid_import_power` = `output_power`. Măsurat 2026-10-23: PV−încărcare ≈ 87 W,
+  la fel ca cei ~100 W pe care îi consumă noaptea pe baterie; importul din rețea era 112 W față de 207 W sarcină.
+  `grid_power` = `grid_import_power` + încărcarea AC a bateriei (`grid_charge_power`): tot ce ia sistemul din
+  rețea, în W, mediat în `history`. Invertorul n-are contor de energie din rețea, deci barele kWh din aplicație
+  integrează puterea (`energy_grid` în API, 2h/1d din `live`, 7d/30d din `history`). Istoricul de dinainte de
+  2026-10-23 09:53 UTC a fost completat o singură dată cu aceeași formulă. Teste:
+  `docker run --rm --network none -v /opt/solar-monitor/collector:/src:ro -w /src --entrypoint python
+  solar-monitor-collector -m unittest`.
 - **Alerte** (`build_alerts` / `eval_alerts`): listă de dicționare cu lambda-uri `fire`/`clear`
   peste datele parsate. Fiecare are **debounce** (condiția trebuie să țină `ALERT_DEBOUNCE_S`),
   **cooldown** (`ALERT_COOLDOWN_S` între realertări) și **histerezis** (prag separat de
@@ -354,6 +366,10 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   (`AlarmSettings.batteryEnabled`, implicit oprit); `SolarAlarmService` rulează cât timp e pornită oricare
   alarmă, interoghează `/bms` la 4 s și sună (același sunet/vibrație/cooldown ca la consum) o singură dată
   per alarmă cu `prio` urgent/high (`BmsAlarmTracker`). Pragurile sunt pe server, nu în aplicație.
+- ENERGIE (v3.32): al patrulea subiect RETEA, cu putere (`grid_power`, W) și energie (`energy_grid`, bare kWh), 2h/1d/7d
+  ca la celelalte, accent roșu. Rândul de subiecte (CASA / PANOURI / BATERIE / RETEA) e format din patru plăci goale
+  puse în asset de `scripts/patch-retro-energy-subjects.py`; pictogramele și numele le desenează Compose. kWh sub 1
+  se afișează cu două zecimale.
 - Zoom elastic (v3.31): `ElasticZoom.kt` înfășoară tot tabloul de bord. Cu două degete aplicația se mărește
   (până la ~3×, limită moale) și se mută odată cu degetele; la ridicarea degetelor revine singură, cu un mic
   resort, la mărimea inițială — nu rămâne nimic mărit. Un deget singur trece neschimbat (atingeri, glisare între

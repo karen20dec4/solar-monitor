@@ -164,7 +164,7 @@ the ENERGIE section titles — those are pixels. (Exceptions on ENERGIE since v3
 PUTERE/ENERGIE/TENSIUNE row and the line at the bottom are opaque native plates laid over old painted
 text — `7d`/`30d`, `PRODUCȚIE ZILNICĂ`, `Ultima actualizare: ACUM`. Since v3.29 the old tab slot at the
 top is gone from the asset itself (ImageMagick patch, `scripts/patch-retro-energy-top.py`), and the
-painted green LED gets a recoloured orange/red overlay when live data is late. TABLOU's BMS plates reuse
+painted green LED gets a recoloured orange/red overlay when live data is late. The ENERGIE subject row (CASA / PANOURI / BATERIE / RETEA, v3.32) is four blank plates patched into the asset by `scripts/patch-retro-energy-subjects.py`, with icons and names drawn by Compose. TABLOU's BMS plates reuse
 `retro_dashboard_dial_blank.webp` — the old temperature plate with its painted "°C" erased by
 `scripts/make-retro-blank-dial.py` — so units are Compose text.)
 Changing the string in Kotlin
@@ -203,6 +203,19 @@ status codes and `battery_soc` keep the last value) → `InfluxSink.flush()`.
   `output_power` to exactly one of `house_pv`/`house_bat`/`house_grid` each cycle so the dashboard
   can show a single source-colored pill. With both knobs at 0 the output is identical to the old
   unfiltered logic (checked on 26 h of real data).
+- **Bypass** (status 8–11, grid present): the house sits directly on the grid, the load does not pass through
+  the inverter. The residual above would then be negative (loss 0, import too small by exactly the inverter's
+  own draw). So in bypass: `inverter_loss` = median of the PV side without the load (`PV + discharge +
+  grid→battery − charge`, own 60 s window, reset when bypass ends; if that is ≤ 0, the
+  `INVERTER_LOSS_ESTIMATE_W` estimate with `inverter_loss_estimated=1`) and `grid_import_power` = `output_power`.
+  Measured 2026-10-23: PV−charge ≈ 87 W, the same as the ~100 W the inverter eats at night on battery; grid
+  import was 112 W against 207 W of load before this. `grid_power` = `grid_import_power` + AC charging of the
+  battery (`grid_charge_power`): everything the system takes from the grid, W, averaged into `history`. There is
+  no grid energy counter in the inverter, so the app's kWh bars integrate it (`energy_grid` in the API, 2h/1d
+  from `live`, 7d/30d from `history`). History before 2026-10-23 09:53 UTC was filled once with the same formula
+  (`grid_power`, bypass → `output_power`, otherwise `grid_import_power`, plus AC charge). Tests:
+  `docker run --rm --network none -v /opt/solar-monitor/collector:/src:ro -w /src --entrypoint python
+  solar-monitor-collector -m unittest`.
 - **Alerts** (`build_alerts` / `eval_alerts`): list of dicts with `fire`/`clear` lambdas over the
   parsed data. Each alert has **debounce** (condition must hold `ALERT_DEBOUNCE_S`), **cooldown**
   (`ALERT_COOLDOWN_S` between re-alerts), and **hysteresis** (separate clear threshold); timing uses
@@ -270,6 +283,7 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   BATERIE" with its own toggle (`AlarmSettings.batteryEnabled`, default off); `SolarAlarmService` runs while
   either alarm is on, polls `/bms` every 4 s and rings (same sound/vibration/cooldown as the consumption
   alarm) once per alarm with `prio` urgent/high (`BmsAlarmTracker`). Thresholds live on the server, not in the app.
+- ENERGIE (v3.32): fourth subject RETEA, power (`grid_power`, W) and energy (`energy_grid`, kWh bars), 2h/1d/7d like the others; red accent. kWh under 1 shows two decimals.
 - Elastic zoom (v3.31): `ElasticZoom.kt` wraps the whole dashboard. Two fingers magnify it (up to ~3×, soft limit) and
   pan it; when the fingers lift it springs back to the original size, nothing is kept. One finger is untouched (taps,
   tab swipes); the two-finger gesture is consumed in the Initial pass so buttons and swipes do not fire.

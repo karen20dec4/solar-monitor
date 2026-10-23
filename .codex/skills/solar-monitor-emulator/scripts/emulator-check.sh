@@ -34,7 +34,7 @@ usage() {
         "  profile     note9|note9-large|reset: ecranul telefonului utilizatorului (1080x2220, 420 dpi," \
         "              butoane de navigare Android, font 100% / 130%) sau ecranul implicit al AVD-ului" \
         "  layout-check  retro-tabs + verifica ca banda BMS, monitorul BMS si randul Alarma baterie" \
-        "              nu se suprapun si nu intra in bara de navigare (check-layout.py)" \
+        "              nu se suprapun si nu intra in bara de navigare; pe ENERGIE cele 4 placi de subiect (check-layout.py)" \
         "  pinch       Ciupire cu doua degete (zoom elastic): tine degetele jos, face captura zoom-held.png" \
         "              le ridica si dupa 2,5 s face zoom-after.png (trebuie sa fie la marimea initiala)" \
         "  status      Show AVD, adb, Android, app and saved-theme status" \
@@ -279,7 +279,7 @@ layout_check() {
     local label
     apply_default_profile
     capture_retro_tabs
-    for label in TABLOU SISTEM SETARI; do
+    for label in TABLOU ENERGIE SISTEM SETARI; do
         local center x y
         center="$(tab_center "$(require_online_serial)" "$label")"
         read -r x y <<<"$center"

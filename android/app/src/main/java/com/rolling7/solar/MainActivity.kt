@@ -115,6 +115,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.log10
@@ -195,6 +196,7 @@ private fun historyAccent(field: String, simpleColor: Color, retro: Boolean): Co
         "pv_power", "energy_pv_today" -> RetroSage
         "battery_voltage" -> RetroYellow
         "output_power", "energy_load_today" -> RetroHouseBlue
+        "grid_power", "energy_grid" -> RetroRed
         else -> RetroText
     }
 }
@@ -613,6 +615,7 @@ private fun simpleSubjectColor(subject: EnergySubject): Color = when (subject) {
     EnergySubject.HOUSE -> CHouse
     EnergySubject.PANELS -> CPv
     EnergySubject.BATTERY -> CBat
+    EnergySubject.GRID -> CGrid
 }
 
 private fun energySeriesSpan(series: HistorySeries, metric: HistoryMetric): String =
@@ -727,7 +730,7 @@ private fun RetroEnergyChartCanvas(
             min = 0.0,
             max = top,
             gridValues = (4 downTo 0).map { top * it / 4.0 },
-            title = "0-${formatAxisValue(top, metric.unit)}"
+            title = "0-${formatAxisValue(top, metric.unit, top)}"
         )
     } else {
         lineAxis(metric, values)
@@ -778,7 +781,7 @@ private fun RetroEnergyChartCanvas(
                 strokeWidth = 1.dp.toPx()
             )
             drawContext.canvas.nativeCanvas.drawText(
-                formatAxisValue(value, metric.unit),
+                formatAxisValue(value, metric.unit, axis.max),
                 1.dp.toPx(),
                 y - 2.dp.toPx(),
                 yPaint
@@ -1834,6 +1837,23 @@ private val DashboardHistoryMetrics = listOf(
         defaultRange = "7d",
         ranges = listOf("2h", "1d", "7d"),
         chartStyle = ChartStyle.Bar
+    ),
+    HistoryMetric(
+        title = "Putere din retea",
+        field = "grid_power",
+        unit = "W",
+        color = CGrid,
+        defaultRange = "1d",
+        ranges = listOf("2h", "1d", "7d")
+    ),
+    HistoryMetric(
+        title = "Energie din retea",
+        field = "energy_grid",
+        unit = "kWh",
+        color = CGrid,
+        defaultRange = "7d",
+        ranges = listOf("2h", "1d", "7d"),
+        chartStyle = ChartStyle.Bar
     )
 )
 
@@ -2515,7 +2535,7 @@ private fun HistoryChart(
                         strokeWidth = 1.2f
                     )
                     drawContext.canvas.nativeCanvas.drawText(
-                        formatAxisValue(value, metric.unit),
+                        formatAxisValue(value, metric.unit, axis.max),
                         17f * density,
                         y - 4f,
                         yPaint
@@ -2817,7 +2837,7 @@ private fun lineAxis(metric: HistoryMetric, values: List<Double>): LineAxis {
         min = 0.0,
         max = top,
         gridValues = grid,
-        title = "0-${formatAxisValue(top, metric.unit)}"
+        title = "0-${formatAxisValue(top, metric.unit, top)}"
     )
 }
 
@@ -2872,17 +2892,19 @@ private fun floorToStep(time: OffsetDateTime, stepMinutes: Long): OffsetDateTime
         .withNano(0)
 }
 
-private fun formatAxisValue(value: Double, unit: String): String = when (unit) {
+/** `axisTop`: varful axei; sub 0,4 kWh pasul e sub 0,1 si cu o zecimala etichetele se repeta (0.2 0.2 0.1 0.1). */
+private fun formatAxisValue(value: Double, unit: String, axisTop: Double = Double.NaN): String = when (unit) {
     "V" -> "${value.roundToInt()}V"
     "W" -> "${value.roundToInt()}W"
-    "kWh" -> String.format(Locale.US, "%.1fkWh", value)
+    "kWh" -> String.format(Locale.US, if (axisTop < 0.4) "%.2fkWh" else "%.1fkWh", value)
     else -> String.format(Locale.US, "%.1f%s", value, unit)
 }
 
 private fun formatHistoryValue(value: Double, unit: String): String = when (unit) {
     "V" -> String.format(Locale.US, "%.2f V", value)
     "W" -> "${value.roundToInt()} W"
-    "kWh" -> String.format(Locale.US, "%.1f kWh", value)
+    // Sub 1 kWh doua zecimale: "MEDIE 0.0 kWh" ascundea 0,04 kWh pe bara de 10 minute.
+    "kWh" -> String.format(Locale.US, if (abs(value) < 1.0) "%.2f kWh" else "%.1f kWh", value)
     else -> String.format(Locale.US, "%.1f %s", value, unit)
 }
 
@@ -2892,6 +2914,8 @@ private fun historySubtitle(metric: HistoryMetric): String = when (metric.field)
     "pv_power" -> "Productie PV si varf maxim"
     "energy_pv_today" -> "Productie zilnica pe ultimele zile"
     "energy_load_today" -> "Consum zilnic pe ultimele zile"
+    "grid_power" -> "Putere luata din retea si varf maxim"
+    "energy_grid" -> "Energie luata din retea (casa pe bypass + incarcare AC)"
     else -> "Istoric"
 }
 

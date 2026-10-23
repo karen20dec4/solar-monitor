@@ -13,7 +13,7 @@ ceva ce API-ul refuză, sau API care servește ceva ce nimeni nu afișează.
 
 | # | Strat | Fișier | Ce faci aici |
 |---|---|---|---|
-| 1 | Invertor → registre | `collector/collector.py`, funcția `parse()` și clasa `BalanceDeriver` | `parse()` mapează registre brute în câmpuri cu nume; tot ce vine din bilanțul de puteri (pierdere, deficit, import rețea, sursa casei) e în `BalanceDeriver` |
+| 1 | Invertor → registre | `collector/collector.py`, funcția `parse()` și clasa `BalanceDeriver` | `parse()` mapează registre brute în câmpuri cu nume; tot ce vine din bilanțul de puteri (pierdere, deficit, import rețea, `grid_power`, sursa casei) e în `BalanceDeriver`; teste în `collector/test_collector.py` |
 | 2 | Alerte | `collector/collector.py`, `build_alerts()` | praguri, debounce, cooldown, histerezis |
 | 3 | Stocare | InfluxDB, bucket `live` (1s/48h) și `history` (medii pe 60s/31z) | nimic de editat; doar alegi din care bucket citești |
 | 4 | Expunere JSON | `api/app.py` — listele `FIELDS` și `HISTORY_FIELDS` | ce câmpuri și ce intervale sunt permise aplicației |
@@ -239,6 +239,14 @@ citirile BMS (SOC, curent, diferența dintre celule) folosesc `retro_dashboard_d
 temperaturii cu „°C"-ul pictat șters de `scripts/make-retro-blank-dial.py` (intrarea e PNG-ul original din
 commit-ul `dd0aaf5`). Unitățile sunt text Compose, deci se pot schimba din cod. Rândul „ALARMĂ BATERIE"
 din SETARI și monitorul BMS din SISTEM sunt Compose pur (fără pixeli noi), deci nu cer export Photoshop.
+
+Din v3.32 rândul „CE urmărești" are **patru** plăci (CASA / PANOURI / BATERIE / RETEA). Asset-ul original avea trei
+plăci late cu pictograma și textul pictate; `scripts/patch-retro-energy-subjects.py` (intrarea e asset-ul de la
+commit-ul `581d1c5`) face din prima o placă goală, din ea patru plăci mai înguste (capete cu șuruburi + un mijloc
+de textură) și le așază pe același loc, cu golurile reale dintre plăcile vechi. Pictograma (casă, grilă, baterie,
+stâlp) și numele sunt desenate de Compose (`RetroSubjectLabel`), coordonate 56 + 237,8·i, lățime 219,4, în spațiul
+logic 1045 × 1292. Petecul păstrează canalul alfa al asset-ului (colțurile rotunjite sunt transparente). E un
+plasture ImageMagick/PIL: arată-l utilizatorului în capturi înainte de release; un export Photoshop nou îl înlocuiește.
 
 Asset: `android/app/src/main/res/drawable-nodpi/retro_energy_controls_chart_artwork.webp`
 — **1024 × 1266 px**, desenat în spațiul logic 1045 × 1292 folosit de Compose

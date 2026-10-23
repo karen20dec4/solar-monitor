@@ -174,17 +174,19 @@ class BalanceDeriver:
         self.smooth_s = smooth_s
         self.hold_s = hold_s
         self.window = deque()
+        self.side_window = deque()   # bilantul partii PV/baterie, doar cat sta invertorul pe bypass
         self.source = None
         self.candidate = None
         self.candidate_since = 0.0
 
-    def _smooth(self, balance, now):
+    def _smooth(self, balance, now, window=None):
         if self.smooth_s <= 0:
             return balance
-        self.window.append((now, balance))
-        while now - self.window[0][0] > self.smooth_s:
-            self.window.popleft()
-        return statistics.median(v for _, v in self.window)
+        window = self.window if window is None else window
+        window.append((now, balance))
+        while now - window[0][0] > self.smooth_s:
+            window.popleft()
+        return statistics.median(v for _, v in window)
 
     def _hold_source(self, candidate, now):
         if self.source is None or self.hold_s <= 0:
@@ -232,6 +234,24 @@ class BalanceDeriver:
         loss_raw, _, deficit_raw, grid_import_raw = split(balance_raw)
         loss, loss_estimated, deficit, grid_import = split(balance)
 
+        # Pe BYPASS casa sta direct pe retea: sarcina nu trece prin invertor, deci bilantul de mai sus
+        # (care scade sarcina din PV) iese negativ, "pierderea" ar fi 0 si importul din retea ar fi
+        # prea mic cu exact consumul propriu (masurat 2026-10-23: 112 W import fata de 207 W consum).
+        # Consumul propriu se vede in partea PV/baterie, fara sarcina: PV + descarcare + retea->baterie
+        # - incarcare. Importul din retea e chiar puterea de iesire (casa e toata pe retea).
+        if grid_available and data["bypass_active"] > 0.0:
+            side_raw = balance_raw + out_p
+            side = self._smooth(side_raw, now, self.side_window)
+            loss_raw = max(side_raw, 0.0)
+            loss = max(side, 0.0)
+            loss_estimated = 0.0
+            if loss <= 0.0:   # fara PV nu se poate masura: estimare, marcata ca atare
+                loss = INVERTER_LOSS_ESTIMATE_W
+                loss_estimated = INVERTER_LOSS_ESTIMATE_W
+            grid_import_raw = grid_import = out_p
+        else:
+            self.side_window.clear()
+
         battery_inferred_discharge = (deficit + loss_estimated) if infer_battery_discharge else 0.0
         battery_support = discharge_p + battery_inferred_discharge
         battery_display = data["battery_power"] - battery_inferred_discharge
@@ -264,6 +284,8 @@ class BalanceDeriver:
             "power_deficit_raw":       deficit_raw,
             "grid_import_power":       grid_import,
             "grid_import_power_raw":   grid_import_raw,
+            # Tot ce ia sistemul din retea: casa (bypass) + incarcarea bateriei din retea (AC).
+            "grid_power":              grid_import + grid_charge_for_balance,
             "house_source":            house_source,
         })
         # Rutez consumul casei pe campul sursei active -> card unic colorat in Grafana

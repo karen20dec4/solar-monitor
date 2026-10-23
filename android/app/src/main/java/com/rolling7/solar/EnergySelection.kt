@@ -13,7 +13,8 @@ import java.time.format.DateTimeFormatter
 internal enum class EnergySubject(val label: String) {
     HOUSE("CASA"),
     PANELS("PANOURI"),
-    BATTERY("BATERIE")
+    BATTERY("BATERIE"),
+    GRID("RETEA")
 }
 
 internal enum class EnergyMode(val label: String, val unit: String) {
@@ -22,7 +23,7 @@ internal enum class EnergyMode(val label: String, val unit: String) {
     VOLTAGE("TENSIUNE", "V")
 }
 
-/** Bateria are doar tensiune: API-ul nu are energie incarcata/descarcata. */
+/** Bateria are doar tensiune: API-ul nu are energie incarcata/descarcata. Reteaua: putere si energie (kWh). */
 internal fun energyModesFor(subject: EnergySubject): List<EnergyMode> =
     if (subject == EnergySubject.BATTERY) {
         listOf(EnergyMode.VOLTAGE)
@@ -33,11 +34,12 @@ internal fun energyModesFor(subject: EnergySubject): List<EnergyMode> =
 internal fun energySubjectForField(field: String): EnergySubject = when (field) {
     "output_power", "energy_load_today" -> EnergySubject.HOUSE
     "battery_voltage" -> EnergySubject.BATTERY
+    "grid_power", "energy_grid" -> EnergySubject.GRID
     else -> EnergySubject.PANELS
 }
 
 internal fun energyModeForField(field: String): EnergyMode = when (field) {
-    "energy_pv_today", "energy_load_today" -> EnergyMode.ENERGY
+    "energy_pv_today", "energy_load_today", "energy_grid" -> EnergyMode.ENERGY
     "battery_voltage" -> EnergyMode.VOLTAGE
     else -> EnergyMode.POWER
 }
@@ -46,6 +48,7 @@ internal fun energyFieldFor(subject: EnergySubject, mode: EnergyMode): String = 
     EnergySubject.HOUSE -> if (mode == EnergyMode.ENERGY) "energy_load_today" else "output_power"
     EnergySubject.PANELS -> if (mode == EnergyMode.ENERGY) "energy_pv_today" else "pv_power"
     EnergySubject.BATTERY -> "battery_voltage"
+    EnergySubject.GRID -> if (mode == EnergyMode.ENERGY) "energy_grid" else "grid_power"
 }
 
 /** Schimbi subiectul si pastrezi modul, daca noul subiect il are (CASA ENERGIE -> PANOURI ENERGIE). */
@@ -56,7 +59,8 @@ internal fun energyFieldForSubject(subject: EnergySubject, currentField: String)
 }
 
 internal val EnergyFields = setOf(
-    "output_power", "pv_power", "battery_voltage", "energy_pv_today", "energy_load_today"
+    "output_power", "pv_power", "battery_voltage", "energy_pv_today", "energy_load_today",
+    "grid_power", "energy_grid"
 )
 
 /** Orice camp venit din alt tab, care nu are grafic pe ENERGIE, deschide producția PV. */

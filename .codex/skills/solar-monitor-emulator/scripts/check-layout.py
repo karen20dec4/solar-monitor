@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verifica pe un dump uiautomator ca elementele noi ale paginii nu se suprapun si nu ies din ecran.
 
-Utilizare: check-layout.py <window.xml> <TABLOU|SISTEM|SETARI>
+Utilizare: check-layout.py <window.xml> <TABLOU|ENERGIE|SISTEM|SETARI>
 Iese cu 1 si tipareste motivul daca o regula e incalcata.
 """
 import re
@@ -38,6 +38,17 @@ if tab == "TABLOU":
     need(strip[1] >= max(bat[3], inv[3]) - 2, f"banda BMS {strip} se suprapune cu placile Bat/Inv {bat} {inv}")
     need(strip[3] <= nav[1] + 2, f"banda BMS {strip} intra in bara de navigare {nav}")
     need(0 <= strip[0] and strip[2] <= screen_w, f"banda BMS {strip} iese din latime")
+elif tab == "ENERGIE":
+    # Randul "CE urmaresti": patru placi (CASA, PANOURI, BATERIE, RETEA), una langa alta, in latime.
+    subjects = sorted(b for d, b in nodes() if re.match(r"Grafic (casa|panouri|baterie|retea)", d))
+    need(len(subjects) == 4, f"trebuie 4 placi de subiect (Grafic ...), am {len(subjects)}")
+    for a, b in zip(subjects, subjects[1:]):
+        need(b[0] >= a[2] - 1, f"placile de subiect {a} si {b} se suprapun")
+    need(all(0 <= s[0] and s[2] <= screen_w for s in subjects), f"placile de subiect {subjects} ies din latime")
+    need(len({s[1] for s in subjects}) == 1 and len({s[3] for s in subjects}) == 1, "placile de subiect nu sunt aliniate")
+    mode = find("Mod ")
+    need(mode[1] >= subjects[0][3] - 2, f"randul de moduri {mode} se suprapune cu placile {subjects[0]}")
+    need(find("Interval ")[1] >= mode[3] - 2, "butoanele de interval se suprapun cu randul de moduri")
 elif tab == "SISTEM":
     mon = find("Monitor sistem")
     bms = find("Baterie BMS")

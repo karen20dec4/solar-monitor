@@ -1769,3 +1769,43 @@ TABLOU/SISTEM/SETARI ok; fără `FATAL EXCEPTION`.
 **Release.** `versionCode` 35, `versionName` 3.31, `/opt/solar-monitor/SolarMonitor-v3.31.apk`, 7.173.607 bytes,
 SHA-256 `aecf41aad52b3433767c9ec4e42449ee52eebe53b79e9da4fd42d20ca1e0e14a`, Telegram mesaj **132** (SHA descărcat
 identic), capturi 133–136. Fără rebuild de server. Sistemul rămâne strict **READ-ONLY**.
+
+### 13.68 Consum propriu pe bypass, consum din rețea (tab RETEA în ENERGIE), release v3.32 (2026-10-23)
+
+**Cerere.** Aplicația arăta „consum intern 0" la invertor. Verificat: nu era zero. De la ~8:30 (baterie 48,5 V după
+alerta 47,58 V) invertorul era în **bypass**: casa pe rețea, PV încarcă bateria. Bilanțul `PV + descărcare −
+consum − încărcare` iese atunci negativ (−180 W) și `inverter_loss = max(bilanț, 0)` dădea 0. Utilizatorul a cerut
+corectarea, un tab „consum rețea" în ENERGIE (2h/1d/7d), verificare la rezoluția Note 9 și release.
+
+**Collector (`BalanceDeriver`, rebuild + restart la 09:53 UTC).** Pe bypass cu rețea prezentă:
+`inverter_loss` = mediană pe 60 s (fereastră proprie `side_window`, golită la ieșirea din bypass) a părții PV fără
+sarcină (`PV + descărcare + rețea→baterie − încărcare`), cu estimarea `INVERTER_LOSS_ESTIMATE_W` marcată
+`inverter_loss_estimated` când iese ≤ 0 (fără PV); `grid_import_power` = `output_power` (toată sarcina e pe rețea).
+Date reale 2026-10-23 05:40–09:20 UTC: PV 353 W, încărcare 267 W → pierdere ~87 W (la fel ca ~100 W noaptea pe
+baterie), consum 207 W, deci importul vechi (112 W) era cu ~45% prea mic. Câmp nou `grid_power` = import +
+încărcare AC (W, mediat în `history`). Teste noi: `collector/test_collector.py` (8).
+
+**Istoric completat o singură dată.** `grid_power` scris în `history` (31 zile, 44.628 puncte) și `live` (48 h,
+172.624 puncte) pentru perioada de dinainte de 09:53 UTC, cu aceeași formulă (bypass → `output_power`, altfel
+`grid_import_power`, plus încărcare AC). Zile cu rețea: 5 oct 0,25 kWh, 7 oct 0,90, 12 oct 0,38, 13 oct 3,29,
+14 oct 1,23, 23 oct 1,12 (până la 12:20) — se potrivește cu cele ~29 h de bypass notate în §13.60.
+
+**API (rebuild).** `HISTORY_FIELDS`: `grid_power` (linie, W, ca celelalte) și `energy_grid` (bare kWh): 2h/1d
+integrează `grid_power` din `live`, 7d/30d din `history` pe zile întregi aliniate la miezul nopții. 2 teste noi
+(17 în total).
+
+**Aplicația (v3.32 / 36).** Al patrulea subiect `EnergySubject.GRID` („RETEA", accent roșu) cu PUTERE · W și
+ENERGIE · kWh, intervale 2h/1d/7d; tema Simple îl primește automat (patru chipuri încap și la fontul 130%).
+Rândul de subiecte din Retro a trecut de la trei plăci pictate la patru: **plasture pe asset**
+(`scripts/patch-retro-energy-subjects.py`, plăci goale + capete cu șuruburi, alfa păstrat), pictograma și numele
+desenate de Compose (`RetroSubjectLabel`). kWh sub 1 se afișează cu două zecimale, iar axele cu pas sub 0,1 la fel
+(înainte „0.2 0.2 0.1 0.1 0.0"). 3 teste noi în `EnergySelectionTest`, 5 în total, 41 de teste Android.
+`layout-check` verifică acum și ENERGIE (patru plăci aliniate, fără suprapuneri).
+
+**Verificare (note9-large, API real).** TABLOU/ENERGIE/SISTEM/SETARI ok; RETEA energie 1d, 2h, 7d și putere 1d
+cu date reale; Simple ok; `pinch` ok pe ENERGIE; fără `FATAL EXCEPTION`. Inv în bypass nu s-a putut vedea live
+(invertorul era pe baterie la test): acoperit de testele collectorului.
+
+**Release.** `versionCode` 36, `versionName` 3.32, `/opt/solar-monitor/SolarMonitor-v3.32.apk`, 7.227.599 bytes,
+SHA-256 `a45abd90173cb93735ccf8d0c3651746b90c7f3cc5e9d1521b08ea8f2d26fdda`, Telegram mesaj **138** (SHA descărcat
+identic), capturi 139–143. Sistemul rămâne strict **READ-ONLY**.

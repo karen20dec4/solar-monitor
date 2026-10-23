@@ -65,6 +65,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
@@ -692,22 +694,28 @@ private fun RetroEnergyControlsArtwork(
             contentScale = ContentScale.FillBounds
         )
 
-        // 1. CE urmaresti: butoanele pictate CASA / PANOURI / BATERIE.
-        listOf(
-            Triple(EnergySubject.HOUSE, 55f, 295f),
-            Triple(EnergySubject.PANELS, 369f, 297f),
-            Triple(EnergySubject.BATTERY, 688f, 302f)
-        ).forEach { (option, x, width) ->
+        // 1. CE urmaresti: patru placi goale pictate (petic v3.32, scripts/patch-retro-energy-subjects.py);
+        // pictograma si numele le deseneaza Compose. Coordonate in unitati de 1045 x 1292.
+        val subjects = EnergySubject.values()
+        val subjectWidth = 219.4f
+        val subjectGap = 18.4f
+        subjects.forEachIndexed { index, option ->
+            val optionAccent = retroEnergySubjectAccent(option)
             RetroEnergyTouchTarget(
                 description = "Grafic ${option.label.lowercase()}",
                 selected = option == subject,
-                accent = retroEnergySubjectAccent(option),
+                accent = optionAccent,
                 modifier = Modifier
-                    .offset(x = scaleX * x, y = scaleY * 65f)
-                    .width(scaleX * width)
-                    .height(scaleY * 105f),
+                    .offset(x = scaleX * (56f + (subjectWidth + subjectGap) * index), y = scaleY * 62f)
+                    .width(scaleX * subjectWidth)
+                    .height(scaleY * 108f),
                 onClick = { onFieldClick(energyFieldForSubject(option, selectedField)) }
-            )
+            ) {
+                RetroSubjectLabel(
+                    subject = option,
+                    color = if (option == subject) optionAccent else RetroMuted
+                )
+            }
         }
 
         // 2. CUM: placi native peste "PRODUCTIE ZILNICA / CONSUM ZILNIC" pictate. Ocupa doar
@@ -858,7 +866,8 @@ private fun RetroEnergyTouchTarget(
     accent: Color,
     modifier: Modifier,
     labelText: String? = null,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    content: (@Composable () -> Unit)? = null
 ) {
     Box(
         modifier = modifier
@@ -937,6 +946,76 @@ private fun RetroEnergyTouchTarget(
                 )
             }
         }
+        content?.invoke()
+    }
+}
+
+/** Pictograma si numele subiectului, pe placa goala: pictograma deasupra, numele dedesubt. */
+@Composable
+private fun RetroSubjectLabel(subject: EnergySubject, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Canvas(Modifier.size(width = 18.dp, height = 14.dp)) {
+            drawSubjectIcon(subject, color)
+        }
+        Text(
+            text = subject.label,
+            color = color,
+            fontFamily = RetroMono,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.3.sp,
+            lineHeight = 10.sp,
+            style = LocalTextStyle.current.copy(
+                lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)
+            ),
+            maxLines = 1
+        )
+    }
+}
+
+/** Pictograme simple, in linii: casa, panou (grila), baterie, stalp de retea. */
+private fun DrawScope.drawSubjectIcon(subject: EnergySubject, color: Color) {
+    val w = size.width
+    val h = size.height
+    val stroke = Stroke(width = 1.3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+    when (subject) {
+        EnergySubject.HOUSE -> {
+            val roof = Path().apply {
+                moveTo(w * 0.08f, h * 0.48f)
+                lineTo(w * 0.5f, h * 0.06f)
+                lineTo(w * 0.92f, h * 0.48f)
+            }
+            drawPath(roof, color, style = stroke)
+            val body = Path().apply {
+                moveTo(w * 0.2f, h * 0.42f)
+                lineTo(w * 0.2f, h * 0.94f)
+                lineTo(w * 0.8f, h * 0.94f)
+                lineTo(w * 0.8f, h * 0.42f)
+            }
+            drawPath(body, color, style = stroke)
+            drawLine(color, Offset(w * 0.5f, h * 0.94f), Offset(w * 0.5f, h * 0.62f), stroke.width, StrokeCap.Round)
+        }
+        EnergySubject.PANELS -> {
+            drawRoundRect(color, Offset(w * 0.1f, h * 0.1f), Size(w * 0.8f, h * 0.8f), CornerRadius(1.5.dp.toPx()), stroke)
+            drawLine(color, Offset(w * 0.37f, h * 0.1f), Offset(w * 0.37f, h * 0.9f), stroke.width)
+            drawLine(color, Offset(w * 0.63f, h * 0.1f), Offset(w * 0.63f, h * 0.9f), stroke.width)
+            drawLine(color, Offset(w * 0.1f, h * 0.5f), Offset(w * 0.9f, h * 0.5f), stroke.width)
+        }
+        EnergySubject.BATTERY -> {
+            drawRoundRect(color, Offset(w * 0.3f, h * 0.2f), Size(w * 0.4f, h * 0.76f), CornerRadius(1.5.dp.toPx()), stroke)
+            drawLine(color, Offset(w * 0.42f, h * 0.08f), Offset(w * 0.58f, h * 0.08f), stroke.width * 1.4f, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.4f, h * 0.55f), Offset(w * 0.6f, h * 0.55f), stroke.width * 0.8f, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.5f, h * 0.43f), Offset(w * 0.5f, h * 0.67f), stroke.width * 0.8f, StrokeCap.Round)
+        }
+        EnergySubject.GRID -> {
+            // Stalp de inalta tensiune: picioare, doua brate, zabrele.
+            drawLine(color, Offset(w * 0.5f, h * 0.04f), Offset(w * 0.28f, h * 0.96f), stroke.width, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.5f, h * 0.04f), Offset(w * 0.72f, h * 0.96f), stroke.width, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.18f, h * 0.3f), Offset(w * 0.82f, h * 0.3f), stroke.width, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.3f, h * 0.58f), Offset(w * 0.7f, h * 0.58f), stroke.width, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.36f, h * 0.3f), Offset(w * 0.64f, h * 0.58f), stroke.width * 0.8f, StrokeCap.Round)
+            drawLine(color, Offset(w * 0.64f, h * 0.3f), Offset(w * 0.36f, h * 0.58f), stroke.width * 0.8f, StrokeCap.Round)
+        }
     }
 }
 
@@ -944,6 +1023,7 @@ private fun retroEnergySubjectAccent(subject: EnergySubject): Color = when (subj
     EnergySubject.HOUSE -> RetroHouseBlue
     EnergySubject.PANELS -> RetroSage
     EnergySubject.BATTERY -> RetroYellow
+    EnergySubject.GRID -> RetroRed
 }
 
 @Composable

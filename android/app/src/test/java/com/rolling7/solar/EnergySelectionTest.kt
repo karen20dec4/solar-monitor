@@ -15,6 +15,8 @@ class EnergySelectionTest {
         assertEquals("pv_power", energyFieldFor(EnergySubject.PANELS, EnergyMode.POWER))
         assertEquals("energy_pv_today", energyFieldFor(EnergySubject.PANELS, EnergyMode.ENERGY))
         assertEquals("battery_voltage", energyFieldFor(EnergySubject.BATTERY, EnergyMode.VOLTAGE))
+        assertEquals("grid_power", energyFieldFor(EnergySubject.GRID, EnergyMode.POWER))
+        assertEquals("energy_grid", energyFieldFor(EnergySubject.GRID, EnergyMode.ENERGY))
         EnergyFields.forEach { field ->
             assertEquals(field, energyFieldFor(energySubjectForField(field), energyModeForField(field)))
         }
@@ -26,6 +28,25 @@ class EnergySelectionTest {
         assertEquals("output_power", energyFieldForSubject(EnergySubject.HOUSE, "pv_power"))
         assertEquals("battery_voltage", energyFieldForSubject(EnergySubject.BATTERY, "energy_pv_today"))
         assertEquals("output_power", energyFieldForSubject(EnergySubject.HOUSE, "battery_voltage"))
+        assertEquals("energy_grid", energyFieldForSubject(EnergySubject.GRID, "energy_load_today"))
+        assertEquals("grid_power", energyFieldForSubject(EnergySubject.GRID, "pv_power"))
+        assertEquals("energy_load_today", energyFieldForSubject(EnergySubject.HOUSE, "energy_grid"))
+    }
+
+    @Test
+    fun `the grid is a fourth subject with power and energy`() {
+        assertEquals(
+            listOf("CASA", "PANOURI", "BATERIE", "RETEA"),
+            EnergySubject.values().map { it.label }
+        )
+        assertEquals(listOf(EnergyMode.POWER, EnergyMode.ENERGY), energyModesFor(EnergySubject.GRID))
+        assertEquals(EnergySubject.GRID, energySubjectForField("energy_grid"))
+        assertEquals(EnergyMode.ENERGY, energyModeForField("energy_grid"))
+        assertEquals("energy_grid", normalizedEnergyField("energy_grid"))
+        assertEquals("RETEA · ENERGIE", energyChartTitle("energy_grid"))
+        assertEquals("RETEA · PUTERE", energyChartTitle("grid_power"))
+        // La fel ca la celelalte, 2 ore / 24 ore / 7 zile.
+        assertEquals(listOf("2h", "1d", "7d"), retroEnergyRangesForField("energy_grid"))
     }
 
     @Test
