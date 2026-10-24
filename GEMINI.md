@@ -370,6 +370,17 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   ca la celelalte, accent roșu. Rândul de subiecte (CASA / PANOURI / BATERIE / RETEA) e format din patru plăci goale
   puse în asset de `scripts/patch-retro-energy-subjects.py`; pictogramele și numele le desenează Compose. kWh sub 1
   se afișează cu două zecimale.
+- Factura de curent (v3.33): ENERGIE arată cât s-a luat din rețea de la 1 a lunii (ora Europe/Bucharest), pentru factura
+  Hidroelectrica. `GET /solar/grid-month` -> `{month: "2026-10", since, kwh}` (`kwh` null dacă luna n-are încă nicio
+  mostră): API-ul integrează `grid_power` din `history` între începutul lunii și acum, aceeași serie ca barele RETEA
+  (suma lor pe 7d/30d se potrivește la ~0,01 kWh), deci e estimarea sistemului, nu citirea contorului furnizorului.
+  Retro (v3.34, varianta „A" aleasă de utilizator): afișaj VFD galben stins, pe o sticlă mică semi-transparentă, între
+  titlu și LED, pe placa de sus (`RetroBillReadout`; luna „OCT" mare cu „FACTURA" mic dedesubt, cifre mari cu segmente,
+  „kWh" mic, o zecimală, fără zecimale de la 100 kWh; textele sunt în dp, nu în sp, ca placa să nu crească cu fontul
+  sistemului). Simple: un card pe toată lățimea deasupra lui „Produs azi /
+  Consumat azi" (`SimpleBillTile`). Aplicația îl cere o dată pe minut (la 10 s după un eșec) și păstrează ultima valoare
+  bună. Trece pe luna nouă la miezul nopții din 1 (ora Bucureștiului); încă nu există vedere „luna trecută".
+  `layout-check` verifică că afișajul rămâne pe placă.
 - Zoom elastic (v3.31): `ElasticZoom.kt` înfășoară tot tabloul de bord. Cu două degete aplicația se mărește
   (până la ~3×, limită moale) și se mută odată cu degetele; la ridicarea degetelor revine singură, cu un mic
   resort, la mărimea inițială — nu rămâne nimic mărit. Un deget singur trece neschimbat (atingeri, glisare între

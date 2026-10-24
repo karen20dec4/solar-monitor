@@ -318,6 +318,54 @@ class BmsApiTest(unittest.TestCase):
         for q in queries:
             self.assertIn('from(bucket: "live")', q)
 
+    def test_grid_month_integrates_grid_power_from_the_start_of_the_bucharest_month(self):
+        from datetime import datetime, timezone
+        queries = []
+
+        class _OneValue(_FakeQueryApi):
+            def query(self, query, org=None):
+                queries.append(query)
+                return [_Table([_Rec("_value", 9.34, datetime(2026, 10, 24, 11, 0, tzinfo=timezone.utc))])]
+
+        class _Client:
+            def query_api(self):
+                return _OneValue(queries)
+
+        api_module.client = _Client()
+        original = api_module._month_start
+        api_module._month_start = lambda now=None: original(datetime(2026, 10, 24, 11, 20, tzinfo=timezone.utc))
+        try:
+            payload = self.client.get("/grid-month").get_json()
+        finally:
+            api_module._month_start = original
+        self.assertEqual("2026-10", payload["month"])
+        self.assertEqual(9.34, payload["kwh"])
+        # 1 octombrie 00:00 la Bucuresti (EEST, UTC+3) = 30 septembrie 21:00 UTC
+        self.assertEqual("2026-09-30T21:00:00+00:00", payload["since"])
+        self.assertEqual(1, len(queries))
+        self.assertIn('from(bucket: "history")', queries[0])
+        self.assertIn("range(start: 2026-09-30T21:00:00Z)", queries[0])
+        self.assertIn('r._field == "grid_power"', queries[0])
+        self.assertIn("integral(unit: 1h)", queries[0])
+
+    def test_month_start_follows_bucharest_time_across_the_year_and_the_dst_change(self):
+        from datetime import datetime, timezone
+        # 31 octombrie 22:30 UTC e deja 1 noiembrie la Bucuresti (EET, UTC+2 dupa schimbarea orei)
+        start = api_module._month_start(datetime(2026, 10, 31, 22, 30, tzinfo=timezone.utc))
+        self.assertEqual((2026, 11, 1), (start.year, start.month, start.day))
+        self.assertEqual("2026-10-31T22:00:00+00:00", start.astimezone(timezone.utc).isoformat())
+        # iarna: 1 ianuarie 00:00 la Bucuresti = 31 decembrie 22:00 UTC
+        start = api_module._month_start(datetime(2027, 1, 15, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual("2026-12-31T22:00:00+00:00", start.astimezone(timezone.utc).isoformat())
+
+    def test_grid_month_without_samples_has_null_kwh_and_influx_failure_is_503(self):
+        api_module.client = _FakeInfluxClient([])
+        response = self.client.get("/grid-month")
+        self.assertEqual(200, response.status_code)
+        self.assertIsNone(response.get_json()["kwh"])
+        api_module.client = _ScriptedClient(bms=[], alerts=[], fail=True)
+        self.assertEqual(503, self.client.get("/grid-month").status_code)
+
 
 if __name__ == "__main__":
     unittest.main()

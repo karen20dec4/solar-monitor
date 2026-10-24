@@ -20,6 +20,7 @@ import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -65,6 +66,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.StrokeCap
@@ -75,6 +77,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -529,6 +532,7 @@ private fun RetroCompactTelemetryDial(
 @Composable
 internal fun RetroEnergyArtworkPage(
     data: SolarData?,
+    bill: GridMonth?,
     selectedField: String,
     selectedRange: String,
     chartTitle: String,
@@ -547,6 +551,7 @@ internal fun RetroEnergyArtworkPage(
     ) {
         RetroEnergyTopArtwork(
             data = data,
+            bill = bill,
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .aspectRatio(1_400f / 298f)
@@ -594,6 +599,7 @@ private fun rememberLiveLed(timestamp: String?): State<LiveLed> {
 @Composable
 private fun RetroEnergyTopArtwork(
     data: SolarData?,
+    bill: GridMonth?,
     modifier: Modifier = Modifier
 ) {
     val led by rememberLiveLed(data?.timestamp)
@@ -603,7 +609,7 @@ private fun RetroEnergyTopArtwork(
         LiveLed.STALE -> "fara date noi de peste un minut"
     }
     // Fanta vechilor taburi PRODUCTIE / CONSUM / ISTORIC a fost acoperita in asset cu tabla placii
-    // (v3.29); pe placa raman titlul si LED-ul.
+    // (v3.29); pe placa raman titlul, LED-ul si, din v3.33, afisajul cu factura lunii intre ele.
     BoxWithConstraints(modifier.semantics { contentDescription = "Energie, $ledDescription" }) {
         Image(
             painter = painterResource(R.drawable.retro_energy_top_artwork),
@@ -611,6 +617,8 @@ private fun RetroEnergyTopArtwork(
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.FillBounds
         )
+        // Spatiul liber al placii e intre titlu (se termina la x ~ 345) si LED (incepe la ~ 858), pe un asset de 1024 x 218.
+        RetroBillReadout(bill = bill, plateWidth = maxWidth, plateHeight = maxHeight)
         // LED-ul pictat e verde. Portocaliu si rosu sunt aceeasi fotografie recolorata, decupata
         // din asset la 840,53 / 120 x 120 px (asset 1024 x 218) si pusa exact peste.
         if (led != LiveLed.FRESH) {
@@ -625,6 +633,89 @@ private fun RetroEnergyTopArtwork(
                 contentScale = ContentScale.FillBounds
             )
         }
+    }
+}
+
+/**
+ * Factura lunii in curs: kWh luati din retea de la 1 a lunii, pe un afisaj VFD galben stins cu sticla mica,
+ * semi-transparenta, in placa de sus a ENERGIE. Luna e scrisa mare, "FACTURA" mic sub ea, apoi cifrele cu
+ * segmente ale [RetroVfdDisplay] (ele conteaza, deci sunt cele mai mari) si "kWh" mic. Textele sunt in dp,
+ * nu in sp: placa are marime fixa si nu trebuie sa creasca odata cu fontul sistemului. Pozitia e in unitati
+ * de asset 1024 x 218; fereastra se termina la x = 813, inainte de LED (858), si incepe dupa titlu (345).
+ */
+@Composable
+private fun RetroBillReadout(bill: GridMonth?, plateWidth: Dp, plateHeight: Dp) {
+    val value = billKwhText(bill?.kwh)
+    val month = bill?.monthShort?.uppercase(Locale.ROOT) ?: "—"
+    val shape = RoundedCornerShape(8.dp)
+    val density = LocalDensity.current
+    fun fixedSp(dp: Float) = with(density) { dp.dp.toSp() }
+    fun glowOf(c: Color) = Shadow(color = c.copy(alpha = 0.7f), offset = Offset.Zero, blurRadius = 8f)
+    val digits = RetroYellow.copy(alpha = 0.80f)
+    val monthColor = RetroYellow.copy(alpha = 0.85f)
+    Row(
+        Modifier
+            .offset(x = plateWidth * (453f / 1_024f), y = plateHeight * (59f / 218f))
+            .width(plateWidth * (360f / 1_024f))
+            .height(plateHeight * (100f / 218f))
+            .clip(shape)
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF050805), Color(0xFF10170C), Color(0xFF030503)).map { it.copy(alpha = 0.55f) }
+                )
+            )
+            .border(1.5.dp, RetroBrassDark.copy(alpha = 0.9f), shape)
+            .clearAndSetSemantics {
+                contentDescription = "Factura${bill?.let { " " + it.monthShort } ?: ""}: $value kWh luati din retea de la inceputul lunii"
+            }
+            .padding(start = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.padding(end = 5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = month,
+                color = monthColor,
+                fontFamily = RetroMono,
+                fontSize = fixedSp(16f),
+                lineHeight = fixedSp(16f * 1.1f),
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 1.sp,
+                maxLines = 1,
+                style = LocalTextStyle.current.copy(shadow = glowOf(monthColor))
+            )
+            Text(
+                text = "FACTURA",
+                color = RetroMuted,
+                fontFamily = RetroMono,
+                fontSize = fixedSp(8f),
+                lineHeight = fixedSp(8f * 1.2f),
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp,
+                maxLines = 1
+            )
+        }
+        RetroVfdDisplay(
+            value = value,
+            unit = "",
+            color = digits,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            embedded = true,
+            horizontalPadding = 3.dp
+        )
+        // "kWh" il desenez eu, nu afisajul: cifrele iau tot locul ramas, iar unitatea ramane mai mica decat ele.
+        Text(
+            text = "kWh",
+            color = RetroMuted,
+            fontFamily = RetroMono,
+            fontSize = fixedSp(11f),
+            lineHeight = fixedSp(11f * 1.2f),
+            fontWeight = FontWeight.ExtraBold,
+            maxLines = 1,
+            modifier = Modifier.padding(end = 8.dp),
+            style = LocalTextStyle.current.copy(shadow = glowOf(RetroMuted))
+        )
     }
 }
 

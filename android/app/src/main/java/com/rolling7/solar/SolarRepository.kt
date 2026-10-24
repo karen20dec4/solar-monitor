@@ -49,6 +49,7 @@ object SolarRepository {
     private const val URL_LATEST = "https://vyra.go.ro:31443/solar/latest"
     private const val URL_HISTORY = "https://vyra.go.ro:31443/solar/history"
     private const val URL_BMS = "https://vyra.go.ro:31443/solar/bms"
+    private const val URL_GRID_MONTH = "https://vyra.go.ro:31443/solar/grid-month"
 
     /** Apel de retea sincron - apelat pe Dispatchers.IO. Returneaza null la eroare. */
     fun fetch(): SolarData? {
@@ -104,6 +105,24 @@ object SolarRepository {
             }
             if (conn.responseCode != 200) return null
             parseBmsState(conn.inputStream.bufferedReader().use { it.readText() })
+        } catch (e: Exception) {
+            null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    /** Consumul din retea de la inceputul lunii (pentru factura). Null la eroare de retea sau raspuns neasteptat. */
+    fun fetchGridMonth(): GridMonth? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL(URL_GRID_MONTH).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 5000
+                readTimeout = 8000
+                requestMethod = "GET"
+            }
+            if (conn.responseCode != 200) return null
+            parseGridMonth(conn.inputStream.bufferedReader().use { it.readText() })
         } catch (e: Exception) {
             null
         } finally {

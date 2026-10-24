@@ -2,10 +2,12 @@
 """
 Micro-API READ-ONLY pentru aplicatia mobila.
 Citeste ultimele valori din InfluxDB (bucket live) si le returneaza ca JSON.
-Expus prin Caddy la https://vyra.go.ro:31443/solar/latest si /solar/bms (handle_path strip /solar).
+Expus prin Caddy la https://vyra.go.ro:31443/solar/latest, /solar/bms si /solar/grid-month (handle_path strip /solar).
 NU vorbeste cu invertorul; doar cu InfluxDB.
 """
 import os
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, request
 from influxdb_client import InfluxDBClient
 from system_metrics import HostMetricsSampler
@@ -182,6 +184,46 @@ def bms():
         for key, a in sorted(alarms.items()) if key and a.get("active") == 1
     ]
     return jsonify(out)
+
+
+BUCHAREST = ZoneInfo("Europe/Bucharest")
+
+
+def _month_start(now=None):
+    """Miezul noptii (ora Bucuresti) din prima zi a lunii in curs."""
+    now = (now or datetime.now(BUCHAREST)).astimezone(BUCHAREST)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+@app.get("/grid-month")
+def grid_month():
+    """Cat s-a luat din retea (kWh) de la inceputul lunii calendaristice, ora Bucuresti: pentru factura.
+
+    Acelasi `grid_power` ca la graficul RETEA, integrat din `history` (medii pe 60 s). Nu e citirea
+    contorului furnizorului, ci estimarea sistemului: casa pe bypass plus incarcarea AC a bateriei.
+    `kwh` e null cand luna nu are inca nicio mostra.
+    """
+    start = _month_start().astimezone(timezone.utc)
+    q = (
+        f'from(bucket: "{BUCKET_HISTORY}") |> range(start: {start.strftime("%Y-%m-%dT%H:%M:%SZ")}) '
+        '|> filter(fn: (r) => r._measurement == "inverter" and r._field == "grid_power") '
+        '|> integral(unit: 1h) '
+        '|> map(fn: (r) => ({r with _value: r._value / 1000.0})) '  # Wh -> kWh
+        '|> keep(columns: ["_value"])'
+    )
+    kwh = None
+    try:
+        for table in client.query_api().query(q, org=ORG):
+            for rec in table.records:
+                if rec.get_value() is not None:
+                    kwh = float(rec.get_value())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+    return jsonify({
+        "month": start.astimezone(BUCHAREST).strftime("%Y-%m"),
+        "since": start.isoformat(),
+        "kwh": kwh,
+    })
 
 
 FLUX_HEADER = (

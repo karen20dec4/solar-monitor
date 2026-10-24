@@ -1831,3 +1831,48 @@ Rezumatul complet, cu anunțurile OLX, cifrele și ce ar însemna pentru softwar
 - **Software după decizie:** al doilea JK = a doua instanță a cititorului (alt `BMS_ADDRESS`/`device`) + panouri Grafana
   și zone în aplicație; praguri `BMS_*` pe chimie. Nimic din asta nu s-a început.
 - **Rămâne de decis:** drum 1 (NMC în plus) sau drum 2 (LFP) și bugetul.
+
+### 13.70 Factura lunii pe ENERGIE (consum din rețea de la 1 a lunii), v3.33 (2026-10-24)
+
+**Cerere.** Utilizatorul vrea să vadă undeva cât a consumat din rețeaua Hidroelectrica în luna în curs, ca să știe cam
+cât îi vine factura: pe tabul ENERGIE, sus, în titlu („Factura Oct: 13 kW"), cu fonturile digitale cu glow, valoarea mai
+mare decât restul textului, în ambele teme (în Simple, unde consider eu).
+
+**API (rebuild `solar-api` făcut, 2026-10-24).** `GET /solar/grid-month` -> `{month: "2026-10", since, kwh}`: integrala
+`grid_power` din `history` de la miezul nopții din 1 a lunii (ora Europe/Bucharest, calculat în Python cu `zoneinfo`,
+corect și la schimbarea orei: 25 oct 2026) până acum, în kWh; `kwh` e null dacă luna n-are încă nicio mostră. Aceeași
+serie ca barele RETEA (suma barelor 30d dă 9,32 kWh față de 9,34 pe lună: același număr). Citire reală: 9,34 kWh în
+octombrie la 14:20 EEST (de la 1 oct, istoricul `grid_power` completat în §13.68). 3 teste noi (20 în total):
+interogarea (bucket `history`, începutul lunii în UTC), granițele lunii la Bucuresti (inclusiv 31 oct 22:30 UTC =
+1 nov) și cazurile fără mostre / Influx căzut (503). Estimare a sistemului (casa pe bypass + încărcare AC), nu citirea
+contorului furnizorului; perioada e luna calendaristică, nu ciclul de citire al contorului.
+
+**Aplicația (v3.33 / 37).** `GridMonth.kt` (model, `parseGridMonth`, luna „Oct", `billKwhText`: o zecimală, fără zecimale de
+la 100 kWh), `SolarRepository.fetchGridMonth`, o buclă separată în `MainActivity` (o dată pe minut, la 10 s după eșec,
+păstrează ultima valoare bună). Retro: `RetroBillReadout` pe placa de sus, între titlu și LED: sticlă neagră cu ramă de
+alamă, „FACTURA / OCT" mic galben cu glow, cifre mari cu segmente (`RetroVfdDisplay`, `RetroYellow`), „kWh" mic.
+Simple: `SimpleBillTile`, card pe toată lățimea deasupra lui „Produs azi / Consumat azi" (cifra roșie mare ca la RETEA).
+5 teste noi în `GridMonthTest` (46 de teste Android). `check-layout.py` verifică pe ENERGIE că afișajul stă pe placa de
+sus și nu acoperă titlul sau LED-ul. Limită cunoscută: la miezul nopții din 1 trece pe luna nouă, fără vedere „luna trecută".
+
+**Verificare (note9-large, API real).** TABLOU/ENERGIE/SISTEM/SETARI ok la `layout-check`; ENERGIE Retro cu „FACTURA OCT
+9.3 kWh" (capturat și inspectat), Simple cu „Factura Oct 9.3 kWh" (graficul rămâne încăpător); APK-ul de release
+instalat și pornit în emulator, `versionName=3.33`, fără `FATAL EXCEPTION`.
+
+**Release.** `versionCode` 37, `versionName` 3.33, `/opt/solar-monitor/SolarMonitor-v3.33.apk`, 7.227.599 bytes,
+SHA-256 `dfdde0b82375ecde26e140afdfdbe08b9e18eecd752f8dfa91c2bd8194f6c38f`. Telegram mesaj **144** (SHA descărcat identic), fără capturi.
+Sistemul rămâne strict **READ-ONLY**.
+
+**v3.34 — afișajul refăcut după feedback (2026-10-24).** Pe telefon, v3.33 era „un pic prea contrastant" și „prea mare",
+cu cerința: luna cu font mai mare și „FACTURA" sub „OCT". Am randat în aplicație patru variante (A Discret, B Gravat fără
+sticlă, C Verde, D Bandă subțire), capturate în emulator la profilul Note 9 și trimise ca poze pe Telegram (mesajele 145,
+146). Utilizatorul a ales **A** și a cerut tot cadranul cu 20 px mai la stânga (măsurat în captură: marginea sticlei de la
+x = 507 la 487 px). Implementat direct: `RetroBillReadout` fixat pe varianta A (sticlă 360 × 100 unități la x = 453, alfa
+0,55, ramă subțire, cifre galbene stinse, textele în dp cu `lineHeight` explicit), `RetroVfdDisplay.horizontalPadding`.
+Lecție: `LocalTextStyle` (Material 3) are `lineHeight` 24 sp; un `Text` cu `fontSize` mic și fără `lineHeight` propriu iese
+cât un rând de 24 sp (înmulțit cu fontul sistemului) și înghite rândul următor dintr-o `Column` joasă. Tema Simple nemodificată.
+Verificare: `layout-check` ok pe note9-large, fără `FATAL EXCEPTION`, 46 de teste Android și 20 de teste API trec.
+`versionCode` 38, `versionName` 3.34.
+Release: `/opt/solar-monitor/SolarMonitor-v3.34.apk`, 7.227.599 bytes, SHA-256
+`6e80615ffaf2ab459022451724149f63320ccf71e2e09fb13ca1e8b01f9d1516`, Telegram mesaj **147** (SHA descărcat identic). APK-ul de
+release instalat și pornit în emulator: `versionName=3.34`, afișajul corect, fără `FATAL EXCEPTION`.

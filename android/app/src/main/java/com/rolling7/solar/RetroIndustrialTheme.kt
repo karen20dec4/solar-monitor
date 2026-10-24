@@ -342,7 +342,8 @@ internal fun RetroVfdDisplay(
     modifier: Modifier = Modifier,
     minDigits: Int = 1,
     embedded: Boolean = false,
-    description: String = "$value $unit"
+    description: String = "$value $unit",
+    horizontalPadding: Dp = 8.dp
 ) {
     val shown = if (value == "—") value else value.padStart(minDigits, '0')
     Canvas(
@@ -389,7 +390,7 @@ internal fun RetroVfdDisplay(
             )
         }
 
-        val horizontalPadding = 8.dp.toPx()
+        val horizontalPadding = horizontalPadding.toPx()
         val unitSpace = if (unit.isBlank()) 0f else size.height * 0.42f
         val digitArea = (size.width - horizontalPadding * 2f - unitSpace).coerceAtLeast(1f)
         val units = shown.sumOf { if (it == '.') 0.32 else if (it == '+' || it == '-') 0.68 else 1.0 }.toFloat()

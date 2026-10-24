@@ -214,6 +214,7 @@ fun App() {
     val context = LocalContext.current
     var data by remember { mutableStateOf<SolarData?>(null) }
     var bms by remember { mutableStateOf<BmsState?>(null) }
+    var gridMonth by remember { mutableStateOf<GridMonth?>(null) }
     var showHistoryMenu by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var retroTabName by rememberSaveable { mutableStateOf(RetroTab.DASHBOARD.name) }
@@ -316,6 +317,16 @@ fun App() {
         }
     }
 
+    // Totalul lunii luat din retea (pentru factura) creste incet: o data pe minut, iar la esec se reincearca repede.
+    // La un esec ramane ultima valoare buna, un total lunar vechi de cateva minute nu insala.
+    LaunchedEffect(Unit) {
+        while (true) {
+            val month = withContext(Dispatchers.IO) { SolarRepository.fetchGridMonth() }
+            if (month != null) gridMonth = month
+            delay(if (month != null) 60_000L else 10_000L)
+        }
+    }
+
     // Retro e tema inchisa, Simple e deschisa - schema Material trebuie sa fie a
     // fiecareia, altfel dialogurile si meniurile Material raman pe culorile celeilalte.
     val colors = if (retro) {
@@ -352,6 +363,7 @@ fun App() {
         val simpleEnergyContent: @Composable () -> Unit = {
             SimpleEnergyPage(
                 data = data,
+                gridMonth = gridMonth,
                 selectedField = normalizedEnergyField(selectedEnergyField),
                 selectedRange = normalizedRetroEnergyRange(energyRange),
                 onFieldSelected = { selectedEnergyField = it },
@@ -421,6 +433,7 @@ fun App() {
                     energyContent = {
                         RetroEnergyPage(
                             data = data,
+                            gridMonth = gridMonth,
                             selectedField = normalizedEnergyField(selectedEnergyField),
                             selectedRange = normalizedRetroEnergyRange(energyRange),
                             onFieldSelected = { selectedEnergyField = it },
@@ -497,6 +510,7 @@ private fun rememberEnergyHistory(field: String, range: String, reloadKey: Int, 
 @Composable
 private fun RetroEnergyPage(
     data: SolarData?,
+    gridMonth: GridMonth?,
     selectedField: String,
     selectedRange: String,
     onFieldSelected: (String) -> Unit,
@@ -509,6 +523,7 @@ private fun RetroEnergyPage(
 
     RetroEnergyArtworkPage(
         data = data,
+        bill = gridMonth,
         selectedField = selectedField,
         selectedRange = selectedRange,
         chartTitle = energyChartTitle(selectedField),
@@ -536,6 +551,7 @@ private fun RetroEnergyPage(
 @Composable
 private fun SimpleEnergyPage(
     data: SolarData?,
+    gridMonth: GridMonth?,
     selectedField: String,
     selectedRange: String,
     onFieldSelected: (String) -> Unit,
@@ -549,6 +565,7 @@ private fun SimpleEnergyPage(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        SimpleBillTile(gridMonth)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SimpleTodayTile(Modifier.weight(1f), "Produs azi", data?.energyPvToday, CPv)
             SimpleTodayTile(Modifier.weight(1f), "Consumat azi", data?.energyLoadToday, CHouse)
@@ -587,6 +604,46 @@ private fun SimpleEnergyPage(
             embedded = true,
             compact = true,
             modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+/**
+ * Factura lunii in curs (consumul din retea de la 1 a lunii): sus pe pagina ENERGIE, cu valoarea mare
+ * - e cifra care conteaza. Culoarea retelei (rosu), ca la graficul RETEA.
+ */
+@Composable
+private fun SimpleBillTile(bill: GridMonth?) {
+    val label = "Factura${bill?.let { " " + it.monthShort } ?: ""}"
+    val value = billKwhText(bill?.kwh)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(CPanel)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .semantics(mergeDescendants = true) { contentDescription = "$label: $value kWh din retea" },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = CText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text("luat din retea de la inceputul lunii", color = CMuted, fontSize = 11.sp, maxLines = 1)
+        }
+        Text(
+            value,
+            color = CGrid,
+            fontSize = 34.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            style = LocalTextStyle.current.copy(shadow = ValueShadow)
+        )
+        Text(
+            " kWh",
+            color = CMuted,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 10.dp)
         )
     }
 }

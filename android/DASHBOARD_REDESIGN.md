@@ -144,6 +144,21 @@ oră, ambele din `live`; 7d: pe zi, din `history`); la CASA și PANOURI 7d/30d i
 (`*_today` se resetează la miezul nopții). Pentru RETEA nu există contor: `grid_power` (import pe bypass + încărcare AC)
 îl scrie collector-ul, iar barele îl integrează și la 7d.
 
+### Factura lunii pe ENERGIE (v3.33, refăcută v3.34)
+
+Pe placa de sus a ENERGIE, între titlu și LED, stă `RetroBillReadout`. v3.33 avea un ecran negru mare (462 × 144 unități
+de asset), galben aprins, cu „FACTURA / OCT" pe două rânduri; pe telefon era prea contrastant și prea mare. Utilizatorul a
+ales din patru variante (poze trimise pe Telegram) varianta „A — Discret" și a cerut mutarea cu 20 px mai la stânga.
+Acum (v3.34): sticlă mică (360 × 100 unități, la x = 453, y = 59 din 1024 × 218; se termină la 813, LED-ul începe la 858)
+neagră cu alfa 0,55 și ramă subțire de alamă; în stânga luna mare („OCT", 16 dp, galben stins) cu „FACTURA" mic dedesubt
+(8 dp, `RetroMuted`); apoi cifrele cu segmente ale `RetroVfdDisplay` (galben cu alfa 0,80, ele sunt cele mai mari) și „kWh"
+mic (11 dp). Textele sunt în dp, nu în sp, și au `lineHeight` explicit: placa e de mărime fixă, iar `LocalTextStyle` din
+Material 3 are `lineHeight` 24 sp, care înghițea al doilea rând („FACTURA" dispărea). `RetroVfdDisplay` are un parametru
+nou `horizontalPadding` (implicit 8 dp, aici 3 dp). O zecimală, fără zecimale de la 100 kWh (`billKwhText`); „—" fără date.
+Valoarea e totalul `grid_power` de la 1 a lunii (ora Bucureștiului) din `GET /solar/grid-month`, cerut o dată pe minut. În
+Simple e un card pe toată lățimea deasupra cardurilor „Produs azi / Consumat azi" (`SimpleBillTile`: „Factura Oct",
+cifra mare roșie ca la RETEA, „kWh" mic); nu a fost modificat în v3.34.
+
 ### Zoom elastic (v3.31)
 
 `ElasticZoom.kt` înfășoară tot tabloul de bord (Retro și Simple; fereastra de alarmă rămâne deasupra, nemărită). Cu două

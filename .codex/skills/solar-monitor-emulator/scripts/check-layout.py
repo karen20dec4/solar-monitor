@@ -39,6 +39,13 @@ if tab == "TABLOU":
     need(strip[3] <= nav[1] + 2, f"banda BMS {strip} intra in bara de navigare {nav}")
     need(0 <= strip[0] and strip[2] <= screen_w, f"banda BMS {strip} iese din latime")
 elif tab == "ENERGIE":
+    # Factura lunii (v3.33): afisajul sta pe placa de sus, intre titlu si LED, nu iese din ea.
+    plate = find("Energie, ")
+    bill = find("Factura")
+    need(plate[0] <= bill[0] and bill[2] <= plate[2] and plate[1] <= bill[1] and bill[3] <= plate[3],
+         f"afisajul facturii {bill} iese din placa de sus {plate}")
+    need(bill[0] > plate[0] + (plate[2] - plate[0]) * 0.30, f"afisajul facturii {bill} acopera titlul din placa {plate}")
+    need(bill[2] < plate[0] + (plate[2] - plate[0]) * 0.86, f"afisajul facturii {bill} acopera LED-ul din placa {plate}")
     # Randul "CE urmaresti": patru placi (CASA, PANOURI, BATERIE, RETEA), una langa alta, in latime.
     subjects = sorted(b for d, b in nodes() if re.match(r"Grafic (casa|panouri|baterie|retea)", d))
     need(len(subjects) == 4, f"trebuie 4 placi de subiect (Grafic ...), am {len(subjects)}")

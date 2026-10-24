@@ -82,7 +82,8 @@ navigation and font 130%; `profile note9` is the same at 100%; `profile reset` r
 `stop`, the overrides persist in the AVD data). `layout-check` then runs `retro-tabs` (which now taps tabs by
 their uiautomator bounds, so it also works with three-button navigation) and `check-layout.py`, which fails if
 the TABLOU BMS strip overlaps the Bat/Inv plates or the navigation bar, the SISTEM BMS monitor leaves its panel,
-or the SETARI "Alarma baterie" row overlaps the alarm card or the navigation bar. Run it on `note9-large`,
+the SETARI "Alarma baterie" row overlaps the alarm card or the navigation bar, the ENERGIE subject plates overlap or
+the electricity-bill readout ("Factura ...") leaves the top plate or covers its title or LED. Run it on `note9-large`,
 `note9` and `reset` for any change to the Retro pages.
 
 `verify` and `layout-check` apply `note9-large` by themselves (`SOLAR_EMULATOR_PROFILE=none` skips it): the user

@@ -284,6 +284,15 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   either alarm is on, polls `/bms` every 4 s and rings (same sound/vibration/cooldown as the consumption
   alarm) once per alarm with `prio` urgent/high (`BmsAlarmTracker`). Thresholds live on the server, not in the app.
 - ENERGIE (v3.32): fourth subject RETEA, power (`grid_power`, W) and energy (`energy_grid`, kWh bars), 2h/1d/7d like the others; red accent. kWh under 1 shows two decimals.
+- Electricity bill (v3.33): ENERGIE shows how much was taken from the grid since the 1st of the month (Europe/Bucharest),
+  for the Hidroelectrica bill. `GET /solar/grid-month` -> `{month: "2026-10", since, kwh}` (`kwh` null with no samples yet):
+  the API integrates `grid_power` from `history` over `[start of month, now]`, the same series as the RETEA bars (their
+  7d/30d sum agrees to ~0.01 kWh), so it is the system's estimate, not the supplier's meter reading. Retro (v3.34, variant "A"
+  chosen by the user): a small dimmed-yellow VFD readout on a semi-transparent glass between the title and the LED on the
+  top plate (`RetroBillReadout`; big month "OCT" with a small "FACTURA" under it, big segment digits, small "kWh", one
+  decimal, none from 100 kWh up; text sizes are dp, not sp, so the plate does not grow with the system font). Simple: a full-width tile above "Produs azi / Consumat azi" (`SimpleBillTile`).
+  The app polls it once a minute (10 s after a failure) and keeps the last good value. It flips to the new month at
+  Bucharest midnight on the 1st (no "previous month" view yet). `layout-check` asserts the readout stays on the plate.
 - Elastic zoom (v3.31): `ElasticZoom.kt` wraps the whole dashboard. Two fingers magnify it (up to ~3×, soft limit) and
   pan it; when the fingers lift it springs back to the original size, nothing is kept. One finger is untouched (taps,
   tab swipes); the two-finger gesture is consumed in the Initial pass so buttons and swipes do not fire.
