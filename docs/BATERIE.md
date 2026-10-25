@@ -10,6 +10,7 @@
 | | |
 |---|---|
 | Chimie | **NMC (Li-ion)**, pachet 14S din module de mașină electrică. Eticheta zice „LIION 14S MIN 48V MAX 57V", modulele „MB6VAD" (`COPILOT_CONTEXT.md` §2). |
+| Origine | Module de tracțiune din **Opel Vivaro C** („OPEL VIVARO C Battery cell MB6VAD"), **3 module și jumătate** în pachet (confirmat de utilizator, 2026-10-25). Din 14S pe 3,5 module ar ieși 4 celule în serie pe modul: deducție, neconfirmată. |
 | Capacitate | 180 Ah × ~51,8 V nominal ≈ **9,3 kWh** (180 Ah e valoarea *setată* în BMS, nu una măsurată) |
 | BMS | JK `JK_BD6A20S12P` (hw 11U, sw 11.54), citit prin Bluetooth de `bms/jk_bms_reader.py` (vezi `CLAUDE.md` §„BMS reader") |
 | Cicluri | **220** după contorul BMS (39.644 Ah trecuți prin baterie ÷ 180 Ah = 220,2), 2026-10-23. Contorul pornește de când a fost pus BMS-ul: viața modulelor în mașină nu e inclusă. |
@@ -71,8 +72,9 @@ Curs folosit pentru comparații: ~5,1 lei/€.
 **Drum 1 — al doilea pachet NMC (anunțul A).** Același tip de pachet, același BMS JK, aceleași praguri, 18,6 kWh în total.
 Cel mai ieftin și mai simplu. Riscuri: fără garanție, ciclurile vin dintr-un contor resetabil, capacitatea reală neverificată.
 Cum se leagă: câte un BMS pe pachet, siguranță pe fiecare, cabluri de lungime egală până la bare, **egalizezi tensiunea
-pachetelor înainte să le legi** (diferență peste ~0,3–0,5 V dă curent mare de egalizare); modulele noastre (MB6VAD) au altă
-etichetă decât cele de pe OLX (BK330-B0000), deci rezistența internă diferă și un pachet va lucra puțin mai mult.
+pachetelor înainte să le legi** (diferență peste ~0,3–0,5 V dă curent mare de egalizare); modulele noastre (MB6VAD, din Opel Vivaro C) au altă
+etichetă decât cele de pe OLX (BK330-B0000, Hyundai/Kia), deci rezistența internă diferă și un pachet va lucra puțin mai mult.
+Dacă apare un banc tot din Opel Vivaro C / MB6VAD, el se potrivește cel mai bine cu ce avem (același tip de modul).
 Aș lua **un singur banc**, nu trei: 18,6 kWh sunt suficienți, iar invertorul nu încarcă mai mult de 70 A.
 
 **Drum 2 — trecere la LiFePO4 (anunțul B1, eventual dublat).** Durată de viață mult mai mare (orientativ 3.000–6.000

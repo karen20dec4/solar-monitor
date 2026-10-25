@@ -15,7 +15,7 @@
 | Componentă | Detalii |
 |---|---|
 | Invertor | **Growatt SPF 6000 ES Plus** (off-grid/hybrid), în beci. Protecție la consum > ~6.6 kW. |
-| Baterie | **DIY 14S Li-ion** (NMC), etichetă „LIION 14S MIN 48V MAX 57V", BMS generic, module MB6VAD. ~50V nominal, 48–57V. |
+| Baterie | **DIY 14S Li-ion** (NMC), etichetă „LIION 14S MIN 48V MAX 57V", BMS generic, module MB6VAD. ~50V nominal, 48–57V. Modulele sunt din **Opel Vivaro C** („OPEL VIVARO C Battery cell MB6VAD", confirmat de utilizator 2026-10-25), 3 module și jumătate; vezi `docs/BATERIE.md`. |
 | Panouri | 16 × Canadian Solar 465Wp N-Type TOPCon (~7.44 kWp). |
 | Server | **HP 290 G4**, **Debian 13**, hostname `hpG4`, în beci pe cablu Ethernet. IP final **192.168.1.199**. |
 | Stocare extra | HDD Seagate ~1TB, ext4, montat permanent în `/data` pentru backup-uri, fișiere mari și proiecte noi. |
@@ -1876,3 +1876,12 @@ Verificare: `layout-check` ok pe note9-large, fără `FATAL EXCEPTION`, 46 de te
 Release: `/opt/solar-monitor/SolarMonitor-v3.34.apk`, 7.227.599 bytes, SHA-256
 `6e80615ffaf2ab459022451724149f63320ccf71e2e09fb13ca1e8b01f9d1516`, Telegram mesaj **147** (SHA descărcat identic). APK-ul de
 release instalat și pornit în emulator: `versionName=3.34`, afișajul corect, fără `FATAL EXCEPTION`.
+
+### 13.71 Originea bateriei: module din Opel Vivaro C (2026-10-25)
+
+Utilizatorul a aflat ce sunt modulele din pachet: **„OPEL VIVARO C Battery cell MB6VAD"**, adică module de baterie de tracțiune
+din **Opel Vivaro C** (dubă electrică). În pachet sunt **3 module și jumătate** (jumătate de modul). Până acum se știa doar
+eticheta „MB6VAD" de pe module și „LIION 14S MIN 48V MAX 57V" de pe pachet (§2). Consemnat în `docs/BATERIE.md` (tabelul „Ce avem",
+cu o notă despre ce înseamnă pentru un al doilea pachet) și în §2 de mai sus. Nu s-a schimbat nimic în cod: BMS-ul, pragurile și
+aplicația rămân cum erau. Din 14S pe 3,5 module ar ieși 4 celule în serie pe modul — deducție, neconfirmată (de verificat
+cu multimetrul pe bornele unui modul, sau din documentația modulului). Capacitatea de 180 Ah rămâne valoarea *setată* în BMS.

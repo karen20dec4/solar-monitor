@@ -385,8 +385,8 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   (până la ~3×, limită moale) și se mută odată cu degetele; la ridicarea degetelor revine singură, cu un mic
   resort, la mărimea inițială — nu rămâne nimic mărit. Un deget singur trece neschimbat (atingeri, glisare între
   taburi); gestul cu două degete e consumat în pasul Initial, deci butoanele și glisarea nu se declanșează.
-- Capacitate bateriei / trecerea la LiFePO4 (deschis, 2026-10-23): **`docs/BATERIE.md`** (datele pachetului actual, anunțurile
-  OLX comparate, de ce chimiile nu se amestecă pe aceeași magistrală, ce ar cere cititorul BMS pentru un al doilea pachet).
+- Capacitate bateriei / trecerea la LiFePO4 (deschis, 2026-10-23): **`docs/BATERIE.md`** (datele pachetului actual, inclusiv originea
+  modulelor: Opel Vivaro C, eticheta MB6VAD, 3 module și jumătate (utilizator, 2026-10-25); anunțurile OLX comparate, de ce chimiile nu se amestecă pe aceeași magistrală, ce ar cere cititorul BMS pentru un al doilea pachet).
   Nu e nimic decis; nu începe lucru la un al doilea BMS sau la praguri LFP fără acordul utilizatorului.
 - Teste (fără Bluetooth): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
   Citire unică pentru depanare: `python3 -I bms/jk_bms_reader.py --once` (oprește întâi
