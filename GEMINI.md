@@ -45,7 +45,9 @@ explicită a utilizatorului care își asumă riscul.
 
 - *2026-07-10* — buton de încărcare la cerere: **evaluat și refuzat**. Ținta de încărcare
   e deja 56 V, încărcarea e deja doar solară, deci scrierea acelor registre nu schimbă
-  nimic. (`COPILOT_CONTEXT.md` §13.14)
+  nimic. (`COPILOT_CONTEXT.md` §13.14) Din 2026-10-26 ținta de încărcare e **sezonieră**, setată de
+  mână de utilizator din panoul invertorului: **57 V iarna** (în vigoare acum), **56 V vara**.
+  `BAT_SOC_FULL_V` din `.env` trebuie să o urmeze (vezi „SOC în aplicație").
 - *2026-07-18* — cercetat protocolul SPF (documentație oficială + implementări comunitare)
   pentru o comandă „încarcă bateria acum": **nu există**. Încărcătorul solar e un automat
   cu prag intern de re-încărcare nesetabil (≈ float − 2 V). Singurul workaround
@@ -370,6 +372,13 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   ca la celelalte, accent roșu. Rândul de subiecte (CASA / PANOURI / BATERIE / RETEA) e format din patru plăci goale
   puse în asset de `scripts/patch-retro-energy-subjects.py`; pictogramele și numele le desenează Compose. kWh sub 1
   se afișează cu două zecimale.
+- SOC în aplicație (v3.35): tot SOC-ul afișat de aplicație (banda TABLOU, monitorul SISTEM, eticheta BAT, caseta Simple)
+  vine din `soc_voltage` din `GET /solar/bms`, **nu** din contorul BMS-ului: liniar din tensiunea bateriei măsurată de
+  invertor (media pe 30 s; tensiunea BMS dacă invertorul tace), **1% la `BAT_SOC_EMPTY_V` (48 V), 100% la `BAT_SOC_FULL_V`**
+  = pragul de încărcare setat în invertor (57 V iarna, 56 V vara), tăiat la 0–100 (decizia utilizatorului, 2026-10-26).
+  `soc` rămâne contorul de Ah al JK (100% la vârful încărcării, dar jos derivă, fiindcă 180 Ah e valoare setată) și e
+  tot în Grafana. Când utilizatorul schimbă sezonul în invertor: `BAT_SOC_FULL_V` în `.env`, apoi `docker compose up -d api`
+  (fără release de aplicație). Sub sarcină mare tensiunea, deci și SOC-ul, scade; revine în repaus.
 - Factura de curent (v3.33): ENERGIE arată cât s-a luat din rețea de la 1 a lunii (ora Europe/Bucharest), pentru factura
   Hidroelectrica. `GET /solar/grid-month` -> `{month: "2026-10", since, kwh}` (`kwh` null dacă luna n-are încă nicio
   mostră): API-ul integrează `grid_power` din `history` între începutul lunii și acum, aceeași serie ca barele RETEA

@@ -17,7 +17,11 @@ data class BmsAlarm(
     val rings: Boolean get() = priority == "urgent" || priority == "high"
 }
 
-/** Citirea BMS-ului JK. Tensiuni in V, curent in A (pozitiv = incarca), temperaturi in °C. */
+/**
+ * Citirea BMS-ului JK. Tensiuni in V, curent in A (pozitiv = incarca), temperaturi in °C.
+ * [soc] e SOC-ul afisat: din tensiune (`soc_voltage`, 1% la 48 V, 100% la pragul de sus din invertor,
+ * calculat pe server), sau contorul BMS-ului cand serverul nu-l trimite. [bmsSoc] e mereu contorul BMS-ului.
+ */
 data class BmsReading(
     val cells: List<Double>,
     val voltage: Double,
@@ -33,7 +37,8 @@ data class BmsReading(
     val remainingAh: Double,
     val nominalAh: Double,
     val cycles: Int,
-    val alarmBits: Int
+    val alarmBits: Int,
+    val bmsSoc: Double = soc
 ) {
     val cellMin: Double get() = cells.minOrNull() ?: Double.NaN
     val cellMax: Double get() = cells.maxOrNull() ?: Double.NaN
@@ -90,7 +95,7 @@ internal fun parseBmsState(text: String): BmsState {
             voltage = d("voltage"),
             current = d("current"),
             power = j.optDouble("power", d("voltage") * d("current")),
-            soc = d("soc"),
+            soc = if (has("soc_voltage")) d("soc_voltage") else d("soc"),
             tempBattery1 = d("temp_1"),
             tempBattery2 = d("temp_2"),
             tempMos = d("temp_mos"),
@@ -100,7 +105,8 @@ internal fun parseBmsState(text: String): BmsState {
             remainingAh = j.optDouble("capacity_remaining_ah", Double.NaN),
             nominalAh = j.optDouble("capacity_nominal_ah", Double.NaN),
             cycles = j.optDouble("cycles", 0.0).roundToInt(),
-            alarmBits = j.optDouble("alarm_bits", 0.0).roundToInt()
+            alarmBits = j.optDouble("alarm_bits", 0.0).roundToInt(),
+            bmsSoc = d("soc")
         ),
         alarms = alarms
     )

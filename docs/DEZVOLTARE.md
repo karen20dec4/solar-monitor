@@ -32,6 +32,7 @@ ceva ce API-ul refuză, sau API care servește ceva ce nimeni nu afișează.
 GET /solar/latest                          -> JSON plat cu toate câmpurile din FIELDS + timestamp
 GET /solar/history?field=<f>&range=<r>     -> { field,label,unit,chart,range,window,points[],stats }
 GET /solar/bms                             -> câmpurile `bms` plate + timestamp + alarms[]
+                                              + soc_voltage (SOC-ul afișat, din tensiune), soc_empty_v, soc_full_v
 GET /solar/grid-month                      -> { month: "2026-10", since, kwh }  (rețea de la 1 a lunii, pentru factură)
 ```
 

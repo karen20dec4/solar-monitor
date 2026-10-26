@@ -338,6 +338,9 @@ Registre de energie identificate prin corelație (DEBUG_RAW + integralul puterii
 - Adăugate în tabelul secțiunii 6 și registrele de energie deja folosite: **48/49, 50/51** (PV azi/total), **85/86, 87/88** (consum azi/total).
 
 ### 13.14 Recon FC03 (holding registers) + decizie „rămânem READ-ONLY" (2026-07-10)
+
+> **Actualizare 2026-10-26:** ținta de 56 V de mai jos era cea din iulie. De pe 2026-10-25 utilizatorul a urcat-o la
+> **57 V** (regim de iarnă); vara o coboară la **56 V**. Le schimbă de mână din panoul invertorului. Vezi §13.72.
 **Context:** Florin vrea bateria plină la pragul de sus (**56V**) seara (~19–20), ca să aibă mai mult curent
 noaptea; în practică ajunge pe la ~54.5V. A propus un buton în app care să pornească încărcarea din PV până
 la 56V. Asta ar fi cerut **scriere în invertor** (FC06/FC16) → atinge invariantul dur READ-ONLY.
@@ -1885,3 +1888,37 @@ eticheta „MB6VAD" de pe module și „LIION 14S MIN 48V MAX 57V" de pe pachet 
 cu o notă despre ce înseamnă pentru un al doilea pachet) și în §2 de mai sus. Nu s-a schimbat nimic în cod: BMS-ul, pragurile și
 aplicația rămân cum erau. Din 14S pe 3,5 module ar ieși 4 celule în serie pe modul — deducție, neconfirmată (de verificat
 cu multimetrul pe bornele unui modul, sau din documentația modulului). Capacitatea de 180 Ah rămâne valoarea *setată* în BMS.
+
+### 13.72 SOC din tensiune în aplicație, prag de încărcare sezonier 57/56 V, v3.35 (2026-10-26)
+
+**Întrebarea:** aplicația zicea 88% la 54,9 V, iar utilizatorul știa că 57 V (pragul setat în invertor) înseamnă ~90%.
+Vânzătorul bateriei a recomandat 20–90%.
+
+**Ce s-a găsit:** aplicația afișa corect contorul BMS-ului JK (158,9 Ah ÷ 180 Ah = 88%). Contorul pune 100% la vârful
+încărcării: pe 2026-10-25 ~14:00 UTC a sărit la 180 Ah la 4,06 V/celulă (BMS 56,9 V, invertor 57,05 V). Deci 100% BMS =
+pragul de 57 V, care la NMC e ~90% din chimie (100% real = 4,20 V/celulă = 58,8 V). Jos contorul pare prea optimist
+(2026-10-25 05:00: 3,56 V/celulă aproape în repaus, BMS 43%, curba NMC ~25–30%), fiindcă 180 Ah e setat, nu măsurat.
+Invertorul (reg 18) tot dădea 75% în trepte, ignorat.
+
+**Decizia utilizatorului:** pragul de încărcare e sezonier, setat de mână în invertor: **57 V iarna** (în vigoare de pe
+2026-10-25), **56 V vara**. În aplicație SOC-ul se calculează din tensiune: **1% la 48 V, 100% la pragul de sus**.
+
+**Implementare:**
+- `api/app.py`: `SOC_EMPTY_V`/`SOC_FULL_V` din `BAT_SOC_EMPTY_V=48.0`/`BAT_SOC_FULL_V=57.0` (`.env`, trecute în compose la
+  serviciul `api`, implicit 48/57), `voltage_soc(v) = 1 + 99·(v−48)/(full−48)`, tăiat la 0–100, o zecimală.
+  `GET /solar/bms` adaugă `soc_voltage` (din media pe 30 s a `battery_voltage` de la invertor, sau tensiunea BMS dacă
+  invertorul tace), `soc_empty_v`, `soc_full_v`. `soc` rămâne contorul BMS-ului (și în Grafana).
+- Aplicația: `BmsReading.soc` = `soc_voltage` când serverul îl trimite (altfel contorul), `bmsSoc` = contorul. Toate
+  locurile care arată SOC (banda TABLOU, monitorul SISTEM, eticheta BAT, caseta Simple) folosesc `soc` → nu s-a schimbat UI-ul.
+- Măsurat la implementare: 54,85 V → 75,6% (BMS 88%). Emulator: banda TABLOU „SOC 76 %".
+- Teste: API 22 (2 noi), Android 47 (1 nou).
+
+**Schimbarea de sezon:** când utilizatorul mută pragul în invertor, se schimbă `BAT_SOC_FULL_V` în `.env` și
+`docker compose up -d api`. Nu e nevoie de release de aplicație. Varianta automată (collector-ul citește pragul cu FC03,
+tot doar citire) a fost oferită, nu cerută.
+
+**Limite:** sub sarcină mare tensiunea cade (o placă de inducție poate lua câteva procente), la încărcare cu curent mare
+urcă; în repaus revine. 48 V = alerta `BAT_LOW_V` ≈ 10% din chimia NMC, sub limita de 20% a vânzătorului.
+
+**Release:** v3.35 (versionCode 39), `SolarMonitor-v3.35.apk`, 7.227.599 bytes,
+SHA-256 `f52c660b9d69ec47a8c1fc570d53080c95a2fb09a49a02a241c9d247c41c8f57`.

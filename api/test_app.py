@@ -43,12 +43,14 @@ class _Table:
 class _ScriptedQueryApi:
     """Raspunde dupa masuratoarea ceruta in query."""
 
-    def __init__(self, bms, alerts, fail=False):
-        self.bms, self.alerts, self.fail = bms, alerts, fail
+    def __init__(self, bms, alerts, fail=False, inverter=()):
+        self.bms, self.alerts, self.fail, self.inverter = bms, alerts, fail, list(inverter)
 
     def query(self, query, org=None):
         if self.fail:
             raise RuntimeError("influx jos")
+        if '"inverter"' in query:
+            return [_Table(self.inverter)]
         return [_Table(self.alerts if '"bms_alert"' in query else self.bms)]
 
 
@@ -304,6 +306,35 @@ class BmsApiTest(unittest.TestCase):
         self.assertIsNone(payload["timestamp"])
         self.assertEqual([], payload["alarms"])
 
+    def test_voltage_soc_is_one_percent_at_48v_and_full_at_the_charge_threshold(self):
+        self.assertEqual((48.0, 57.0), (api_module.SOC_EMPTY_V, api_module.SOC_FULL_V))
+        self.assertEqual(1.0, api_module.voltage_soc(48.0))
+        self.assertEqual(100.0, api_module.voltage_soc(57.0))
+        self.assertEqual(78.0, api_module.voltage_soc(55.0))
+        self.assertEqual(100.0, api_module.voltage_soc(57.4))
+        self.assertEqual(0.0, api_module.voltage_soc(47.0))
+        self.assertIsNone(api_module.voltage_soc(None))
+        summer = api_module.SOC_FULL_V
+        try:
+            api_module.SOC_FULL_V = 56.0
+            self.assertEqual(100.0, api_module.voltage_soc(56.0))
+            self.assertEqual(50.5, api_module.voltage_soc(52.0))
+        finally:
+            api_module.SOC_FULL_V = summer
+
+    def test_bms_soc_voltage_uses_the_inverter_voltage_and_falls_back_to_the_bms(self):
+        now = self._now()
+        bms = [_Rec("voltage", 55.5, now), _Rec("soc", 88.0, now)]
+        api_module.client = _ScriptedClient(bms=bms, alerts=[], inverter=[_Rec("battery_voltage", 55.0, now)])
+        payload = self.client.get("/bms").get_json()
+        self.assertEqual(78.0, payload["soc_voltage"])
+        self.assertEqual(88.0, payload["soc"])
+        self.assertEqual((48.0, 57.0), (payload["soc_empty_v"], payload["soc_full_v"]))
+        api_module.client = _ScriptedClient(bms=bms, alerts=[])
+        self.assertEqual(83.5, self.client.get("/bms").get_json()["soc_voltage"])
+        api_module.client = _ScriptedClient(bms=[], alerts=[])
+        self.assertIsNone(self.client.get("/bms").get_json()["soc_voltage"])
+
     def test_bms_reports_influx_failure_as_503(self):
         api_module.client = _ScriptedClient(bms=[], alerts=[], fail=True)
         self.assertEqual(503, self.client.get("/bms").status_code)
@@ -312,9 +343,10 @@ class BmsApiTest(unittest.TestCase):
         queries = []
         api_module.client = _FakeInfluxClient(queries)
         self.client.get("/bms")
-        self.assertEqual(2, len(queries))
+        self.assertEqual(3, len(queries))
         self.assertIn('r._measurement == "bms"', queries[0])
         self.assertIn('r._measurement == "bms_alert"', queries[1])
+        self.assertIn('r._measurement == "inverter" and r._field == "battery_voltage"', queries[2])
         for q in queries:
             self.assertIn('from(bucket: "live")', q)
 

@@ -18,6 +18,13 @@ ORG        = os.getenv("INFLUX_ORG", "casa")
 BUCKET_LIVE = os.getenv("INFLUX_BUCKET_LIVE", "live")
 BUCKET_HISTORY = os.getenv("INFLUX_BUCKET_HISTORY", "history")
 
+# SOC-ul afisat in aplicatie vine din tensiune, nu din BMS: 1% la BAT_SOC_EMPTY_V (48 V) si 100% la
+# pragul de sus de incarcare setat in invertor (BAT_SOC_FULL_V: 57 V iarna, 56 V vara; schimbat de mana
+# in .env odata cu invertorul). Contorul de Ah al BMS-ului pune 100% la varful de incarcare, dar jos
+# deriva, pentru ca cei 180 Ah sunt o valoare setata, nu masurata (decizie Florin, 2026-10-26).
+SOC_EMPTY_V = float(os.getenv("BAT_SOC_EMPTY_V", "48.0"))
+SOC_FULL_V = float(os.getenv("BAT_SOC_FULL_V", "57.0"))
+
 # Campurile expuse aplicatiei (acelasi set ca diagrama de flux + cateva extra).
 FIELDS = [
     "status",
@@ -155,14 +162,25 @@ def latest():
     return jsonify(out)
 
 
+def voltage_soc(volts):
+    """Liniar intre SOC_EMPTY_V (1%) si SOC_FULL_V (100%), taiat la 0..100, o zecimala; None fara tensiune."""
+    if volts is None:
+        return None
+    pct = 1.0 + 99.0 * (volts - SOC_EMPTY_V) / (SOC_FULL_V - SOC_EMPTY_V)
+    return round(min(100.0, max(0.0, pct)), 1)
+
+
 @app.get("/bms")
 def bms():
     """Bateria vazuta de BMS-ul JK (masuratoarea `bms`, scrisa de serviciul solar-bms de pe host).
 
     Campuri plate ca la /latest (+ `timestamp`, null fara date proaspete) si `alarms`: alertele
     BMS active chiar acum, cu titlu/mesaj/prioritate, evaluate pe server (pragurile sunt in .env).
+    `soc_voltage` e SOC-ul pe care il afiseaza aplicatia (vezi `voltage_soc`), din media pe 30 s a
+    tensiunii masurate de invertor (aceeasi tensiune la care invertorul opreste incarcarea), sau din
+    tensiunea BMS cand invertorul tace; `soc` ramane contorul BMS-ului.
     """
-    out, ts, alarms = {}, None, {}
+    out, ts, alarms, inverter_v = {}, None, {}, None
     try:
         q = (f'from(bucket: "{BUCKET_LIVE}") |> range(start: -15s) '
              '|> filter(fn: (r) => r._measurement == "bms") |> last()')
@@ -176,9 +194,17 @@ def bms():
         for table in client.query_api().query(q, org=ORG):
             for rec in table.records:
                 alarms.setdefault(rec.values.get("key"), {})[rec.get_field()] = rec.get_value()
+        q = (f'from(bucket: "{BUCKET_LIVE}") |> range(start: -30s) '
+             '|> filter(fn: (r) => r._measurement == "inverter" and r._field == "battery_voltage") |> mean()')
+        for table in client.query_api().query(q, org=ORG):
+            for rec in table.records:
+                inverter_v = rec.get_value()
     except Exception as e:
         return jsonify({"error": str(e)}), 503
     out["timestamp"] = ts.isoformat() if ts else None
+    out["soc_voltage"] = voltage_soc(inverter_v if inverter_v is not None else out.get("voltage"))
+    out["soc_empty_v"] = SOC_EMPTY_V
+    out["soc_full_v"] = SOC_FULL_V
     out["alarms"] = [
         {"key": key, "title": a.get("title", key), "msg": a.get("msg", ""), "prio": a.get("prio", "default")}
         for key, a in sorted(alarms.items()) if key and a.get("active") == 1

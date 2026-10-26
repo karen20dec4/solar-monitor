@@ -51,6 +51,16 @@ class BmsModelTest {
     }
 
     @Test
+    fun `the shown soc comes from the voltage when the server sends it`() {
+        val fromVoltage = parseBmsState(sampleJson.replace("\"soc\":88.0,", "\"soc\":88.0,\"soc_voltage\":75.6,")).reading!!
+        assertEquals(75.6, fromVoltage.soc, 1e-9)
+        assertEquals(88.0, fromVoltage.bmsSoc, 1e-9)
+        assertEquals("76", bmsSocText(fromVoltage.soc))
+        val olderServer = parseBmsState(sampleJson.replace("\"soc\":88.0,", "\"soc\":88.0,\"soc_voltage\":null,")).reading!!
+        assertEquals(88.0, olderServer.soc, 1e-9)
+    }
+
+    @Test
     fun `no data from the BMS gives a null reading but keeps alarms`() {
         val state = parseBmsState(
             """{"timestamp":null,"alarms":[{"key":"bms_legatura","title":"BMS: fara date","msg":"3 min","prio":"default"}]}"""

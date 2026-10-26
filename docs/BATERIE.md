@@ -15,7 +15,8 @@
 | BMS | JK `JK_BD6A20S12P` (hw 11U, sw 11.54), citit prin Bluetooth de `bms/jk_bms_reader.py` (vezi `CLAUDE.md` §„BMS reader") |
 | Cicluri | **220** după contorul BMS (39.644 Ah trecuți prin baterie ÷ 180 Ah = 220,2), 2026-10-23. Contorul pornește de când a fost pus BMS-ul: viața modulelor în mașină nu e inclusă. |
 | SOH | „100%" în BMS e o valoare fixă, nu o măsurătoare |
-| Încărcare | invertorul încarcă la 56 V (4,0 V pe celulă), doar din panouri (`COPILOT_CONTEXT.md` §13.14) |
+| Încărcare | doar din panouri; pragul de sus e **sezonier**, setat de mână din panoul invertorului: **57 V iarna** (4,07 V pe celulă, ≈ 90% din NMC; în vigoare din 2026-10-25), **56 V vara** (4,0 V pe celulă). Vânzătorul a recomandat 20–90%. (`COPILOT_CONTEXT.md` §13.14, §13.72) |
+| SOC în aplicație | din tensiune, nu din BMS: 1% la 48 V, 100% la pragul de sus (`BAT_SOC_EMPTY_V`/`BAT_SOC_FULL_V` în `.env`; la schimbarea sezonului se schimbă și acolo). Contorul BMS (`soc`) pune 100% tot la pragul de sus, dar jos derivă. |
 
 **Cum știm că e NMC.** BMS-ul nu are câmp „chimie" în cadrele pe care le citim (doar cererile `0x96`/`0x97`;
 nu citim nimic din setările lui). Dovezile: eticheta; în 30 de zile celula maximă a ajuns la 3,985 V și pachetul la
@@ -64,7 +65,7 @@ Curs folosit pentru comparații: ~5,1 lei/€.
 
 - Pachetul nostru are 14 celule NMC, un LiFePO4 are 16: tensiunile nominale sunt apropiate (~51,8 V / 51,2 V), dar curbele de descărcare nu: NMC coboară pe o pantă, LFP stă pe un palier.
 - În paralel curentul se împarte neuniform; spre sfârșitul descărcării (~48 V) LFP ajunge în zona abruptă (≈3,0 V pe celulă) când NMC mai are energie, iar un BMS poate tăia mai devreme decât celălalt. Capacitatea utilă nu se adună curat.
-- Invertorul are o singură setare de încărcare: 56 V = 4,0 V pe celulă la NMC, dar 3,5 V pe celulă la LFP.
+- Invertorul are o singură setare de încărcare: 56–57 V = 4,0–4,07 V pe celulă la NMC, dar 3,5–3,56 V pe celulă la LFP.
 - Deci LFP înseamnă **în locul** NMC-ului (sau un sistem separat), nu lângă el.
 
 ## 4. Cele două drumuri
@@ -90,7 +91,7 @@ Singurul anunț serios dintre cele două LFP e B1 (factură, garanție, retur); 
 3. Test real de descărcare (Ah măsurați); „180 Ah" din BMS e doar setat, iar contorul de cicluri se poate reseta.
 4. Module: fără umflături, fără urme de lichid, etichete identice.
 5. Plată cash la ridicare, după verificare. Fără avans, fără linkuri de „livrare OLX".
-6. La varianta „cu BMS": ce praguri a setat vânzătorul; se corectează pe ale noastre (56 V la încărcare).
+6. La varianta „cu BMS": ce praguri a setat vânzătorul; se corectează pe ale noastre (57 V iarna / 56 V vara la încărcare).
 7. La B1: durata garanției în scris, ciclurile, un test de capacitate.
 
 ## 6. Ce ar însemna pentru software (de făcut după decizie, nu înainte)
@@ -101,10 +102,10 @@ Singurul anunț serios dintre cele două LFP e B1 (factură, garanție, retur); 
   simultan la același BMS (vezi `CLAUDE.md`).
 - **Praguri de alertă** (`BMS_CELL_HIGH_V`, `BMS_CELL_LOW_V`, `BMS_DELTA_HIGH_V`, … în `.env`) sunt pe chimie: pentru
   LFP aproximativ celulă maximă 3,65 V și minimă 2,8 V, în loc de 4,12 V și 3,20 V.
-- **Invertorul:** tensiunile de încărcare/float (acum 56 V) și pragul de trecere pe rețea le setează utilizatorul din
+- **Invertorul:** tensiunile de încărcare/float (acum 57 V, iarna; vara 56 V) și pragul de trecere pe rețea le setează utilizatorul din
   panoul invertorului. Proiectul nu scrie nimic acolo (decizie închisă, `COPILOT_CONTEXT.md` §13.14, §13.17).
-- **SOC-ul bateriei:** la LFP palierul plat face SOC-ul din tensiune nesigur; BMS-ul numără Ah, deci rămâne cel de
-  încredere. Invertorul nu are SOC util (vezi `CLAUDE.md`, „Do not use `battery_soc`").
+- **SOC-ul bateriei:** aplicația arată acum SOC din tensiune (48 V → 1%, pragul de sus → 100%). La LFP palierul plat
+  face SOC-ul din tensiune nesigur: acolo ar trebui revenit la contorul de Ah al BMS-ului (`soc`). Invertorul nu are SOC util (vezi `CLAUDE.md`, „Do not use `battery_soc`").
 
 ## 7. Rămâne de decis
 

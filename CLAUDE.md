@@ -39,7 +39,8 @@ asks and accepts the risk.
 > (source priority) isn't worth breaking the invariant. System stays 100% READ-ONLY. The verified
 > FC03 holding-register setpoints (charge/float 56V, max charge 70A, SBU, solar-only) are documented
 > in `COPILOT_CONTEXT.md` §13.14 — read via a one-off FC03 recon, which is a *read* and does not
-> violate the invariant.
+> violate the invariant. Since 2026-10-26 the charge target is **seasonal**, set by hand on the inverter panel by the
+> user: **57 V in winter** (in force now), **56 V in summer**. `BAT_SOC_FULL_V` in `.env` must follow it (see "SOC in the app").
 >
 > **Decision log (2026-07-18, topic CLOSED):** researched the SPF Modbus protocol (official docs +
 > community implementations) for a "start charging battery now" command — **no such command exists**;
@@ -293,6 +294,13 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   decimal, none from 100 kWh up; text sizes are dp, not sp, so the plate does not grow with the system font). Simple: a full-width tile above "Produs azi / Consumat azi" (`SimpleBillTile`).
   The app polls it once a minute (10 s after a failure) and keeps the last good value. It flips to the new month at
   Bucharest midnight on the 1st (no "previous month" view yet). `layout-check` asserts the readout stays on the plate.
+- SOC in the app (v3.35): every SOC the app shows (TABLOU strip, SISTEM monitor, BAT label, Simple box) comes from
+  `soc_voltage` in `GET /solar/bms`, **not** from the BMS counter: linear from the inverter's battery voltage (30 s mean;
+  the BMS voltage if the inverter is silent), **1% at `BAT_SOC_EMPTY_V` (48 V), 100% at `BAT_SOC_FULL_V`** = the charge
+  threshold set on the inverter (57 V winter, 56 V summer), clamped 0–100 (user decision, 2026-10-26). `soc` stays the JK
+  Ah counter (100% at the top of charge, but it drifts at the bottom since 180 Ah is a set value) and is still in Grafana.
+  When the user switches season on the inverter: edit `BAT_SOC_FULL_V` in `.env`, then `docker compose up -d api`
+  (no app release). Under heavy load the voltage, and so the SOC, dips; it recovers at rest.
 - Elastic zoom (v3.31): `ElasticZoom.kt` wraps the whole dashboard. Two fingers magnify it (up to ~3×, soft limit) and
   pan it; when the fingers lift it springs back to the original size, nothing is kept. One finger is untouched (taps,
   tab swipes); the two-finger gesture is consumed in the Initial pass so buttons and swipes do not fire.

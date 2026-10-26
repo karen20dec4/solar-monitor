@@ -124,6 +124,9 @@ services:
       INFLUX_BUCKET_LIVE: ${INFLUXDB_BUCKET_LIVE}
       INFLUX_BUCKET_HISTORY: ${INFLUXDB_BUCKET_HISTORY}
       HOST_PROC_ROOT: /host/proc
+      # SOC-ul din aplicatie: 1% la EMPTY, 100% la pragul de sus din invertor (57 V iarna, 56 V vara).
+      BAT_SOC_EMPTY_V: ${BAT_SOC_EMPTY_V:-48.0}
+      BAT_SOC_FULL_V: ${BAT_SOC_FULL_V:-57.0}
     volumes:
       # Metrici agregate CPU/RAM/retea/uptime; montare strict READ-ONLY, fara Docker socket.
       - /proc:/host/proc:ro
