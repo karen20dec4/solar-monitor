@@ -1922,3 +1922,34 @@ urcă; în repaus revine. 48 V = alerta `BAT_LOW_V` ≈ 10% din chimia NMC, sub 
 
 **Release:** v3.35 (versionCode 39), `SolarMonitor-v3.35.apk`, 7.227.599 bytes,
 SHA-256 `f52c660b9d69ec47a8c1fc570d53080c95a2fb09a49a02a241c9d247c41c8f57`.
+
+### 13.73 Căderea de internet din 2026-10-28 și aplicația care cerea prea des, v3.36
+
+**Căderea:** 2026-10-28 între 10:50 și 11:21 (ora României) telefonul n-a mai primit date. Serverul a fost sănătos tot
+timpul (containere pornite, `br-solar` în zona `docker`, api 200 cu date proaspete, Grafana în LAN mergea). Cauza a fost
+internetul: la 10:50:27 cloudflared și tailscaled au pierdut legătura („no recent network activity"), DNS-ul spre
+192.168.1.1 și 1.1.1.1 dădea „i/o timeout", iar legătura `enp1s0` a rămas sus, deci router sau furnizor. La 11:21:25
+s-au refăcut toate, iar telefonul a revenit la 11:21:31. Sonda `solar-watchdog` n-a sunat, pentru că testează lanțul
+local, care mergea.
+
+**Cererile prea dese:** logul `solar-api` arăta de la telefon (SM-N960U) ~1–3,5 cereri/s zi și noapte (ex. 2026-10-28
+00:00–01:00: 11.977 `/latest`, 9.653 `/bms`, 341 `/grid-month`). `/grid-month` se cere o dată pe minut pe fereastră,
+deci 98–341 pe oră = 2–6 ferestre ale aplicației deschise în același timp. Cauze:
+1. Buclele din `App()` (`/latest` și `/bms` la 2 s, `/grid-month` la 60 s) și istoricul din SISTEM erau `LaunchedEffect`
+   simple: Compose nu le oprește când activitatea trece în fundal, deci mergeau și cu ecranul stins.
+2. `openAppIntent()` din `SolarAlarmService` nu avea flaguri, iar `MainActivity` era `standard`: fiecare atingere a
+   notificării mai punea o `MainActivity` peste, cu buclele ei, iar cele vechi rămâneau deschise.
+3. Serviciul de alarmă interoga `/latest` la 2 s și `/bms` la 4 s, toată ziua.
+
+**Reparat în v3.36:** `WhileVisibleEffect` (`repeatOnLifecycle(STARTED)`) pentru toate buclele de rețea din interfață;
+`android:launchMode="singleTask"` și CLEAR_TOP|SINGLE_TOP pe intentul din notificare; serviciul la 5 s pentru `/latest`
+(alarma de consum sună după două citiri peste prag, deci în 5–10 s) și 10 s pentru `/bms`. Cât ar trebui să fie: cu
+aplicația pe ecran ~1 cerere/s (+0,3/s de la serviciu dacă e pornită o alarmă); în fundal 0 fără alarme, ~0,3/s cu
+alarme. Verificat în emulator: 30 s pe ecran = 14 `/latest` + 13 `/bms`, 30 s în fundal = 0 cereri, revenirea
+reîncepe imediat; trei `am start` la rând lasă o singură `MainActivity`.
+
+**Release:** v3.36 (versionCode 40), `SolarMonitor-v3.36.apk`, 7.227.615 bytes,
+SHA-256 `443438642ec21da5b58b57960adac2e44fb1e772fc2591571eeab96788ab7e4d`.
+
+**E-mailul Cloudflare (eMudhra, „upgrade cloudflared la 2026.10.2+"):** pe server e deja `cloudflared 2026.10.4`
+(pachet apt din `pkg.cloudflare.com`, serviciu `cloudflared.service`), deci are reparația; în repo e disponibil 2026.10.5.

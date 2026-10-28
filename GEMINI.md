@@ -366,8 +366,15 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   temperatura invertorului e un „29°C" mic sub „Inv". SISTEM: `RetroBmsMonitor` ia locul fostei console
   (bare pe celule + cifre). SETARI: rând nativ „ALARMĂ BATERIE" cu întrerupător propriu
   (`AlarmSettings.batteryEnabled`, implicit oprit); `SolarAlarmService` rulează cât timp e pornită oricare
-  alarmă, interoghează `/bms` la 4 s și sună (același sunet/vibrație/cooldown ca la consum) o singură dată
+  alarmă, interoghează `/latest` la 5 s și `/bms` la 10 s (v3.36; înainte 2 s / 4 s) și sună (același sunet/vibrație/cooldown ca la consum) o singură dată
   per alarmă cu `prio` urgent/high (`BmsAlarmTracker`). Pragurile sunt pe server, nu în aplicație.
+- Interogări (v3.36): buclele de rețea ale aplicației (`/latest` și `/bms` la 2 s, `/grid-month` la 60 s, istoricul
+  de 1h din SISTEM la 60 s) rulează în `WhileVisibleEffect` (`repeatOnLifecycle(STARTED)`), deci se opresc cu aplicația
+  în fundal sau cu ecranul stins; acolo interoghează doar `SolarAlarmService`. `MainActivity` e `singleTask`, iar
+  intentul din notificare are CLEAR_TOP|SINGLE_TOP. Înainte buclele erau `LaunchedEffect` simple care nu se opreau
+  niciodată, iar fiecare atingere a notificării mai deschidea o `MainActivity` cu buclele ei: logul api arăta ~1–3,5
+  cereri/s de la un singur telefon, zi și noapte (2026-10-28). Orice buclă nouă de interogare folosește
+  `WhileVisibleEffect`, nu `LaunchedEffect`.
 - ENERGIE (v3.32): al patrulea subiect RETEA, cu putere (`grid_power`, W) și energie (`energy_grid`, bare kWh), 2h/1d/7d
   ca la celelalte, accent roșu. Rândul de subiecte (CASA / PANOURI / BATERIE / RETEA) e format din patru plăci goale
   puse în asset de `scripts/patch-retro-energy-subjects.py`; pictogramele și numele le desenează Compose. kWh sub 1

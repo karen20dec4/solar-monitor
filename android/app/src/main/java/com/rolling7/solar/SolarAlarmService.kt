@@ -94,13 +94,15 @@ class SolarAlarmService : Service() {
                 if (data != null && settings.enabled) {
                     evaluateAlarm(settings, data.house)
                 }
-                // BMS-ul se interogheaza la fiecare al doilea ciclu (4 s): o deconectare apare
+                // BMS-ul se interogheaza la fiecare al doilea ciclu (10 s): o deconectare apare
                 // oricum cu cateva secunde de debounce pe server.
                 if (settings.batteryEnabled && cycle % 2 == 0) {
                     SolarRepository.fetchBms()?.let { evaluateBmsAlarm(settings, it) }
                 }
                 cycle++
-                delay(2_000)
+                // 5 s ajung pentru o alarma (sunat dupa doua citiri peste prag, deci 5-10 s); serviciul merge
+                // si in fundal, toata ziua, deci aici fiecare citire conteaza.
+                delay(MONITOR_INTERVAL_MS)
             }
         }
     }
@@ -214,7 +216,10 @@ class SolarAlarmService : Service() {
             .build()
 
     private fun openAppIntent(): PendingIntent {
-        val intent = Intent(this, MainActivity::class.java)
+        // Revine la fereastra deja deschisa; fara asta fiecare atingere a notificarii deschidea inca una.
+        val intent = Intent(this, MainActivity::class.java).addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        )
         return PendingIntent.getActivity(
             this,
             0,
@@ -315,6 +320,7 @@ class SolarAlarmService : Service() {
         const val ACTION_STOP = "com.rolling7.solar.action.STOP_ALARM"
         const val ACTION_SILENCE = "com.rolling7.solar.action.SILENCE_ALARM"
         const val ACTION_TEST = "com.rolling7.solar.action.TEST_ALARM"
+        private const val MONITOR_INTERVAL_MS = 5_000L
         private const val CHANNEL_MONITOR = "solar_monitor"
         private const val CHANNEL_ALERTS = "solar_alerts"
         private const val MONITOR_ID = 7001

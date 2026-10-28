@@ -1160,7 +1160,7 @@ private fun RetroSystemPage(data: SolarData?, bms: BmsState?, onEnergyFieldClick
     var batteryHistory by remember { mutableStateOf<List<HistoryPoint>>(emptyList()) }
     var temperatureHistory by remember { mutableStateOf<List<HistoryPoint>>(emptyList()) }
 
-    LaunchedEffect(Unit) {
+    WhileVisibleEffect {
         while (true) {
             val histories = withContext(Dispatchers.IO) {
                 SolarRepository.fetchHistory("battery_voltage", "1h") to

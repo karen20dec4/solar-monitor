@@ -282,8 +282,14 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   SISTEM; the old "Temperatura" plate is gone and the inverter temperature is a small "29°C" under "Inv".
   SISTEM: `RetroBmsMonitor` replaces the old console (cell bars + figures). SETARI: native row "ALARMĂ
   BATERIE" with its own toggle (`AlarmSettings.batteryEnabled`, default off); `SolarAlarmService` runs while
-  either alarm is on, polls `/bms` every 4 s and rings (same sound/vibration/cooldown as the consumption
+  either alarm is on, polls `/latest` every 5 s and `/bms` every 10 s (v3.36; was 2 s / 4 s) and rings (same sound/vibration/cooldown as the consumption
   alarm) once per alarm with `prio` urgent/high (`BmsAlarmTracker`). Thresholds live on the server, not in the app.
+- Polling (v3.36): the app's network loops (`/latest` and `/bms` every 2 s, `/grid-month` every 60 s, SISTEM's 1h
+  history every 60 s) run in `WhileVisibleEffect` (`repeatOnLifecycle(STARTED)`), so they stop when the app is in the
+  background or the screen is off; only `SolarAlarmService` keeps polling there. `MainActivity` is `singleTask` and the
+  notification intent uses CLEAR_TOP|SINGLE_TOP. Before, the loops were plain `LaunchedEffect`s that never paused, and
+  each notification tap stacked another `MainActivity` with its own loops: the api log showed ~1–3.5 req/s from one
+  phone around the clock (2026-10-28). Any new polling loop must use `WhileVisibleEffect`, not `LaunchedEffect`.
 - ENERGIE (v3.32): fourth subject RETEA, power (`grid_power`, W) and energy (`energy_grid`, kWh bars), 2h/1d/7d like the others; red accent. kWh under 1 shows two decimals.
 - Electricity bill (v3.33): ENERGIE shows how much was taken from the grid since the 1st of the month (Europe/Bucharest),
   for the Hidroelectrica bill. `GET /solar/grid-month` -> `{month: "2026-10", since, kwh}` (`kwh` null with no samples yet):

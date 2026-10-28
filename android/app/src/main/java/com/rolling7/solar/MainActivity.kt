@@ -108,6 +108,10 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -208,6 +212,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * Ca LaunchedEffect, dar [block] ruleaza doar cat aplicatia se vede pe ecran (STARTED): in fundal sau cu
+ * ecranul stins se opreste, iar la revenire porneste din nou. Pana la v3.35 buclele de citire mergeau
+ * non-stop, si in fundal, cate un set pentru fiecare fereastra a aplicatiei ramasa deschisa.
+ * Alarma din fundal are serviciul ei (SolarAlarmService).
+ */
+@Composable
+internal fun WhileVisibleEffect(vararg keys: Any?, block: suspend CoroutineScope.() -> Unit) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, *keys) { lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED, block) }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun App() {
@@ -292,6 +308,10 @@ fun App() {
         if (alarmSettings.anyEnabled) {
             AlarmSettingsStore.applyServiceState(context, alarmSettings)
         }
+    }
+
+    // Citirile live (la 2 s) merg doar cat aplicatia e pe ecran.
+    WhileVisibleEffect {
         while (true) {
             val d = withContext(Dispatchers.IO) { SolarRepository.fetch() }
             if (d != null) {
@@ -302,7 +322,7 @@ fun App() {
     }
 
     // Bateria vazuta de BMS, intr-o bucla separata: un raspuns lent de la /bms nu intarzie restul.
-    LaunchedEffect(Unit) {
+    WhileVisibleEffect {
         var lastOk = 0L
         while (true) {
             val state = withContext(Dispatchers.IO) { SolarRepository.fetchBms() }
@@ -319,7 +339,7 @@ fun App() {
 
     // Totalul lunii luat din retea (pentru factura) creste incet: o data pe minut, iar la esec se reincearca repede.
     // La un esec ramane ultima valoare buna, un total lunar vechi de cateva minute nu insala.
-    LaunchedEffect(Unit) {
+    WhileVisibleEffect {
         while (true) {
             val month = withContext(Dispatchers.IO) { SolarRepository.fetchGridMonth() }
             if (month != null) gridMonth = month
