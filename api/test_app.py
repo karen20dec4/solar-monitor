@@ -399,5 +399,20 @@ class BmsApiTest(unittest.TestCase):
         self.assertEqual(503, self.client.get("/grid-month").status_code)
 
 
+class AppClientCountingTest(unittest.TestCase):
+    def test_phone_requests_are_counted_by_the_app_and_others_are_not(self):
+        original = api_module.client
+        api_module.client = _ScriptedClient(bms=[], alerts=[])
+        try:
+            api_module.client_counter.drain()
+            web = api_module.app.test_client()
+            web.get("/bms", headers={"User-Agent": "SolarMonitor/3.38 (42; Android 13; SM-G781B)"})
+            web.get("/bms", headers={"User-Agent": "curl/8.14.1"})
+            web.get("/health", headers={"User-Agent": "SolarMonitor/3.38 (42; Android 13; SM-G781B)"})
+            self.assertEqual({("SM-G781B", "13", "3.38 (42)"): {"bms": 1}}, api_module.client_counter.drain())
+        finally:
+            api_module.client = original
+
+
 if __name__ == "__main__":
     unittest.main()

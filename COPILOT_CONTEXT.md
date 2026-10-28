@@ -1992,3 +1992,29 @@ de la telefon în `ss` din Caddy); CA-ul din aplicație e același cu rădăcina
 **Release:** v3.37 (versionCode 41), `SolarMonitor-v3.37.apk`, 7.227.751 bytes,
 SHA-256 `01ee57abbccc9c07bd6f68ef1d1651a6615580643d29efc81ebc2da8d8bd1cd7`. Teste Android 47, lint fără erori,
 `layout-check` ok pe toate cele patru taburi.
+
+### 13.75 Evidența telefoanelor și a versiunilor aplicației în Grafana, v3.38 (2026-10-28)
+
+**Cerut:** un card în Grafana cu telefoanele care cer date de la server și versiunea aplicației de pe fiecare; în aplicație nu.
+
+**Ce versiune avea S20 FE-ul soției (SM-G781B, Android 13):** agentul Dalvik nu spune versiunea, deci s-a dedus din
+cereri. A apărut pe 2026-10-27 la 23:02 (ora României) cu `/latest` + `/bms` + `/grid-month`, deci ≥ v3.33 (factura);
+până la 13:04 pe 2026-10-28 doar `/latest` la ~2–3 s (serviciul de alarmă vechi), deci < v3.36: practic v3.35, cea
+trimisă atunci. De la 13:04 face 12 `/latest`/min (v3.36), iar după o pauză la 13:18–13:23 a continuat fără să fie
+deschisă aplicația: repornirea după actualizare pe care o face doar v3.37, deci cel mai probabil v3.37 de la 13:23.
+
+**Implementare:**
+- Aplicația (`SolarRepository.open`): `User-Agent: SolarMonitor/3.38 (42; Android 13; SM-G781B)` pe toate cererile.
+- `api/app_clients.py`: recunoaște agentul nou și pe cel Dalvik (versiune „veche (≤3.37)"), ignoră restul (curl-ul
+  sondei, Python, browsere); numără pe (model, Android, versiune) și rută; un fir scrie o dată pe minut în `history`
+  măsurătoarea `app_client` (câmpuri `requests`, `latest`, `bms`, `grid_month`, `history`). O scriere ratată se pierde.
+  `app.py` numără în `before_request`. Gunicorn trecut pe `-w 1 --threads 8`, ca un singur proces să țină numărătoarea
+  (cu 2 workeri punctele cu aceleași taguri și același moment s-ar fi suprascris).
+- Grafana: rândul „📱 Telefoane si aplicatie (cine cere date de la server)" (id 106) și tabelul id 130 la finalul
+  `solar-main`: un rând pe model, cu versiunea și Android-ul din ultima cerere, „Ultima cerere" (acum X), cereri/min
+  pe ultimele 10 minute, cereri în 24h. Trei interogări Flux + transformarea `merge`. Numele: value mappings pe model
+  (Note 9 Florin, S20 FE soție, emulatorul de test). Verificat cu `/api/ds/query` și cu o captură headless a panoului.
+- Teste API 29 (7 noi: 6 în `test_app_clients.py`, 1 în `test_app.py`).
+
+**Release:** v3.38 (versionCode 42), `SolarMonitor-v3.38.apk`, 7.227.751 bytes,
+SHA-256 `012ba029dca58886110a7731e4465ee7d87ebb61462704d0f3db9e6a1b842975`.

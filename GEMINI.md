@@ -81,7 +81,7 @@ Invertor --USB (/dev/growatt)--> collector.py  (minimalmodbus, FC04, 1 dată/sec
 | `solar-influxdb` | serie de timp, org `casa` | 8086 |
 | `solar-grafana` | dashboard `solar-main` | 3000 |
 | `solar-ntfy` | push pe telefon, topic din `.env` | 8088 |
-| `solar-api` | micro-API JSON READ-ONLY pentru Android | **niciunul** (intern `api:8000`) |
+| `solar-api` | micro-API JSON pentru Android (citește datele; scrie doar evidența telefoanelor `app_client`) | **niciunul** (intern `api:8000`) |
 | `solar-caddy` | reverse proxy HTTPS, `tls internal` | 9443 → 443, 8443 |
 
 Toate cu `restart: unless-stopped`, pornesc la boot.
@@ -382,6 +382,15 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   refuzat de Android 14, o repornire reală merge); serviciul rulează pe firul principal (rețeaua pe IO), un consum mic
   oprește doar sunetul alarmei de consum (înainte tăia alarma bateriei și sunetul de test după o citire) și ignoră
   răspunsurile `/latest` fără timestamp.
+- Telefoane și versiuni ale aplicației (v3.38, 2026-10-28): aplicația trimite `User-Agent: SolarMonitor/<versionName>
+  (<versionCode>; Android <release>; <Build.MODEL>)` (`SolarRepository.open`). `api/app_clients.py` numără cererile
+  aplicației pe telefon (model, Android, versiune; pe rută `latest`/`bms`/`grid_month`/`history` plus `requests`) și le scrie
+  o dată pe minut în `history`, măsurătoarea `app_client` (taguri `model`, `android`, `app_version`). Aplicațiile până la
+  3.37 trimit doar agentul Dalvik, deci apar ca `veche (≤3.37)`; curl, Python și browserele nu se numără. API-ul rulează cu
+  **un** worker gunicorn cu 8 fire, ca un singur proces să țină numărătoarea. Grafana: rândul „📱 Telefoane si aplicatie"
+  la finalul `solar-main`, tabelul „Telefoane cu acces si versiunea aplicatiei" (un rând pe model: Android, versiune,
+  ultima cerere, cereri/min pe 10 min, cereri în 24h). Numele telefoanelor sunt value mappings pe model în acel panou
+  (SM-N960U = Note 9 al utilizatorului; SM-G781B = S20 FE al soției); la un telefon nou se adaugă o mapare. Nimic în aplicație.
 - ENERGIE (v3.32): al patrulea subiect RETEA, cu putere (`grid_power`, W) și energie (`energy_grid`, bare kWh), 2h/1d/7d
   ca la celelalte, accent roșu. Rândul de subiecte (CASA / PANOURI / BATERIE / RETEA) e format din patru plăci goale
   puse în asset de `scripts/patch-retro-energy-subjects.py`; pictogramele și numele le desenează Compose. kWh sub 1

@@ -3,13 +3,16 @@
 Micro-API READ-ONLY pentru aplicatia mobila.
 Citeste ultimele valori din InfluxDB (bucket live) si le returneaza ca JSON.
 Expus prin Caddy la https://vyra.go.ro:31443/solar/latest, /solar/bms si /solar/grid-month (handle_path strip /solar).
-NU vorbeste cu invertorul; doar cu InfluxDB.
+NU vorbeste cu invertorul; doar cu InfluxDB. Singurul lucru pe care il scrie e evidenta telefoanelor care
+cer date (masuratoarea `app_client` in `history`, o data pe minut; vezi app_clients.py).
 """
 import os
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, request
 from influxdb_client import InfluxDBClient
+from influxdb_client.client.write_api import SYNCHRONOUS
+import app_clients
 from system_metrics import HostMetricsSampler
 
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
@@ -136,6 +139,21 @@ HISTORY_FIELDS = {
 app = Flask(__name__)
 client = InfluxDBClient(url=INFLUX_URL, token=TOKEN, org=ORG, timeout=5000)
 host_metrics = HostMetricsSampler()
+client_counter = app_clients.ClientCounter()
+
+
+def _write_client_points(points):
+    client.write_api(write_options=SYNCHRONOUS).write(bucket=BUCKET_HISTORY, org=ORG, record=points)
+
+
+# Un singur worker gunicorn (Dockerfile): un singur fir scrie, deci punctele nu se suprascriu intre workeri.
+if os.getenv("APP_CLIENTS_FLUSH", "1") == "1":
+    app_clients.start_flusher(client_counter, _write_client_points)
+
+
+@app.before_request
+def _count_app_client():
+    client_counter.record(request.headers.get("User-Agent"), request.path)
 
 
 @app.get("/health")

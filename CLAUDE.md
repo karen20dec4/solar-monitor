@@ -66,7 +66,8 @@ Inverter --USB (/dev/growatt)--> collector.py (minimalmodbus, FC04, polls every 
 ```
 
 Six containers (`docker-compose.yml`): `solar-collector`, `solar-influxdb`, `solar-grafana`,
-`solar-ntfy`, plus `solar-api` (READ-ONLY JSON micro-API for the Android app; no published port,
+`solar-ntfy`, plus `solar-api` (JSON micro-API for the Android app, read-only towards the data — its only write
+is the `app_client` phone log, see "Phones and app versions"; no published port,
 reached internally at `api:8000`) and `solar-caddy` (HTTPS reverse proxy, `tls internal`, routes
 `/solar/*` → api and everything else → Grafana). All `restart: unless-stopped`, start on boot.
 
@@ -296,6 +297,15 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   update (`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`; a shell-sent broadcast is refused by Android 14, a real reboot works);
   the service runs on the main thread (network on IO), a low house load stops only the consumption alarm's sound (it
   used to cut the battery alarm and the test sound after one poll), and it ignores `/latest` replies without a timestamp.
+- Phones and app versions (v3.38, 2026-10-28): the app sends `User-Agent: SolarMonitor/<versionName> (<versionCode>;
+  Android <release>; <Build.MODEL>)` (`SolarRepository.open`). `api/app_clients.py` counts app requests per phone (model,
+  Android, app version; per route `latest`/`bms`/`grid_month`/`history` plus `requests`), and once a minute writes them to
+  `history` as measurement `app_client` (tags `model`, `android`, `app_version`). Apps up to 3.37 only send the Dalvik
+  agent, so they show as `veche (≤3.37)`; curl, Python and browsers are not counted. The API runs as **one** gunicorn
+  worker with 8 threads, so one process owns the counts. Grafana: row "📱 Telefoane si aplicatie" at the bottom of
+  `solar-main`, table "Telefoane cu acces si versiunea aplicatiei" (one row per model: Android, app version, last request,
+  requests/min over 10 min, requests 24h). Phone names are value mappings on the model in that panel (SM-N960U = Note 9,
+  the user's; SM-G781B = S20 FE, the user's wife's); add a mapping when a new phone shows up. Nothing in the app UI.
 - ENERGIE (v3.32): fourth subject RETEA, power (`grid_power`, W) and energy (`energy_grid`, kWh bars), 2h/1d/7d like the others; red accent. kWh under 1 shows two decimals.
 - Electricity bill (v3.33): ENERGIE shows how much was taken from the grid since the 1st of the month (Europe/Bucharest),
   for the Hidroelectrica bill. `GET /solar/grid-month` -> `{month: "2026-10", since, kwh}` (`kwh` null with no samples yet):

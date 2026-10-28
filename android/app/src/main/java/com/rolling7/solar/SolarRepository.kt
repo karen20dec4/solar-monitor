@@ -1,5 +1,6 @@
 package com.rolling7.solar
 
+import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -51,15 +52,30 @@ object SolarRepository {
     private const val URL_BMS = "https://vyra.go.ro:31443/solar/bms"
     private const val URL_GRID_MONTH = "https://vyra.go.ro:31443/solar/grid-month"
 
+    /**
+     * Telefonul se prezinta serverului: versiunea aplicatiei, Android, modelul. Din asta serverul tine evidenta
+     * telefoanelor si a versiunilor (Grafana, tabelul „Telefoane si aplicatie"). Fara diacritice sau alte
+     * caractere care n-au ce cauta intr-un antet HTTP.
+     */
+    private val userAgent: String by lazy {
+        fun clean(v: String?) = (v ?: "").replace(Regex("[^\\w .\\-+]"), "").trim().ifEmpty { "necunoscut" }
+        "SolarMonitor/${clean(BuildConfig.VERSION_NAME)} (${BuildConfig.VERSION_CODE}; " +
+            "Android ${clean(Build.VERSION.RELEASE)}; ${clean(Build.MODEL)})"
+    }
+
+    private fun open(url: String, readTimeoutMs: Int): HttpURLConnection =
+        (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 5000
+            readTimeout = readTimeoutMs
+            requestMethod = "GET"
+            setRequestProperty("User-Agent", userAgent)
+        }
+
     /** Apel de retea sincron - apelat pe Dispatchers.IO. Returneaza null la eroare. */
     fun fetch(): SolarData? {
         var conn: HttpURLConnection? = null
         return try {
-            conn = (URL(URL_LATEST).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 5000
-                readTimeout = 5000
-                requestMethod = "GET"
-            }
+            conn = open(URL_LATEST, 5000)
             if (conn.responseCode != 200) return null
             val text = conn.inputStream.bufferedReader().use { it.readText() }
             val j = JSONObject(text)
@@ -98,11 +114,7 @@ object SolarRepository {
     fun fetchBms(): BmsState? {
         var conn: HttpURLConnection? = null
         return try {
-            conn = (URL(URL_BMS).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 5000
-                readTimeout = 5000
-                requestMethod = "GET"
-            }
+            conn = open(URL_BMS, 5000)
             if (conn.responseCode != 200) return null
             parseBmsState(conn.inputStream.bufferedReader().use { it.readText() })
         } catch (e: Exception) {
@@ -116,11 +128,7 @@ object SolarRepository {
     fun fetchGridMonth(): GridMonth? {
         var conn: HttpURLConnection? = null
         return try {
-            conn = (URL(URL_GRID_MONTH).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 5000
-                readTimeout = 8000
-                requestMethod = "GET"
-            }
+            conn = open(URL_GRID_MONTH, 8000)
             if (conn.responseCode != 200) return null
             parseGridMonth(conn.inputStream.bufferedReader().use { it.readText() })
         } catch (e: Exception) {
@@ -135,11 +143,7 @@ object SolarRepository {
         var conn: HttpURLConnection? = null
         return try {
             val query = "field=${enc(field)}&range=${enc(range)}"
-            conn = (URL("$URL_HISTORY?$query").openConnection() as HttpURLConnection).apply {
-                connectTimeout = 5000
-                readTimeout = 8000
-                requestMethod = "GET"
-            }
+            conn = open("$URL_HISTORY?$query", 8000)
             if (conn.responseCode != 200) return null
             val text = conn.inputStream.bufferedReader().use { it.readText() }
             val j = JSONObject(text)
