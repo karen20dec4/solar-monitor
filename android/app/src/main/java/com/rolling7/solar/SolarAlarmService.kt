@@ -15,22 +15,30 @@ import android.os.IBinder
 import android.os.VibrationEffect
 import android.os.Vibrator
 import androidx.core.app.NotificationCompat
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SolarAlarmService : Service() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Starea serviciului (sunetul, contoarele) se atinge doar pe firul principal, ca la onStartCommand;
+    // doar cererile de retea trec pe Dispatchers.IO.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var monitorJob: Job? = null
     private var alarmStopJob: Job? = null
     private var ringtone: Ringtone? = null
     private var consecutiveHigh = 0
     private var armed = true
     private var lastAlarmAt = 0L
+    // Sunetul de acum e al alarmei de consum: doar pe acela il opreste scaderea consumului.
+    // Fara asta alarma bateriei era taiata la urmatoarea citire (2-5 s in loc de 15 s).
+    private var consumptionSounding = false
     private val bmsTracker = BmsAlarmTracker()
 
     override fun onCreate() {
@@ -55,7 +63,8 @@ class SolarAlarmService : Service() {
                 if (!settings.anyEnabled) {
                     scope.launch {
                         delay(ALARM_SOUND_MS)
-                        stopEverything()
+                        // Daca intre timp s-a pornit o alarma, serviciul ramane pornit.
+                        if (!AlarmSettingsStore.read(this@SolarAlarmService).anyEnabled) stopEverything()
                     }
                 }
                 return START_NOT_STICKY
@@ -75,6 +84,7 @@ class SolarAlarmService : Service() {
         stopAlarmSound()
         monitorJob?.cancel()
         alarmStopJob?.cancel()
+        scope.cancel()
         super.onDestroy()
     }
 
@@ -89,7 +99,8 @@ class SolarAlarmService : Service() {
                     break
                 }
 
-                val data = SolarRepository.fetch()
+                // Fara timestamp serverul n-are date proaspete de la invertor: valorile ar fi zerouri, nu masuratori.
+                val data = withContext(Dispatchers.IO) { SolarRepository.fetch() }?.takeIf { it.timestamp != null }
                 updateMonitorNotification(settings, data)
                 if (data != null && settings.enabled) {
                     evaluateAlarm(settings, data.house)
@@ -97,7 +108,7 @@ class SolarAlarmService : Service() {
                 // BMS-ul se interogheaza la fiecare al doilea ciclu (10 s): o deconectare apare
                 // oricum cu cateva secunde de debounce pe server.
                 if (settings.batteryEnabled && cycle % 2 == 0) {
-                    SolarRepository.fetchBms()?.let { evaluateBmsAlarm(settings, it) }
+                    withContext(Dispatchers.IO) { SolarRepository.fetchBms() }?.let { evaluateBmsAlarm(settings, it) }
                 }
                 cycle++
                 // 5 s ajung pentru o alarma (sunat dupa doua citiri peste prag, deci 5-10 s); serviciul merge
@@ -123,7 +134,7 @@ class SolarAlarmService : Service() {
         if (houseW <= settings.clearThresholdW) {
             consecutiveHigh = 0
             armed = true
-            stopAlarmSound()
+            if (consumptionSounding) stopAlarmSound()
             return
         }
 
@@ -152,6 +163,7 @@ class SolarAlarmService : Service() {
 
         notify(ALERT_ID, alertNotification(title, body))
         playAlarmSound(settings)
+        consumptionSounding = !test
         AlarmState.onRingStart(if (test) "Test alarma" else "Alarma consum mare", body)
         if (settings.vibrate) vibrate()
     }
@@ -262,6 +274,7 @@ class SolarAlarmService : Service() {
         alarmStopJob = null
         ringtone?.stop()
         ringtone = null
+        consumptionSounding = false
         AlarmState.onRingStop()
     }
 
@@ -301,11 +314,11 @@ class SolarAlarmService : Service() {
     }
 
     private fun formatKw(valueW: Double): String =
-        String.format("%.1f kW", valueW / 1000.0)
+        String.format(Locale.US, "%.1f kW", valueW / 1000.0)
 
     // Cu semn explicit: +incarcare / -descarcare (conventie battery_display_power).
     private fun formatKwSigned(valueW: Double): String =
-        String.format("%+.1f kW", valueW / 1000.0)
+        String.format(Locale.US, "%+.1f kW", valueW / 1000.0)
 
     private fun stopEverything() {
         stopAlarmSound()

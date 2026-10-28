@@ -375,6 +375,13 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   niciodată, iar fiecare atingere a notificării mai deschidea o `MainActivity` cu buclele ei: logul api arăta ~1–3,5
   cereri/s de la un singur telefon, zi și noapte (2026-10-28). Orice buclă nouă de interogare folosește
   `WhileVisibleEffect`, nu `LaunchedEffect`.
+- Reparații din audit (v3.37): 20 s fără `/latest` proaspăt (fără răspuns sau cu `timestamp` null) pun `data = null`,
+  deci ecranele arată „ASTEPT DATE" / liniuțe în loc de cifre înghețate (textul de pe TABLOU devine roșu); graficele
+  ENERGIE se reîmprospătează discret o dată pe minut cât se văd; `AlarmBootReceiver` repornește serviciul de alarmă după
+  repornirea telefonului și după o actualizare (`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`; un broadcast trimis din shell e
+  refuzat de Android 14, o repornire reală merge); serviciul rulează pe firul principal (rețeaua pe IO), un consum mic
+  oprește doar sunetul alarmei de consum (înainte tăia alarma bateriei și sunetul de test după o citire) și ignoră
+  răspunsurile `/latest` fără timestamp.
 - ENERGIE (v3.32): al patrulea subiect RETEA, cu putere (`grid_power`, W) și energie (`energy_grid`, bare kWh), 2h/1d/7d
   ca la celelalte, accent roșu. Rândul de subiecte (CASA / PANOURI / BATERIE / RETEA) e format din patru plăci goale
   puse în asset de `scripts/patch-retro-energy-subjects.py`; pictogramele și numele le desenează Compose. kWh sub 1

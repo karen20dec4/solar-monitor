@@ -310,12 +310,19 @@ fun App() {
         }
     }
 
-    // Citirile live (la 2 s) merg doar cat aplicatia e pe ecran.
+    // Citirile live (la 2 s) merg doar cat aplicatia e pe ecran. Ca la BMS: fara date proaspete 20 s
+    // (fara raspuns, sau raspuns fara timestamp = serverul n-are nimic nou de la invertor) ecranul arata
+    // "ASTEPT DATE" in loc sa tina cifrele vechi ca si cum ar fi live (asa s-a vazut caderea din 2026-10-28).
     WhileVisibleEffect {
+        var lastOk = 0L
         while (true) {
             val d = withContext(Dispatchers.IO) { SolarRepository.fetch() }
-            if (d != null) {
+            val now = System.currentTimeMillis()
+            if (d != null && d.timestamp != null) {
                 data = d
+                lastOk = now
+            } else if (now - lastOk > 20_000L) {
+                data = null
             }
             delay(2000)
         }
@@ -407,11 +414,14 @@ fun App() {
         }
         
         val simpleSettingsContent: @Composable () -> Unit = {
+            // Titlul sunetului e o interogare la sistem: o data pe sunet ales, nu la fiecare recompunere (la 2 s).
+            val ringtoneTitle = remember(alarmSettings.ringtoneUri) { AlarmSettingsStore.ringtoneTitle(context, alarmSettings) }
+            val version = remember { appVersion(context) }
             SettingsSheet(
                 dashboardStyle = dashboardStyle,
                 settings = alarmSettings,
-                ringtoneTitle = AlarmSettingsStore.ringtoneTitle(context, alarmSettings),
-                version = appVersion(context),
+                ringtoneTitle = ringtoneTitle,
+                version = version,
                 onDashboardStyleChange = ::changeDashboardStyle,
                 onEnabledChange = { enabled ->
                     if (enabled && !hasNotificationPermission(context)) {
@@ -506,7 +516,13 @@ private fun DashboardSheetHandle(retro: Boolean) {
     )
 }
 
-/** Istoricul graficului ales; reincarcat la schimbarea campului, a intervalului sau la reincercare. */
+private const val HISTORY_REFRESH_MS = 60_000L
+
+/**
+ * Istoricul graficului ales; reincarcat la schimbarea campului, a intervalului sau la reincercare. Cat pagina
+ * se vede, graficul se improspateaza o data pe minut, fara "se incarca": un raspuns ratat lasa graficul vechi.
+ * Inainte ramanea oprit la momentul deschiderii, iar un esec se repara doar apasand pentru reincercare.
+ */
 private class EnergyHistoryState {
     var series by mutableStateOf<HistorySeries?>(null)
     var loading by mutableStateOf(true)
@@ -516,13 +532,23 @@ private class EnergyHistoryState {
 @Composable
 private fun rememberEnergyHistory(field: String, range: String, reloadKey: Int, errorText: String): EnergyHistoryState {
     val state = remember(field, range, reloadKey) { EnergyHistoryState() }
-    LaunchedEffect(field, range, reloadKey) {
-        state.loading = true
-        state.error = null
-        state.series = null
-        val result = withContext(Dispatchers.IO) { SolarRepository.fetchHistory(field, range) }
-        if (result == null) state.error = errorText else state.series = result
-        state.loading = false
+    WhileVisibleEffect(field, range, reloadKey) {
+        while (true) {
+            val first = state.series == null
+            if (first) {
+                state.loading = true
+                state.error = null
+            }
+            val result = withContext(Dispatchers.IO) { SolarRepository.fetchHistory(field, range) }
+            if (result != null) {
+                state.series = result
+                state.error = null
+            } else if (first) {
+                state.error = errorText
+            }
+            state.loading = false
+            delay(HISTORY_REFRESH_MS)
+        }
     }
     return state
 }

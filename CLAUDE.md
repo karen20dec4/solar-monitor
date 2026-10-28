@@ -290,6 +290,12 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   notification intent uses CLEAR_TOP|SINGLE_TOP. Before, the loops were plain `LaunchedEffect`s that never paused, and
   each notification tap stacked another `MainActivity` with its own loops: the api log showed ~1–3.5 req/s from one
   phone around the clock (2026-10-28). Any new polling loop must use `WhileVisibleEffect`, not `LaunchedEffect`.
+- Audit fixes (v3.37): 20 s without fresh `/latest` (no reply, or `timestamp` null) sets `data = null`, so the
+  screens show "ASTEPT DATE" / dashes instead of frozen numbers (TABLOU text turns red); the ENERGIE charts refresh
+  quietly once a minute while visible; `AlarmBootReceiver` restarts the alarm service after a reboot and after an app
+  update (`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`; a shell-sent broadcast is refused by Android 14, a real reboot works);
+  the service runs on the main thread (network on IO), a low house load stops only the consumption alarm's sound (it
+  used to cut the battery alarm and the test sound after one poll), and it ignores `/latest` replies without a timestamp.
 - ENERGIE (v3.32): fourth subject RETEA, power (`grid_power`, W) and energy (`energy_grid`, kWh bars), 2h/1d/7d like the others; red accent. kWh under 1 shows two decimals.
 - Electricity bill (v3.33): ENERGIE shows how much was taken from the grid since the 1st of the month (Europe/Bucharest),
   for the Hidroelectrica bill. `GET /solar/grid-month` -> `{month: "2026-10", since, kwh}` (`kwh` null with no samples yet):

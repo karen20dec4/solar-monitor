@@ -2283,7 +2283,8 @@ private fun RetroLivePanel(
             Spacer(Modifier.width(4.dp))
             Text(
                 text = if (data == null) "ASTEPT DATE" else "CASA DIN ${sourceRetroLabel(data)}",
-                color = sourceColor,
+                // Rosu fara date (dupa 20 s fara raspuns): trebuie sa sara in ochi ca cifrele nu sunt live.
+                color = if (data == null) RetroRed else sourceColor,
                 fontFamily = RetroMono,
                 fontSize = 7.sp,
                 fontWeight = FontWeight.Bold,

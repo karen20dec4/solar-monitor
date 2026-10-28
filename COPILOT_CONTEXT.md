@@ -1955,3 +1955,40 @@ SHA-256 `443438642ec21da5b58b57960adac2e44fb1e772fc2591571eeab96788ab7e4d`.
 (pachet apt din `pkg.cloudflare.com`, serviciu `cloudflared.service`), deci avea reparația. Tot pe 2026-10-28 a fost urcat la
 **2026.10.5** (`apt-get install --only-upgrade cloudflared`, `systemctl restart cloudflared`): cele 4 conexiuni ale tunelului s-au
 reînregistrat în ~3 s.
+
+### 13.74 Audit aplicație Android, v3.37 (2026-10-28)
+
+Cerut de utilizator după problema cererilor prea dese (§13.73): audit complet, reparat ce s-a găsit. Citite integral
+`SolarRepository`, `SolarAlarmService`, `AlarmSettings`, `AlarmState`, `BmsModel`, `GridMonth`, manifestul, configurația
+de rețea, buclele și graficele din `MainActivity`/`RetroDashboard`; lint (`:app:lintDebug`) fără erori.
+
+**Probleme găsite și reparate:**
+1. **Cifre înghețate fără date.** La o cădere (ca cea din §13.73) aplicația ținea ultimele valori pe ecran ca și cum ar
+   fi live; doar LED-ul de pe ENERGIE se schimba. Acum, după 20 s fără `/latest` proaspăt (fără răspuns, sau răspuns cu
+   `timestamp` null = serverul n-are date noi de la invertor), `data = null`: TABLOU arată „ASTEPT DATE" (acum cu roșu),
+   liniuțe în loc de cifre, ca la BMS. Verificat în emulator cu Wi-Fi și datele mobile oprite și apoi pornite la loc.
+2. **Alarma bateriei tăiată după o citire.** `evaluateAlarm` oprea sunetul de fiecare dată când consumul era sub prag,
+   oricare alarmă ar fi sunat: alarma bateriei (și sunetul de test) se oprea după 2–5 s în loc de 15 s. Acum doar sunetul
+   alarmei de consum se oprește la scăderea consumului. Verificat: testul sună 15 s cu alarma de consum pornită.
+3. **Alarmele nu porneau după repornirea telefonului sau după o actualizare** până la deschiderea aplicației.
+   `AlarmBootReceiver` (`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`, permisiunea `RECEIVE_BOOT_COMPLETED`). Verificat în
+   emulator: după `adb install -r` și după `adb reboot` serviciul e în prim-plan fără să deschizi aplicația.
+4. **Serviciul atingea starea (sunetul, contoarele) din fire diferite** (bucla pe IO, „Oprește sunet" pe firul principal).
+   Acum rulează pe `Dispatchers.Main.immediate`, doar rețeaua pe IO; `scope.cancel()` la `onDestroy`; după un test de
+   alarmă cu alarmele oprite, serviciul nu se mai oprește dacă între timp ai pornit o alarmă.
+5. **Răspunsuri fără timestamp tratate ca măsurători** în serviciu (notificarea arăta „Casa: 0.0 kW"). Acum: „astept date".
+6. **Graficele ENERGIE rămâneau oprite** la momentul deschiderii; o eroare se repara doar apăsând. Acum se
+   reîmprospătează discret o dată pe minut cât pagina se vede (verificat: o cerere `/history` pe minut).
+7. Mărunte: titlul sunetului de alarmă și versiunea erau citite de la sistem la fiecare recompunere (la 2 s, pe firul
+   principal) → `remember`; kW din notificare cu `Locale.US` (era „5,0 kW" pe telefon în română).
+
+**Verificat fără probleme:** cererile au timeout (5–8 s); conexiunile HTTPS se refolosesc (o singură conexiune stabilă
+de la telefon în `ss` din Caddy); CA-ul din aplicație e același cu rădăcina Caddy (expiră 2036-04-23); nicio
+`roundToInt()` pe valori care pot fi NaN; graficele tratează listele goale.
+
+**Risc rămas (server, nu aplicație):** rădăcina CA a Caddy stă în volumul `solar-monitor_caddy-data`. Un
+`docker compose down -v` ar genera alta și aplicația n-ar mai avea încredere în server până la un release nou.
+
+**Release:** v3.37 (versionCode 41), `SolarMonitor-v3.37.apk`, 7.227.751 bytes,
+SHA-256 `01ee57abbccc9c07bd6f68ef1d1651a6615580643d29efc81ebc2da8d8bd1cd7`. Teste Android 47, lint fără erori,
+`layout-check` ok pe toate cele patru taburi.
