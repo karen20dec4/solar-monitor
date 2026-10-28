@@ -1952,4 +1952,6 @@ reîncepe imediat; trei `am start` la rând lasă o singură `MainActivity`.
 SHA-256 `443438642ec21da5b58b57960adac2e44fb1e772fc2591571eeab96788ab7e4d`.
 
 **E-mailul Cloudflare (eMudhra, „upgrade cloudflared la 2026.10.2+"):** pe server e deja `cloudflared 2026.10.4`
-(pachet apt din `pkg.cloudflare.com`, serviciu `cloudflared.service`), deci are reparația; în repo e disponibil 2026.10.5.
+(pachet apt din `pkg.cloudflare.com`, serviciu `cloudflared.service`), deci avea reparația. Tot pe 2026-10-28 a fost urcat la
+**2026.10.5** (`apt-get install --only-upgrade cloudflared`, `systemctl restart cloudflared`): cele 4 conexiuni ale tunelului s-au
+reînregistrat în ~3 s.
