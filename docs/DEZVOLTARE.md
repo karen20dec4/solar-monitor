@@ -34,6 +34,7 @@ GET /solar/history?field=<f>&range=<r>     -> { field,label,unit,chart,range,win
 GET /solar/bms                             -> câmpurile `bms` plate + timestamp + alarms[]
                                               + soc_voltage (SOC-ul afișat, din tensiune), soc_empty_v, soc_full_v
 GET /solar/grid-month                      -> { month: "2026-10", since, kwh }  (rețea de la 1 a lunii, pentru factură)
+GET /solar/grid-outage                     -> { down, outages: [{start, end, seconds}], timestamp }  (pene Enel, 24 h)
 (toate)  User-Agent: SolarMonitor/3.38 (42; Android 13; SM-G781B)  -> numărat în `app_client` (Grafana, „Telefoane")
 ```
 

@@ -12,6 +12,7 @@ import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import androidx.core.app.NotificationCompat
@@ -40,6 +41,7 @@ class SolarAlarmService : Service() {
     // Fara asta alarma bateriei era taiata la urmatoarea citire (2-5 s in loc de 15 s).
     private var consumptionSounding = false
     private val bmsTracker = BmsAlarmTracker()
+    private var lastGridPollAt = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -110,12 +112,25 @@ class SolarAlarmService : Service() {
                 if (settings.batteryEnabled && cycle % 2 == 0) {
                     withContext(Dispatchers.IO) { SolarRepository.fetchBms() }?.let { evaluateBmsAlarm(settings, it) }
                 }
+                if (settings.gridEnabled && SystemClock.elapsedRealtime() - lastGridPollAt >= GRID_POLL_MS) {
+                    pollGridOutages()
+                }
                 cycle++
                 // 5 s ajung pentru o alarma (sunat dupa doua citiri peste prag, deci 5-10 s); serviciul merge
-                // si in fundal, toata ziua, deci aici fiecare citire conteaza.
-                delay(MONITOR_INTERVAL_MS)
+                // si in fundal, toata ziua, deci aici fiecare citire conteaza. Doar cu mesajul de retea e destul mai rar.
+                delay(if (settings.enabled || settings.batteryEnabled) MONITOR_INTERVAL_MS else GRID_POLL_MS)
             }
         }
+    }
+
+    // Doar mesaj: fara sunet si fara vibratie (canalul CHANNEL_GRID). Pana o tine minte serverul, deci un telefon
+    // fara internet in timpul ei afla la reconectare.
+    private suspend fun pollGridOutages() {
+        lastGridPollAt = SystemClock.elapsedRealtime()
+        val outages = withContext(Dispatchers.IO) { SolarRepository.fetchGridOutages() } ?: return
+        val (notices, mark) = evaluateGridOutages(outages, AlarmSettingsStore.readGridMark(this))
+        AlarmSettingsStore.saveGridMark(this, mark)
+        notices.forEach { notify(gridNoticeId(it.outage), gridNotification(it)) }
     }
 
     private fun evaluateBmsAlarm(settings: AlarmSettings, state: BmsState) {
@@ -201,6 +216,7 @@ class SolarAlarmService : Service() {
         val watching = buildList {
             if (settings.enabled) add("consum ${formatKw(settings.thresholdW.toDouble())}")
             if (settings.batteryEnabled) add("baterie")
+            if (settings.gridEnabled) add("retea")
         }.joinToString(" · ")
         return NotificationCompat.Builder(this, CHANNEL_MONITOR)
             .setSmallIcon(R.drawable.ic_stat_solar)
@@ -226,6 +242,23 @@ class SolarAlarmService : Service() {
             .setAutoCancel(true)
             .addAction(0, "Opreste sunet", serviceIntent(ACTION_SILENCE))
             .build()
+
+    // Acelasi id pentru inceputul si revenirea unei pene: mesajul de revenire il inlocuieste pe primul.
+    private fun gridNoticeId(outage: GridOutage): Int = GRID_ALERT_ID + (outage.start % 1000L).toInt()
+
+    private fun gridNotification(notice: GridNotice): Notification {
+        val body = gridNoticeBody(notice)
+        return NotificationCompat.Builder(this, CHANNEL_GRID)
+            .setSmallIcon(R.drawable.ic_stat_solar)
+            .setContentTitle(gridNoticeTitle(notice))
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(openAppIntent())
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .build()
+    }
 
     private fun openAppIntent(): PendingIntent {
         // Revine la fereastra deja deschisa; fara asta fiecare atingere a notificarii deschidea inca una.
@@ -311,6 +344,12 @@ class SolarAlarmService : Service() {
                 enableVibration(true)
             }
         )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_GRID, "Retea Enel", NotificationManager.IMPORTANCE_HIGH).apply {
+                setSound(null, null)
+                enableVibration(false)
+            }
+        )
     }
 
     private fun formatKw(valueW: Double): String =
@@ -334,10 +373,13 @@ class SolarAlarmService : Service() {
         const val ACTION_SILENCE = "com.rolling7.solar.action.SILENCE_ALARM"
         const val ACTION_TEST = "com.rolling7.solar.action.TEST_ALARM"
         private const val MONITOR_INTERVAL_MS = 5_000L
+        private const val GRID_POLL_MS = 30_000L
         private const val CHANNEL_MONITOR = "solar_monitor"
         private const val CHANNEL_ALERTS = "solar_alerts"
+        private const val CHANNEL_GRID = "solar_grid"
         private const val MONITOR_ID = 7001
         private const val ALERT_ID = 7002
+        private const val GRID_ALERT_ID = 7100
         // Durata maxima cat suna alarma inainte sa se opreasca automat.
         private const val ALARM_SOUND_MS = 15_000L
     }

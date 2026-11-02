@@ -292,6 +292,7 @@ fun App() {
             when (enableAfterNotificationPermission) {
                 "consum" -> saveAlarmSettings(alarmSettings.copy(enabled = true))
                 "baterie" -> saveAlarmSettings(alarmSettings.copy(batteryEnabled = true))
+                "retea" -> saveAlarmSettings(alarmSettings.copy(gridEnabled = true))
             }
         }
         enableAfterNotificationPermission = null
@@ -307,6 +308,10 @@ fun App() {
     LaunchedEffect(Unit) {
         if (alarmSettings.anyEnabled) {
             AlarmSettingsStore.applyServiceState(context, alarmSettings)
+        }
+        // Mesajul de retea e pornit din oficiu, deci aici se cere permisiunea, nu la intrerupatorul din SETARI.
+        if (alarmSettings.gridEnabled && !hasNotificationPermission(context)) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
@@ -437,6 +442,14 @@ fun App() {
                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     } else {
                         saveAlarmSettings(alarmSettings.copy(batteryEnabled = enabled))
+                    }
+                },
+                onGridEnabledChange = { enabled ->
+                    if (enabled && !hasNotificationPermission(context)) {
+                        enableAfterNotificationPermission = "retea"
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        saveAlarmSettings(alarmSettings.copy(gridEnabled = enabled))
                     }
                 },
                 onThresholdChange = { saveAlarmSettings(alarmSettings.copy(thresholdW = it), applyService = false) },
@@ -1685,9 +1698,10 @@ private fun EnergyFlow(data: SolarData?, modifier: Modifier = Modifier, onHistor
             modifier = Modifier.align(Alignment.BottomEnd),
             imageRes = R.drawable.simple_flow_stalp,
             description = "Retea",
-            value = wholeNumber(if (data == null) null else grid),
+            value = if (data?.gridDown == true) "ENEL PICAT" else wholeNumber(if (data == null) null else grid),
             color = CGrid,
-            imageSize = imageSize
+            imageSize = imageSize,
+            unit = if (data?.gridDown == true) "" else "W"
         )
     }
 }
@@ -1705,6 +1719,7 @@ private fun FlowIllustration(
     value: String,
     color: Color,
     imageSize: androidx.compose.ui.unit.Dp,
+    unit: String = "W",
     onClick: (() -> Unit)? = null
 ) {
     val clickModifier = if (onClick == null) Modifier else Modifier.clickable(onClick = onClick)
@@ -1712,7 +1727,7 @@ private fun FlowIllustration(
         modifier = modifier
             .width(100.dp)
             .then(clickModifier)
-            .semantics { contentDescription = "$description $value wati" },
+            .semantics { contentDescription = if (unit.isEmpty()) "$description $value" else "$description $value wati" },
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Image(
@@ -1724,13 +1739,16 @@ private fun FlowIllustration(
             Text(
                 value,
                 color = color,
-                fontSize = 25.sp,
+                fontSize = if (unit.isEmpty()) 12.sp else 25.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
+                softWrap = false,
                 style = LocalTextStyle.current.copy(shadow = ValueShadow)
             )
-            Spacer(Modifier.width(3.dp))
-            Text("W", color = CMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 3.dp))
+            if (unit.isNotEmpty()) {
+                Spacer(Modifier.width(3.dp))
+                Text(unit, color = CMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 3.dp))
+            }
         }
     }
 }
@@ -1815,7 +1833,9 @@ private fun SystemDetails(data: SolarData?, onHistoryClick: (HistoryMetric) -> U
             DetailRow(
                 label = "Retea",
                 value = data?.let { String.format(Locale.US, "%.1f V", it.gridVoltage) } ?: "—",
-                supporting = data?.let { "Import ${((it.gridImport + it.gridCharge).roundToInt())} W" } ?: "Astept date",
+                supporting = data?.let {
+                    if (it.gridDown) "Enel picat" else "Import ${((it.gridImport + it.gridCharge).roundToInt())} W"
+                } ?: "Astept date",
                 color = CGrid
             )
             DetailDivider()
@@ -1985,6 +2005,7 @@ private fun RetroSettingsPage(
     onDashboardStyleChange: (DashboardStyle) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     onBatteryEnabledChange: (Boolean) -> Unit,
+    onGridEnabledChange: (Boolean) -> Unit,
     onThresholdChange: (Int) -> Unit,
     onCooldownChange: (Int) -> Unit,
     onVibrateChange: (Boolean) -> Unit,
@@ -1998,6 +2019,7 @@ private fun RetroSettingsPage(
         onDashboardStyleChange = onDashboardStyleChange,
         onEnabledChange = onEnabledChange,
         onBatteryEnabledChange = onBatteryEnabledChange,
+        onGridEnabledChange = onGridEnabledChange,
         onThresholdChange = onThresholdChange,
         onCooldownChange = onCooldownChange,
         onVibrateChange = onVibrateChange,
@@ -2015,6 +2037,7 @@ private fun SettingsSheet(
     onDashboardStyleChange: (DashboardStyle) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     onBatteryEnabledChange: (Boolean) -> Unit,
+    onGridEnabledChange: (Boolean) -> Unit,
     onThresholdChange: (Int) -> Unit,
     onCooldownChange: (Int) -> Unit,
     onVibrateChange: (Boolean) -> Unit,
@@ -2031,6 +2054,7 @@ private fun SettingsSheet(
             onDashboardStyleChange = onDashboardStyleChange,
             onEnabledChange = onEnabledChange,
             onBatteryEnabledChange = onBatteryEnabledChange,
+            onGridEnabledChange = onGridEnabledChange,
             onThresholdChange = onThresholdChange,
             onCooldownChange = onCooldownChange,
             onVibrateChange = onVibrateChange,
@@ -2157,6 +2181,25 @@ private fun SettingsSheet(
                 Switch(
                     checked = settings.batteryEnabled,
                     onCheckedChange = onBatteryEnabledChange,
+                    colors = if (retro) retroSwitchColors() else SwitchDefaults.colors()
+                )
+            }
+        }
+
+        SettingsGroup(retro) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Mesaj retea Enel", color = chrome.text, fontFamily = chrome.font, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (settings.gridEnabled) "Activ - fara sunet" else "Oprit",
+                        color = if (settings.gridEnabled) (if (retro) RetroSage else CPv) else chrome.muted,
+                        fontFamily = chrome.font,
+                        fontSize = 12.sp
+                    )
+                }
+                Switch(
+                    checked = settings.gridEnabled,
+                    onCheckedChange = onGridEnabledChange,
                     colors = if (retro) retroSwitchColors() else SwitchDefaults.colors()
                 )
             }

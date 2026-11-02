@@ -384,13 +384,25 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   răspunsurile `/latest` fără timestamp.
 - Telefoane și versiuni ale aplicației (v3.38, 2026-10-28): aplicația trimite `User-Agent: SolarMonitor/<versionName>
   (<versionCode>; Android <release>; <Build.MODEL>)` (`SolarRepository.open`). `api/app_clients.py` numără cererile
-  aplicației pe telefon (model, Android, versiune; pe rută `latest`/`bms`/`grid_month`/`history` plus `requests`) și le scrie
+  aplicației pe telefon (model, Android, versiune; pe rută `latest`/`bms`/`grid_month`/`grid_outage`/`history` plus `requests`) și le scrie
   o dată pe minut în `history`, măsurătoarea `app_client` (taguri `model`, `android`, `app_version`). Aplicațiile până la
   3.37 trimit doar agentul Dalvik, deci apar ca `veche (≤3.37)`; curl, Python și browserele nu se numără. API-ul rulează cu
   **un** worker gunicorn cu 8 fire, ca un singur proces să țină numărătoarea. Grafana: rândul „📱 Telefoane si aplicatie"
   la finalul `solar-main`, tabelul „Telefoane cu acces si versiunea aplicatiei" (un rând pe model: Android, versiune,
   ultima cerere, cereri/min pe 10 min, cereri în 24h). Numele telefoanelor sunt value mappings pe model în acel panou
   (SM-N960U = Note 9 al utilizatorului; SM-G781B = S20 FE al soției); la un telefon nou se adaugă o mapare. Nimic în aplicație.
+- Mesaj la căderea rețelei Enel (v3.39, 2026-11-02): notificare fără sunet (canal `solar_grid`, fără vibrație) când pică
+  rețeaua, înlocuită de „Curent Enel revenit" cu orele și durata când revine. **Penele le ține minte serverul, nu telefonul:**
+  internetul casei cade odată cu rețeaua, pentru că routerul/media-convertorul Digi de la poartă e alimentat din Enel, nu din invertor (2026-11-02: 2–4 min offline la pene de 35–40 s), deci un telefon care compară
+  `/latest` n-ar vedea niciodată 0 V. `GET /solar/grid-outage` -> `{down, outages: [{start, end, seconds}], timestamp}`
+  (ultimele 24 h din `live`, epoch în secunde, `end` null cât durează, `grid_voltage` < 100 V, ≥ 3 s, probe la ≤ 30 s = aceeași
+  pană). `SolarAlarmService` îl cere la 30 s, iar `evaluateGridOutages` (`GridOutage.kt`) decide ce e nou față de un marcaj din
+  prefs; la prima rulare trecutul nu se anunță. Mesajul poate veni cu minute întârziere, dar spune orele reale. SETARI: rândul
+  „MESAJ REȚEA ENEL", `AlarmSettings.gridEnabled`, **pornit din oficiu**, deci serviciul din prim-plan merge acum pe orice
+  telefon (doar cu asta pornit bucla e la 30 s, nu 5 s), iar aplicația cere permisiunea de notificări la pornire. Dashboard:
+  `SolarData.gridDown` din `/latest`: TABLOU arată un X roșu care clipește peste stâlp și „ENEL PICAT" în locul wattilor
+  (`RetroGridDownPlate`), Simple „ENEL PICAT" sub stâlp, SISTEM pe rândul rețelei. Se vede doar dacă telefonul ajunge la
+  server în timpul penei.
 - ENERGIE (v3.32): al patrulea subiect RETEA, cu putere (`grid_power`, W) și energie (`energy_grid`, bare kWh), 2h/1d/7d
   ca la celelalte, accent roșu. Rândul de subiecte (CASA / PANOURI / BATERIE / RETEA) e format din patru plăci goale
   puse în asset de `scripts/patch-retro-energy-subjects.py`; pictogramele și numele le desenează Compose. kWh sub 1
@@ -401,7 +413,16 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   = pragul de încărcare setat în invertor (57 V iarna, 56 V vara), tăiat la 0–100 (decizia utilizatorului, 2026-10-26).
   `soc` rămâne contorul de Ah al JK (100% la vârful încărcării, dar jos derivă, fiindcă 180 Ah e valoare setată) și e
   tot în Grafana. Când utilizatorul schimbă sezonul în invertor: `BAT_SOC_FULL_V` în `.env`, apoi `docker compose up -d api`
-  (fără release de aplicație). Sub sarcină mare tensiunea, deci și SOC-ul, scade; revine în repaus.
+  (fără release de aplicație), **și** `fullV` din cele două panouri de capacitate (vezi mai jos). Sub sarcină mare tensiunea,
+  deci și SOC-ul, scade; revine în repaus.
+- Capacitate măsurată (Grafana, 2026-10-29): stat-ul „Capacitate baterie: cat s-a scos de la ultima incarcare completa"
+  (id 140) și tabelul „Descarcari masurate de la plin" (id 141), la finalul rândului BMS live. Doar Flux pe `history`:
+  `current`/`power` din BMS în medii de 5 min, integrate cu `elapsed()` (golurile peste 15 min se sar), net de ce s-a
+  reîncărcat între timp. Un ciclu nou începe când tensiunea BMS trece în sus de `fullV`; referința e punctul cel mai plin de
+  după, iar „scos net maxim" e cea mai adâncă coborâre față de el (= capacitatea utilă, după ce invertorul a trecut pe rețea
+  la ~47,6–47,9 V). `fullV` e o constantă în capul ambelor interogări = pragul de încărcare din invertor − 0,5 V: **56.5
+  iarna (57 V), 55.5 vara (56 V)**. Primul rezultat: plin pe 2026-10-25 (56,75 V) până la 47,61 V pe 2026-10-29 = ~125 Ah /
+  ~6,4 kWh, față de 180 Ah / 9,3 kWh setați în BMS.
 - Factura de curent (v3.33): ENERGIE arată cât s-a luat din rețea de la 1 a lunii (ora Europe/Bucharest), pentru factura
   Hidroelectrica. `GET /solar/grid-month` -> `{month: "2026-10", since, kwh}` (`kwh` null dacă luna n-are încă nicio
   mostră): API-ul integrează `grid_power` din `history` între începutul lunii și acum, aceeași serie ca barele RETEA
@@ -439,6 +460,13 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
 
 ## Capcane cunoscute
 
+- **Discul de sistem are erori reale de mediu (2026-11-02).** GIGABYTE GP-GM30512G-G: SMART numără 519.330 „Media and Data
+  Integrity Errors", deși spune PASSED și 0% uzură. O eroare de citire pe `kotlin-gradle-plugin-2.0.21-gradle85.jar`
+  (`critical medium error`, sector 904624024) a apărut într-un build Gradle la 14:04, cel mai probabil „bus error"-ul văzut
+  atunci; jurnalul se oprește acolo, serverul a revenit la 14:16 (cauza pauzei nu e în jurnal). La `Bus error`/SIGBUS sau
+  `Could not read workspace metadata` de la Gradle, caută întâi `journalctl -k | grep 'medium error'` și mapează sectorul pe
+  fișier (`debugfs icheck`/`ncheck`). Jar-ul stricat e ținut în `/root/.gradle/bad-sector-quarantine/`, ca blocurile să rămână ocupate.
+  O copie completă a discului (rootfs + EFI, ultima trecere cu containerele oprite, 2026-11-02 15:58, fără folderul de carantină) e pe HDD în `/data/backup-nvme-2026-11-02/`.
 - **firewalld taie traficul dintre containere.** Dacă aplicația arată „aștept date" iar
   logurile collector-ului par perfect sănătoase, verifică `firewall-cmd --get-active-zones`
   **înainte** de a bănui invertorul — `br-solar` trebuie să fie în zona `docker`.

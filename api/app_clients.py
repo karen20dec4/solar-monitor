@@ -13,7 +13,8 @@ import threading
 import time
 
 # Rutele pe care le cere aplicatia (Caddy taie prefixul /solar).
-TRACKED_PATHS = {"/latest": "latest", "/bms": "bms", "/grid-month": "grid_month", "/history": "history"}
+TRACKED_PATHS = {"/latest": "latest", "/bms": "bms", "/grid-month": "grid_month", "/grid-outage": "grid_outage",
+                 "/history": "history"}
 OLD_VERSION = "veche (≤3.37)"
 FLUSH_INTERVAL_S = 60
 

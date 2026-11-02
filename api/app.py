@@ -2,7 +2,7 @@
 """
 Micro-API READ-ONLY pentru aplicatia mobila.
 Citeste ultimele valori din InfluxDB (bucket live) si le returneaza ca JSON.
-Expus prin Caddy la https://vyra.go.ro:31443/solar/latest, /solar/bms si /solar/grid-month (handle_path strip /solar).
+Expus prin Caddy la https://vyra.go.ro:31443/solar/latest, /solar/bms, /solar/grid-month si /solar/grid-outage (handle_path strip /solar).
 NU vorbeste cu invertorul; doar cu InfluxDB. Singurul lucru pe care il scrie e evidenta telefoanelor care
 cer date (masuratoarea `app_client` in `history`, o data pe minut; vezi app_clients.py).
 """
@@ -27,6 +27,13 @@ BUCKET_HISTORY = os.getenv("INFLUX_BUCKET_HISTORY", "history")
 # deriva, pentru ca cei 180 Ah sunt o valoare setata, nu masurata (decizie Florin, 2026-10-26).
 SOC_EMPTY_V = float(os.getenv("BAT_SOC_EMPTY_V", "48.0"))
 SOC_FULL_V = float(os.getenv("BAT_SOC_FULL_V", "57.0"))
+
+# Penele de retea Enel le tine minte serverul, nu telefonul: odata cu reteaua cade si internetul casei (2-4 minute la
+# penele din 2026-11-02, mai mult decat au durat ele), deci telefonul afla abia dupa ce se reconecteaza.
+GRID_DOWN_V = 100.0        # invertorul citeste 0 V fara retea; o tensiune mica dar prezenta nu e pana
+GRID_OUTAGE_GAP_S = 30     # probe joase mai apropiate de atat sunt aceeasi pana
+GRID_OUTAGE_MIN_S = 3      # una-doua citiri de 0 V nu sunt pana
+GRID_OUTAGE_KEEP = 20
 
 # Campurile expuse aplicatiei (acelasi set ca diagrama de flux + cateva extra).
 FIELDS = [
@@ -178,6 +185,46 @@ def latest():
     out.update(host_metrics.snapshot())
     out["timestamp"] = ts.isoformat() if ts else None
     return jsonify(out)
+
+
+def group_outages(low_times, down_now):
+    """Probele de 1 s cu reteaua lipsa, grupate in pene. `end` e None la pana care inca dureaza."""
+    spans = []
+    for moment in sorted(low_times):
+        ts = moment.timestamp()
+        if spans and ts - spans[-1][1] <= GRID_OUTAGE_GAP_S:
+            spans[-1][1] = ts
+        else:
+            spans.append([ts, ts])
+    out = []
+    for index, (start, end) in enumerate(spans):
+        seconds = int(round(end - start)) + 1
+        if seconds >= GRID_OUTAGE_MIN_S:
+            ongoing = down_now and index == len(spans) - 1
+            out.append({"start": int(start), "end": None if ongoing else int(end), "seconds": seconds})
+    return out[-GRID_OUTAGE_KEEP:]
+
+
+@app.get("/grid-outage")
+def grid_outage():
+    """Penele de retea din ultimele 24 h (epoch in secunde) si starea de acum, din tensiunea citita de invertor."""
+    base = (f'from(bucket: "{BUCKET_LIVE}") |> range(start: {{start}}) '
+            f'|> filter(fn: (r) => r._measurement == "inverter" and r._field == "grid_voltage")')
+    try:
+        low = [rec.get_time()
+               for table in client.query_api().query(
+                   base.format(start="-24h") + f' |> filter(fn: (r) => r._value < {GRID_DOWN_V})', org=ORG)
+               for rec in table.records]
+        now = [rec for table in client.query_api().query(base.format(start="-15s") + ' |> last()', org=ORG)
+               for rec in table.records]
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+    down = bool(now) and now[-1].get_value() < GRID_DOWN_V
+    return jsonify({
+        "down": down,
+        "outages": group_outages(low, down),
+        "timestamp": now[-1].get_time().isoformat() if now else None,
+    })
 
 
 def voltage_soc(volts):

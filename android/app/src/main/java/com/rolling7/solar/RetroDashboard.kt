@@ -1635,6 +1635,7 @@ internal fun RetroSettingsArtworkPage(
     onDashboardStyleChange: (DashboardStyle) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     onBatteryEnabledChange: (Boolean) -> Unit,
+    onGridEnabledChange: (Boolean) -> Unit,
     onThresholdChange: (Int) -> Unit,
     onCooldownChange: (Int) -> Unit,
     onVibrateChange: (Boolean) -> Unit,
@@ -1651,17 +1652,18 @@ internal fun RetroSettingsArtworkPage(
         val topToThemeGap = with(density) { 12.toDp() }
         val themeToAlarmGap = with(density) { 20.toDp() }
         val alarmToBatteryGap = with(density) { 20.toDp() }
-        // Randul "Alarma baterie" intra in aceeasi socoteala de inaltime ca cardurile pictate, deci
+        val batteryToGridGap = with(density) { 12.toDp() }
+        // Randurile "Alarma baterie" si "Mesaj retea" intra in aceeasi socoteala de inaltime ca cardurile pictate, deci
         // pe un telefon scurt cardurile se micsoreaza putin, nu iese nimic din ecran.
         val batteryRowRatio = 0.13f
         val heightPerWidth =
             (361f / 1_380f) +
                 (408f / 1_119f) +
                 (1_077f / 960f) +
-                batteryRowRatio
+                batteryRowRatio * 2f
         val naturalWidth = maxWidth * 0.95f
         val availableHeight =
-            (maxHeight - topOffset - topToThemeGap - themeToAlarmGap - alarmToBatteryGap)
+            (maxHeight - topOffset - topToThemeGap - themeToAlarmGap - alarmToBatteryGap - batteryToGridGap)
                 .coerceAtLeast(1.dp)
         val widthLimitedByHeight = availableHeight / heightPerWidth
         val cardWidth = if (naturalWidth <= widthLimitedByHeight) {
@@ -1707,6 +1709,14 @@ internal fun RetroSettingsArtworkPage(
             RetroBatteryAlarmRow(
                 enabled = settings.batteryEnabled,
                 onEnabledChange = onBatteryEnabledChange,
+                modifier = Modifier
+                    .width(cardWidth)
+                    .height(cardWidth * batteryRowRatio)
+            )
+            Spacer(Modifier.height(batteryToGridGap))
+            RetroGridAlertRow(
+                enabled = settings.gridEnabled,
+                onEnabledChange = onGridEnabledChange,
                 modifier = Modifier
                     .width(cardWidth)
                     .height(cardWidth * batteryRowRatio)
@@ -2097,7 +2107,9 @@ private fun RetroSettingsValuePatch(
             text = text,
             color = RetroSage,
             fontFamily = RetroMono,
-            fontSize = 10.sp,
+            // In dp, nu sp: placa e pictata, nu creste cu fontul sistemului (la 130% taia cifrele).
+            fontSize = with(LocalDensity.current) { 10.dp.toSp() },
+            lineHeight = with(LocalDensity.current) { 12.dp.toSp() },
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.8.sp,
             maxLines = 1
@@ -2848,6 +2860,15 @@ private fun RetroFlowPanel(
             movingLeds(solarJoint, batteryJoint, flow.solarToBattery, RetroSage)
             movingLeds(batteryJoint, houseLeft, flow.batteryToHouse, RetroYellow)
             movingLeds(gridJoint, houseRight, flow.gridToHouse, RetroRed)
+            if (data?.gridDown == true) {
+                val center = Offset(size.width * 0.848f, size.height * 0.600f)
+                val reach = size.width * 0.075f
+                val red = RetroRed.copy(alpha = if (phase < 0.5f) 0.95f else 0.45f)
+                listOf(Offset(reach, reach), Offset(reach, -reach)).forEach { arm ->
+                    drawLine(Color.Black.copy(alpha = 0.6f), center - arm, center + arm, 6.dp.toPx(), StrokeCap.Round)
+                    drawLine(red, center - arm, center + arm, 3.5.dp.toPx(), StrokeCap.Round)
+                }
+            }
             if (flow.gridToBattery) {
                 movingLeds(houseRight, houseLeft, active = true, color = RetroRed)
                 movingLeds(houseLeft, batteryJoint, active = true, color = RetroRed)
@@ -2881,13 +2902,46 @@ private fun RetroFlowPanel(
                 .offset(x = scale * 608f, y = scale * 786f)
                 .width(scale * 290f)
         )
-        RetroArtworkFlowValue(
-            number = retroWhole(if (data == null) null else grid),
-            color = RetroRed,
-            description = "Retea ${retroWhole(if (data == null) null else grid)} W",
-            modifier = Modifier
-                .offset(x = scale * 1_053f, y = scale * 786f)
-                .width(scale * 285f)
+        if (data?.gridDown == true) {
+            RetroGridDownPlate(
+                phase = phase,
+                modifier = Modifier
+                    .offset(x = scale * 975f, y = scale * 786f)
+                    .width(scale * 330f)
+                    .height(30.dp)
+            )
+        } else {
+            RetroArtworkFlowValue(
+                number = retroWhole(if (data == null) null else grid),
+                color = RetroRed,
+                description = "Retea ${retroWhole(if (data == null) null else grid)} W",
+                modifier = Modifier
+                    .offset(x = scale * 1_053f, y = scale * 786f)
+                    .width(scale * 285f)
+            )
+        }
+    }
+}
+
+/** Sub stalp, in locul wattilor: reteaua Enel lipseste. Clipeste rar, ca LED-ul unui panou de avarie. */
+@Composable
+private fun RetroGridDownPlate(phase: Float, modifier: Modifier = Modifier) {
+    val lit = if (phase < 0.5f) 1f else 0.45f
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(5.dp))
+            .background(Color.Black.copy(alpha = 0.62f))
+            .border(1.dp, RetroRed.copy(alpha = 0.7f * lit), RoundedCornerShape(5.dp))
+            .semantics { contentDescription = "Retea Enel picata" },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            "ENEL PICAT",
+            color = RetroRed.copy(alpha = lit),
+            fontFamily = RetroMono,
+            fontSize = with(LocalDensity.current) { 10.dp.toSp() },
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
         )
     }
 }
@@ -3109,7 +3163,9 @@ private fun RetroSystemPanel(
                 label = "RETEA",
                 value = data?.let { String.format(Locale.US, "%.1f", it.gridVoltage) } ?: "—",
                 unit = "V",
-                supporting = data?.let { "IMPORT ${(it.gridImport + it.gridCharge).roundToInt()} W" } ?: "ASTEPT DATE",
+                supporting = data?.let {
+                    if (it.gridDown) "ENEL PICAT" else "IMPORT ${(it.gridImport + it.gridCharge).roundToInt()} W"
+                } ?: "ASTEPT DATE",
                 color = RetroRed
             )
         }

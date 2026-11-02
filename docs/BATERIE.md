@@ -11,12 +11,12 @@
 |---|---|
 | Chimie | **NMC (Li-ion)**, pachet 14S din module de mașină electrică. Eticheta zice „LIION 14S MIN 48V MAX 57V", modulele „MB6VAD" (`COPILOT_CONTEXT.md` §2). |
 | Origine | Module de tracțiune din **Opel Vivaro C** („OPEL VIVARO C Battery cell MB6VAD"), **3 module și jumătate** în pachet (confirmat de utilizator, 2026-10-25). Din 14S pe 3,5 module ar ieși 4 celule în serie pe modul: deducție, neconfirmată. |
-| Capacitate | 180 Ah × ~51,8 V nominal ≈ **9,3 kWh** (180 Ah e valoarea *setată* în BMS, nu una măsurată) |
+| Capacitate | 180 Ah × ~51,8 V nominal ≈ **9,3 kWh** (180 Ah e valoarea *setată* în BMS, nu una măsurată). **Măsurat** (2026-10-29): de la plin (25 oct, 56,75 V pe BMS, prag invertor 57 V) până la 47,61 V, unde invertorul trecuse casa pe rețea: **~125 Ah net, ~6,4 kWh** utili. Celule la final 3,398–3,403 V. Măsurătoarea curge singură în Grafana (panourile de capacitate din rândul BMS); deasupra de 57 V și sub ~47,6 V mai e capacitate, dar invertorul nu o folosește. |
 | BMS | JK `JK_BD6A20S12P` (hw 11U, sw 11.54), citit prin Bluetooth de `bms/jk_bms_reader.py` (vezi `CLAUDE.md` §„BMS reader") |
 | Cicluri | **220** după contorul BMS (39.644 Ah trecuți prin baterie ÷ 180 Ah = 220,2), 2026-10-23. Contorul pornește de când a fost pus BMS-ul: viața modulelor în mașină nu e inclusă. |
 | SOH | „100%" în BMS e o valoare fixă, nu o măsurătoare |
 | Încărcare | doar din panouri; pragul de sus e **sezonier**, setat de mână din panoul invertorului: **57 V iarna** (4,07 V pe celulă, ≈ 90% din NMC; în vigoare din 2026-10-25), **56 V vara** (4,0 V pe celulă). Vânzătorul a recomandat 20–90%. (`COPILOT_CONTEXT.md` §13.14, §13.72) |
-| SOC în aplicație | din tensiune, nu din BMS: 1% la 48 V, 100% la pragul de sus (`BAT_SOC_EMPTY_V`/`BAT_SOC_FULL_V` în `.env`; la schimbarea sezonului se schimbă și acolo). Contorul BMS (`soc`) pune 100% tot la pragul de sus, dar jos derivă. |
+| SOC în aplicație | din tensiune, nu din BMS: 1% la 48 V, 100% la pragul de sus (`BAT_SOC_EMPTY_V`/`BAT_SOC_FULL_V` în `.env`; la schimbarea sezonului se schimbă și acolo, plus `fullV` din panourile de capacitate din Grafana: 56.5 iarna, 55.5 vara). Contorul BMS (`soc`) pune 100% tot la pragul de sus, dar jos derivă. |
 
 **Cum știm că e NMC.** BMS-ul nu are câmp „chimie" în cadrele pe care le citim (doar cererile `0x96`/`0x97`;
 nu citim nimic din setările lui). Dovezile: eticheta; în 30 de zile celula maximă a ajuns la 3,985 V și pachetul la

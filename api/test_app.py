@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 
 import app as api_module
 
@@ -57,6 +58,24 @@ class _ScriptedQueryApi:
 class _ScriptedClient:
     def __init__(self, **kwargs):
         self.api = _ScriptedQueryApi(**kwargs)
+
+    def query_api(self):
+        return self.api
+
+
+class _OutageQueryApi:
+    """Raspunde separat la probele joase (24 h) si la ultima citire (15 s)."""
+
+    def __init__(self, low, last):
+        self.low, self.last = low, last
+
+    def query(self, query, org=None):
+        return [_Table(self.low if "-24h" in query else self.last)]
+
+
+class _OutageClient:
+    def __init__(self, low, last):
+        self.api = _OutageQueryApi(low, last)
 
     def query_api(self):
         return self.api
@@ -397,6 +416,55 @@ class BmsApiTest(unittest.TestCase):
         self.assertIsNone(response.get_json()["kwh"])
         api_module.client = _ScriptedClient(bms=[], alerts=[], fail=True)
         self.assertEqual(503, self.client.get("/grid-month").status_code)
+
+
+class GridOutageTest(unittest.TestCase):
+    T0 = datetime(2026, 11, 2, 10, 42, 54, tzinfo=timezone.utc)
+
+    def seconds(self, start, count):
+        return [self.T0 + timedelta(seconds=start + i) for i in range(count)]
+
+    def setUp(self):
+        self.client = api_module.app.test_client()
+        self.old_client = api_module.client
+        self.addCleanup(setattr, api_module, "client", self.old_client)
+
+    def test_samples_become_one_outage_per_gap(self):
+        low = self.seconds(0, 35) + self.seconds(773, 40)
+        out = api_module.group_outages(low, False)
+        self.assertEqual([o["seconds"] for o in out], [35, 40])
+        self.assertEqual(out[0]["start"], int(self.T0.timestamp()))
+        self.assertEqual(out[0]["end"], int(self.T0.timestamp()) + 34)
+
+    def test_a_short_return_inside_the_gap_stays_the_same_outage(self):
+        self.assertEqual(len(api_module.group_outages(self.seconds(0, 10) + self.seconds(30, 10), False)), 1)
+
+    def test_one_or_two_zero_readings_are_not_an_outage(self):
+        self.assertEqual(api_module.group_outages(self.seconds(0, 2), False), [])
+
+    def test_only_the_newest_outage_can_be_ongoing(self):
+        out = api_module.group_outages(self.seconds(0, 35) + self.seconds(500, 5), True)
+        self.assertIsNotNone(out[0]["end"])
+        self.assertIsNone(out[1]["end"])
+
+    def test_a_blip_right_now_does_not_reopen_the_previous_outage(self):
+        out = api_module.group_outages(self.seconds(0, 35) + self.seconds(500, 1), True)
+        self.assertEqual(len(out), 1)
+        self.assertIsNotNone(out[0]["end"])
+
+    def test_route_reports_an_ongoing_outage(self):
+        last = _Rec("grid_voltage", 0.0, self.T0)
+        api_module.client = _OutageClient([_Rec("grid_voltage", 0.0, t) for t in self.seconds(0, 5)], [last])
+        body = self.client.get("/grid-outage").get_json()
+        self.assertTrue(body["down"])
+        self.assertIsNone(body["outages"][0]["end"])
+
+    def test_route_without_fresh_data_is_not_down(self):
+        api_module.client = _OutageClient([], [])
+        body = self.client.get("/grid-outage").get_json()
+        self.assertFalse(body["down"])
+        self.assertEqual(body["outages"], [])
+        self.assertIsNone(body["timestamp"])
 
 
 class AppClientCountingTest(unittest.TestCase):

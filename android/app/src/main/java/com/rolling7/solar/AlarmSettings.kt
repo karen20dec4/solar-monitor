@@ -13,12 +13,14 @@ data class AlarmSettings(
     val vibrate: Boolean,
     val ringtoneUri: String?,
     /** Alarma bateriei (BMS), cu intrerupator propriu; foloseste acelasi sunet, vibratie si cooldown. */
-    val batteryEnabled: Boolean = false
+    val batteryEnabled: Boolean = false,
+    /** Mesaj fara sunet cand pica reteaua Enel. Pornit din oficiu. */
+    val gridEnabled: Boolean = true
 ) {
     val clearThresholdW: Int get() = (thresholdW - 200).coerceAtLeast(0)
 
     /** Serviciul din prim-plan ruleaza cat timp e pornita cel putin una dintre alarme. */
-    val anyEnabled: Boolean get() = enabled || batteryEnabled
+    val anyEnabled: Boolean get() = enabled || batteryEnabled || gridEnabled
 }
 
 object AlarmSettingsStore {
@@ -29,6 +31,9 @@ object AlarmSettingsStore {
     private const val KEY_VIBRATE = "vibrate"
     private const val KEY_RINGTONE_URI = "ringtone_uri"
     private const val KEY_BATTERY_ENABLED = "battery_enabled"
+    private const val KEY_GRID_ENABLED = "grid_enabled"
+    private const val KEY_GRID_SEEN = "grid_outage_seen"
+    private const val KEY_GRID_OPEN = "grid_outage_open"
 
     fun read(context: Context): AlarmSettings {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -38,7 +43,8 @@ object AlarmSettingsStore {
             cooldownS = prefs.getInt(KEY_COOLDOWN_S, 300),
             vibrate = prefs.getBoolean(KEY_VIBRATE, true),
             ringtoneUri = prefs.getString(KEY_RINGTONE_URI, null),
-            batteryEnabled = prefs.getBoolean(KEY_BATTERY_ENABLED, false)
+            batteryEnabled = prefs.getBoolean(KEY_BATTERY_ENABLED, false),
+            gridEnabled = prefs.getBoolean(KEY_GRID_ENABLED, true)
         )
     }
 
@@ -50,6 +56,20 @@ object AlarmSettingsStore {
             .putBoolean(KEY_VIBRATE, settings.vibrate)
             .putString(KEY_RINGTONE_URI, settings.ringtoneUri)
             .putBoolean(KEY_BATTERY_ENABLED, settings.batteryEnabled)
+            .putBoolean(KEY_GRID_ENABLED, settings.gridEnabled)
+            .apply()
+    }
+
+    internal fun readGridMark(context: Context): GridOutageMark? {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (!prefs.contains(KEY_GRID_SEEN)) return null
+        return GridOutageMark(prefs.getLong(KEY_GRID_SEEN, 0L), prefs.getLong(KEY_GRID_OPEN, 0L))
+    }
+
+    internal fun saveGridMark(context: Context, mark: GridOutageMark) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putLong(KEY_GRID_SEEN, mark.seen)
+            .putLong(KEY_GRID_OPEN, mark.open)
             .apply()
     }
 

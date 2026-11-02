@@ -15,6 +15,8 @@ data class SolarData(
     val batteryPower: Double, val batteryDisplay: Double, val batteryCharge: Double,
     val batteryDischarge: Double, val batterySupport: Double,
     val gridImport: Double, val gridCharge: Double, val gridVoltage: Double,
+    /** Reteaua Enel lipseste acum; fals si cand tensiunea nu se stie. */
+    val gridDown: Boolean = false,
     val inverterTemp: Double, val inverterLoss: Double,
     val serverCpuPercent: Double?, val serverMemoryPercent: Double?,
     val serverUploadKbps: Double?, val serverUptimeSeconds: Double?,
@@ -51,6 +53,7 @@ object SolarRepository {
     private const val URL_HISTORY = "https://vyra.go.ro:31443/solar/history"
     private const val URL_BMS = "https://vyra.go.ro:31443/solar/bms"
     private const val URL_GRID_MONTH = "https://vyra.go.ro:31443/solar/grid-month"
+    private const val URL_GRID_OUTAGE = "https://vyra.go.ro:31443/solar/grid-outage"
 
     /**
      * Telefonul se prezinta serverului: versiunea aplicatiei, Android, modelul. Din asta serverul tine evidenta
@@ -90,6 +93,7 @@ object SolarRepository {
                 batteryDischarge = d("battery_discharge_power"), batterySupport = d("battery_support_power"),
                 gridImport = d("grid_import_power"), gridCharge = d("grid_charge_power"),
                 gridVoltage = d("grid_voltage"),
+                gridDown = dn("grid_voltage")?.let { it < GRID_DOWN_VOLTS } ?: false,
                 inverterTemp = d("inverter_temp"), inverterLoss = d("inverter_loss"),
                 serverCpuPercent = dn("server_cpu_percent"),
                 serverMemoryPercent = dn("server_memory_percent"),
@@ -117,6 +121,20 @@ object SolarRepository {
             conn = open(URL_BMS, 5000)
             if (conn.responseCode != 200) return null
             parseBmsState(conn.inputStream.bufferedReader().use { it.readText() })
+        } catch (e: Exception) {
+            null
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    /** Penele de retea din ultimele 24 h, tinute minte de server. Null la eroare de retea sau raspuns neasteptat. */
+    fun fetchGridOutages(): List<GridOutage>? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = open(URL_GRID_OUTAGE, 8000)
+            if (conn.responseCode != 200) return null
+            parseGridOutages(conn.inputStream.bufferedReader().use { it.readText() })
         } catch (e: Exception) {
             null
         } finally {

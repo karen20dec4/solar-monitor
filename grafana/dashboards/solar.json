@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 27,
+  "version": 28,
   "editable": true,
   "refresh": "5s",
   "time": {
@@ -1519,13 +1519,471 @@
       ]
     },
     {
+      "type": "stat",
+      "title": "Capacitate baterie: cat s-a scos de la ultima incarcare completa",
+      "description": "Cum se masoara: se aduna curentul masurat de BMS (medii pe 5 minute din istoric), net: ce s-a incarcat intre timp din panouri se scade. Pornirea e momentul cel mai plin dupa ce tensiunea BMS a trecut de 56,5 V (pragul invertorului 57 V iarna minus 0,5 V; vara, la 56 V, pragul devine 55,5 V in interogare). Invertorul trece casa pe retea pe la 47,6-47,9 V, deci cand descarcarea ajunge acolo valoarea maxima e capacitatea utila reala. Pentru comparatie: eticheta 180 Ah ~ 9,3 kWh (valoare setata in BMS, nu masurata).",
+      "id": 140,
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "noValue": "nicio incarcare completa in 30 zile"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "full_ms"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Plina la"
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeFromNow"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "v_full"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Tensiune la plin"
+              },
+              {
+                "id": "unit",
+                "value": "volt"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ah_now"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Scos net acum"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: Ah"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kwh_now"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Scos net acum (energie)"
+              },
+              {
+                "id": "unit",
+                "value": "kwatth"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "v_now"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Tensiune acum"
+              },
+              {
+                "id": "unit",
+                "value": "volt"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 48
+                    },
+                    {
+                      "color": "green",
+                      "value": 50
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ah_deep"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Cel mai adanc de la plin"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: Ah"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kwh_deep"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Cel mai adanc (energie)"
+              },
+              {
+                "id": "unit",
+                "value": "kwatth"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "vertical"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "full_ms": 0,
+              "v_full": 1,
+              "ah_now": 2,
+              "kwh_now": 3,
+              "v_now": 4,
+              "ah_deep": 5,
+              "kwh_deep": 6
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "query": "fullV = 56.5 // prag \"plin\" pe tensiunea BMS = pragul de incarcare din invertor - 0,5 V: iarna (57 V) 56.5, vara (56 V) 55.5\nfrom(bucket: \"history\")\n  |> range(start: -31d)\n  |> filter(fn: (r) => r._measurement == \"bms\" and (r._field == \"current\" or r._field == \"power\" or r._field == \"voltage\" or r._field == \"cell_min\"))\n  |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.current and exists r.power and exists r.voltage)\n  |> group()\n  |> sort(columns: [\"_time\"])\n  |> map(fn: (r) => ({r with vd: r.voltage}))\n  |> difference(columns: [\"vd\"], keepFirst: true)\n  |> map(fn: (r) => ({r with seg: if exists r.vd and r.voltage >= fullV and r.voltage - r.vd < fullV then 1 else 0}))\n  |> cumulativeSum(columns: [\"seg\"])\n  |> elapsed(unit: 1s)\n  |> filter(fn: (r) => r.seg > 0)\n  |> group(columns: [\"seg\"])\n  |> reduce(\n      identity: {n: 0, t1: 0, net: 0.0, wh: 0.0, pnet: 0.0, pwh: 0.0, tpeak: 0, vpeak: 0.0, deep: 0.0, whdeep: 0.0, vdeep: 0.0, tdeep: 0, cdeep: 10.0, cmin: 10.0, vnow: 0.0},\n      fn: (r, accumulator) => {\n        dt = if r.elapsed > 900 then 0.0 else float(v: r.elapsed) / 3600.0\n        net = accumulator.net - r.current * dt\n        wh = accumulator.wh - r.power * dt\n        peak = accumulator.n == 0 or net <= accumulator.pnet\n        pnet = if peak then net else accumulator.pnet\n        pwh = if peak then wh else accumulator.pwh\n        cmin = if peak then 10.0 else if exists r.cell_min and r.cell_min < accumulator.cmin then r.cell_min else accumulator.cmin\n        deeper = net - pnet > accumulator.deep\n        return {\n          n: accumulator.n + 1,\n          t1: int(v: r._time),\n          net: net,\n          wh: wh,\n          pnet: pnet,\n          pwh: pwh,\n          tpeak: if peak then int(v: r._time) else accumulator.tpeak,\n          vpeak: if peak then r.voltage else accumulator.vpeak,\n          deep: if peak then 0.0 else if deeper then net - pnet else accumulator.deep,\n          whdeep: if peak then 0.0 else if deeper then wh - pwh else accumulator.whdeep,\n          vdeep: if peak then r.voltage else if deeper then r.voltage else accumulator.vdeep,\n          tdeep: if peak or deeper then int(v: r._time) else accumulator.tdeep,\n          cdeep: if peak or deeper then cmin else accumulator.cdeep,\n          cmin: cmin,\n          vnow: r.voltage,\n        }\n      },\n    )\n  |> filter(fn: (r) => (r.deep >= 10.0 and r.t1 - r.tpeak >= 3600000000000) or r.t1 >= int(v: now()) - 600000000000)\n  |> map(fn: (r) => ({\n      full_at: time(v: r.tpeak), v_full: r.vpeak,\n      ah_deep: r.deep, kwh_deep: r.whdeep / 1000.0, v_deep: r.vdeep, cell_deep: r.cdeep, deep_at: time(v: r.tdeep),\n      ah_now: r.net - r.pnet, kwh_now: (r.wh - r.pwh) / 1000.0, v_now: r.vnow, until: time(v: r.t1),\n    }))\n  |> group()\n  |> sort(columns: [\"full_at\"], desc: true)\n  |> limit(n: 1)\n  |> map(fn: (r) => ({\n      full_ms: float(v: int(v: r.full_at)) / 1000000.0, v_full: r.v_full, ah_now: r.ah_now, kwh_now: r.kwh_now,\n      v_now: r.v_now, ah_deep: r.ah_deep, kwh_deep: r.kwh_deep,\n    }))"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Descarcari masurate de la plin (ultimele 30 zile) - capacitatea utila reala",
+      "description": "Cum se masoara: se aduna curentul masurat de BMS (medii pe 5 minute din istoric), net: ce s-a incarcat intre timp din panouri se scade. Pornirea e momentul cel mai plin dupa ce tensiunea BMS a trecut de 56,5 V (pragul invertorului 57 V iarna minus 0,5 V; vara, la 56 V, pragul devine 55,5 V in interogare). Invertorul trece casa pe retea pe la 47,6-47,9 V, deci cand descarcarea ajunge acolo valoarea maxima e capacitatea utila reala. Pentru comparatie: eticheta 180 Ah ~ 9,3 kWh (valoare setata in BMS, nu masurata). Fiecare rand e o incarcare completa urmata de descarcare; sus e cea in curs.",
+      "id": 141,
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 66
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influxdb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Tensiune la plin"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "volt"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Scos net maxim"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix: Ah"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Scos net maxim (energie)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "kwatth"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Coborat pana la"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "volt"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Celula cea mai joasa"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "volt"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Scos net acum"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix: Ah"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Scos net acum (energie)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "kwatth"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Scos net maxim"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "until": true,
+              "v_now": true
+            },
+            "indexByName": {
+              "full_at": 0,
+              "v_full": 1,
+              "ah_deep": 2,
+              "kwh_deep": 3,
+              "v_deep": 4,
+              "cell_deep": 5,
+              "deep_at": 6,
+              "ah_now": 7,
+              "kwh_now": 8
+            },
+            "renameByName": {
+              "full_at": "Plina la",
+              "v_full": "Tensiune la plin",
+              "ah_deep": "Scos net maxim",
+              "kwh_deep": "Scos net maxim (energie)",
+              "v_deep": "Coborat pana la",
+              "cell_deep": "Celula cea mai joasa",
+              "deep_at": "Cel mai jos la",
+              "ah_now": "Scos net acum",
+              "kwh_now": "Scos net acum (energie)"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb"
+          },
+          "query": "fullV = 56.5 // prag \"plin\" pe tensiunea BMS = pragul de incarcare din invertor - 0,5 V: iarna (57 V) 56.5, vara (56 V) 55.5\nfrom(bucket: \"history\")\n  |> range(start: -31d)\n  |> filter(fn: (r) => r._measurement == \"bms\" and (r._field == \"current\" or r._field == \"power\" or r._field == \"voltage\" or r._field == \"cell_min\"))\n  |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => exists r.current and exists r.power and exists r.voltage)\n  |> group()\n  |> sort(columns: [\"_time\"])\n  |> map(fn: (r) => ({r with vd: r.voltage}))\n  |> difference(columns: [\"vd\"], keepFirst: true)\n  |> map(fn: (r) => ({r with seg: if exists r.vd and r.voltage >= fullV and r.voltage - r.vd < fullV then 1 else 0}))\n  |> cumulativeSum(columns: [\"seg\"])\n  |> elapsed(unit: 1s)\n  |> filter(fn: (r) => r.seg > 0)\n  |> group(columns: [\"seg\"])\n  |> reduce(\n      identity: {n: 0, t1: 0, net: 0.0, wh: 0.0, pnet: 0.0, pwh: 0.0, tpeak: 0, vpeak: 0.0, deep: 0.0, whdeep: 0.0, vdeep: 0.0, tdeep: 0, cdeep: 10.0, cmin: 10.0, vnow: 0.0},\n      fn: (r, accumulator) => {\n        dt = if r.elapsed > 900 then 0.0 else float(v: r.elapsed) / 3600.0\n        net = accumulator.net - r.current * dt\n        wh = accumulator.wh - r.power * dt\n        peak = accumulator.n == 0 or net <= accumulator.pnet\n        pnet = if peak then net else accumulator.pnet\n        pwh = if peak then wh else accumulator.pwh\n        cmin = if peak then 10.0 else if exists r.cell_min and r.cell_min < accumulator.cmin then r.cell_min else accumulator.cmin\n        deeper = net - pnet > accumulator.deep\n        return {\n          n: accumulator.n + 1,\n          t1: int(v: r._time),\n          net: net,\n          wh: wh,\n          pnet: pnet,\n          pwh: pwh,\n          tpeak: if peak then int(v: r._time) else accumulator.tpeak,\n          vpeak: if peak then r.voltage else accumulator.vpeak,\n          deep: if peak then 0.0 else if deeper then net - pnet else accumulator.deep,\n          whdeep: if peak then 0.0 else if deeper then wh - pwh else accumulator.whdeep,\n          vdeep: if peak then r.voltage else if deeper then r.voltage else accumulator.vdeep,\n          tdeep: if peak or deeper then int(v: r._time) else accumulator.tdeep,\n          cdeep: if peak or deeper then cmin else accumulator.cdeep,\n          cmin: cmin,\n          vnow: r.voltage,\n        }\n      },\n    )\n  |> filter(fn: (r) => (r.deep >= 10.0 and r.t1 - r.tpeak >= 3600000000000) or r.t1 >= int(v: now()) - 600000000000)\n  |> map(fn: (r) => ({\n      full_at: time(v: r.tpeak), v_full: r.vpeak,\n      ah_deep: r.deep, kwh_deep: r.whdeep / 1000.0, v_deep: r.vdeep, cell_deep: r.cdeep, deep_at: time(v: r.tdeep),\n      ah_now: r.net - r.pnet, kwh_now: (r.wh - r.pwh) / 1000.0, v_now: r.vnow, until: time(v: r.t1),\n    }))\n  |> group()\n  |> sort(columns: [\"full_at\"], desc: true)"
+        }
+      ]
+    },
+    {
       "type": "row",
       "title": "Istoric (pana la 30 zile)",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 61
+        "y": 73
       },
       "id": 102,
       "collapsed": false,
@@ -1539,7 +1997,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 62
+        "y": 74
       },
       "datasource": {
         "type": "influxdb",
@@ -1598,7 +2056,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 62
+        "y": 74
       },
       "datasource": {
         "type": "influxdb",
@@ -1671,7 +2129,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 71
+        "y": 83
       },
       "datasource": {
         "type": "influxdb",
@@ -1733,7 +2191,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 71
+        "y": 83
       },
       "datasource": {
         "type": "influxdb",
@@ -1807,7 +2265,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 71
+        "y": 83
       },
       "datasource": {
         "type": "influxdb",
@@ -1897,7 +2355,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 91
       },
       "panels": []
     },
@@ -1914,7 +2372,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 80
+        "y": 92
       },
       "targets": [
         {

@@ -283,7 +283,7 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   SISTEM; the old "Temperatura" plate is gone and the inverter temperature is a small "29°C" under "Inv".
   SISTEM: `RetroBmsMonitor` replaces the old console (cell bars + figures). SETARI: native row "ALARMĂ
   BATERIE" with its own toggle (`AlarmSettings.batteryEnabled`, default off); `SolarAlarmService` runs while
-  either alarm is on, polls `/latest` every 5 s and `/bms` every 10 s (v3.36; was 2 s / 4 s) and rings (same sound/vibration/cooldown as the consumption
+  any alarm is on, polls `/latest` every 5 s and `/bms` every 10 s (v3.36; was 2 s / 4 s) and rings (same sound/vibration/cooldown as the consumption
   alarm) once per alarm with `prio` urgent/high (`BmsAlarmTracker`). Thresholds live on the server, not in the app.
 - Polling (v3.36): the app's network loops (`/latest` and `/bms` every 2 s, `/grid-month` every 60 s, SISTEM's 1h
   history every 60 s) run in `WhileVisibleEffect` (`repeatOnLifecycle(STARTED)`), so they stop when the app is in the
@@ -299,13 +299,25 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   used to cut the battery alarm and the test sound after one poll), and it ignores `/latest` replies without a timestamp.
 - Phones and app versions (v3.38, 2026-10-28): the app sends `User-Agent: SolarMonitor/<versionName> (<versionCode>;
   Android <release>; <Build.MODEL>)` (`SolarRepository.open`). `api/app_clients.py` counts app requests per phone (model,
-  Android, app version; per route `latest`/`bms`/`grid_month`/`history` plus `requests`), and once a minute writes them to
+  Android, app version; per route `latest`/`bms`/`grid_month`/`grid_outage`/`history` plus `requests`), and once a minute writes them to
   `history` as measurement `app_client` (tags `model`, `android`, `app_version`). Apps up to 3.37 only send the Dalvik
   agent, so they show as `veche (≤3.37)`; curl, Python and browsers are not counted. The API runs as **one** gunicorn
   worker with 8 threads, so one process owns the counts. Grafana: row "📱 Telefoane si aplicatie" at the bottom of
   `solar-main`, table "Telefoane cu acces si versiunea aplicatiei" (one row per model: Android, app version, last request,
   requests/min over 10 min, requests 24h). Phone names are value mappings on the model in that panel (SM-N960U = Note 9,
   the user's; SM-G781B = S20 FE, the user's wife's); add a mapping when a new phone shows up. Nothing in the app UI.
+- Enel outage message (v3.39, 2026-11-02): a silent notification (channel `solar_grid`: no sound, no vibration) when the
+  grid drops, replaced by "Curent Enel revenit" with the times and the duration when it returns. **The server remembers the
+  outages, not the phone:** the house's internet falls with the grid, because the Digi router/media converter at the gate is powered from Enel, not from the inverter (2026-11-02: 2–4 min offline for outages of 35–40 s), so
+  a phone comparing `/latest` would never see 0 V. `GET /solar/grid-outage` -> `{down, outages: [{start, end, seconds}],
+  timestamp}` (last 24 h from `live`, epoch seconds, `end` null while it lasts, `grid_voltage` < 100 V, ≥ 3 s, samples ≤ 30 s
+  apart are one outage). `SolarAlarmService` polls it every 30 s and `evaluateGridOutages` (`GridOutage.kt`) decides what is
+  new against a mark kept in prefs; the first run stays quiet about the past. So the message can arrive minutes late, but
+  says the real times. SETARI: row "MESAJ REȚEA ENEL", `AlarmSettings.gridEnabled`, **default on**, so the foreground
+  service now runs on every phone (with only this on it loops every 30 s, not 5 s) and the app asks for the notification
+  permission at launch. Dashboard: `SolarData.gridDown` from `/latest`: TABLOU shows a blinking red X over the tower and
+  "ENEL PICAT" instead of the watts (`RetroGridDownPlate`), Simple shows "ENEL PICAT" under the pole, SISTEM on the grid line.
+  It is only visible when the phone reaches the server during the outage.
 - ENERGIE (v3.32): fourth subject RETEA, power (`grid_power`, W) and energy (`energy_grid`, kWh bars), 2h/1d/7d like the others; red accent. kWh under 1 shows two decimals.
 - Electricity bill (v3.33): ENERGIE shows how much was taken from the grid since the 1st of the month (Europe/Bucharest),
   for the Hidroelectrica bill. `GET /solar/grid-month` -> `{month: "2026-10", since, kwh}` (`kwh` null with no samples yet):
@@ -322,7 +334,16 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   threshold set on the inverter (57 V winter, 56 V summer), clamped 0–100 (user decision, 2026-10-26). `soc` stays the JK
   Ah counter (100% at the top of charge, but it drifts at the bottom since 180 Ah is a set value) and is still in Grafana.
   When the user switches season on the inverter: edit `BAT_SOC_FULL_V` in `.env`, then `docker compose up -d api`
-  (no app release). Under heavy load the voltage, and so the SOC, dips; it recovers at rest.
+  (no app release), **and** `fullV` in the two capacity panels (see next bullet). Under heavy load the voltage, and so the
+  SOC, dips; it recovers at rest.
+- Measured capacity (Grafana, 2026-10-29): stat "Capacitate baterie: cat s-a scos de la ultima incarcare completa" (id 140)
+  and table "Descarcari masurate de la plin" (id 141) at the end of the BMS live row. Pure Flux over `history`: BMS
+  `current`/`power` in 5 min means, integrated with `elapsed()` (gaps over 15 min are skipped), net of any recharge in
+  between. A new cycle starts when the BMS voltage crosses `fullV` upwards; the reference is the most-charged point after
+  that, and "scos net maxim" is the deepest drawdown from it (= usable capacity once the inverter has gone to the grid at
+  ~47.6–47.9 V). `fullV` is a constant at the top of both queries = inverter charge threshold − 0.5 V: **56.5 in winter
+  (57 V), 55.5 in summer (56 V)**. First result: 2026-10-25 full (56.75 V) to 47.61 V on 2026-10-29 = ~125 Ah / ~6.4 kWh,
+  against the 180 Ah / 9.3 kWh set in the BMS.
 - Elastic zoom (v3.31): `ElasticZoom.kt` wraps the whole dashboard. Two fingers magnify it (up to ~3×, soft limit) and
   pan it; when the fingers lift it springs back to the original size, nothing is kept. One finger is untouched (taps,
   tab swipes); the two-finger gesture is consumed in the Initial pass so buttons and swipes do not fire.
@@ -342,6 +363,13 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
 
 ## Gotchas
 
+- **The system disk has real media errors (2026-11-02).** GIGABYTE GP-GM30512G-G: SMART counts 519,330 "Media and Data
+  Integrity Errors", though it still says PASSED and 0% used. A read error on `kotlin-gradle-plugin-2.0.21-gradle85.jar`
+  (`critical medium error`, sector 904624024) hit during a Gradle build at 14:04, most likely the bus error seen then; the journal
+  stops there and the server only came back at 14:16 (cause of that gap not logged). A `Bus error` / SIGBUS, or `Could not read workspace metadata` from Gradle, means look at
+  `journalctl -k | grep 'medium error'` first and map the sector to a file (`debugfs icheck`/`ncheck`).
+  The bad jar is parked in `/root/.gradle/bad-sector-quarantine/` so its blocks stay allocated. A full copy of the disk (rootfs + EFI,
+  last pass with the containers stopped, 2026-11-02 15:58, without the quarantine folder) is on the HDD in `/data/backup-nvme-2026-11-02/`.
 - After copying files into `grafana/` from a Windows host (scp creates them `700`/root-owned),
   Grafana runs as uid 472 and gets "permission denied" on provisioning. Fix:
   `chmod -R a+rX /opt/solar-monitor/grafana`.

@@ -184,7 +184,7 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 ### 13.1 Acces remote securizat (HTTPS) — REZOLVAT
 - Container nou **`caddy`** (reverse proxy, `caddy/Caddyfile`) cu **TLS self-signed** (`tls internal`,
   Let's Encrypt nu merge pe port non-standard). Servește Grafana + API-ul.
-- Lanț rețea (dublu NAT): `https://vyra.go.ro:31443` → router ZTE poartă (`31443→192.168.100.210:443`)
+- Lanț rețea (dublu NAT): `https://vyra.go.ro:31443` → router ZTE poartă, alimentat din Enel, deci internetul cade la pană (§13.77) (`31443→192.168.100.210:443`)
   → TP-Link (`443→192.168.1.199:443`) → `caddy:443` → `grafana:3000`.
   - Pe ZTE mai există: `31422→22` (SSH, funcțional) și `31480→80` (HTTP, rezervă).
 - Grafana: `GF_SERVER_ROOT_URL=http://...`→ acum `https://vyra.go.ro:31443/`, `GF_SECURITY_DISABLE_GRAVATAR=true`.
@@ -2018,3 +2018,67 @@ deschisă aplicația: repornirea după actualizare pe care o face doar v3.37, de
 
 **Release:** v3.38 (versionCode 42), `SolarMonitor-v3.38.apk`, 7.227.751 bytes,
 SHA-256 `012ba029dca58886110a7731e4465ee7d87ebb61462704d0f3db9e6a1b842975`.
+
+### 13.76 Capacitatea reală a bateriei, măsurată în Grafana (2026-10-29)
+
+Context: câteva zile fără soare (26–28 oct). Pe 2026-10-29 la ~00:00 invertorul a trecut singur casa pe rețea (bypass,
+status 11) la ~47,9 V; la 04:53 bateria stătea la 47,6 V, celule 3,398–3,403 V (delta 5 mV), 19,5 °C, curent ~−0,4 A
+(doar consumul propriu al invertorului). SOC-ul din aplicație arăta 0% (sub 48 V, cum e definit), contorul BMS 29%.
+Sfat dat: nu se încarcă din Enel (casa e deja pe rețea, bateria nu se mai golește, 3,40 V/celulă e sigur la NMC; încărcarea
+din rețea ar cere schimbarea sursei de încărcare din panoul invertorului), se așteaptă soarele.
+
+**Măsurătoarea:** de la ultima încărcare completă (2026-10-25, BMS 100% / 180 Ah, 56,75–56,9 V) până la 47,61 V:
+**~125 Ah net, ~6,4 kWh** (curent BMS integrat; au ieșit ~219 Ah și au intrat ~97 Ah în zilele cu puțin soare). Deci între
+57 V și pragul de trecere pe rețea pachetul dă ~6,4 kWh, nu 9,3 kWh; de aici și contorul BMS care arată 29% la gol
+(180 Ah e prea mult). Prima estimare din chat (122 Ah / 6,3 kWh, suma mediilor pe minut de la 13:28) diferă puțin pentru că
+pornea înainte de vârf și nu acoperea golurile.
+
+**Panourile** (`grafana/dashboards/solar.json`, la finalul rândului BMS live, y 61–73; restul mutat cu 12 în jos):
+- id 140 stat „Capacitate baterie: cat s-a scos de la ultima incarcare completa": plină la (acum X zile), tensiune la plin,
+  scos net acum (Ah, kWh), tensiune acum, cel mai adânc de la plin (Ah, kWh).
+- id 141 tabel „Descarcari masurate de la plin (ultimele 30 zile)": un rând pe ciclu (plin la, tensiune la plin, scos net
+  maxim Ah/kWh, coborât până la, celula cea mai joasă, cel mai jos la, scos net acum), cel în curs sus.
+- Flux: `bms` `current`/`power`/`voltage`/`cell_min` din `history`, `aggregateWindow(5m, mean)` (ca interogarea să fie
+  ieftină la refresh-ul de 5 s: ~0,2 s), pivot, segmente prin `difference` + `cumulativeSum` pe trecerea în sus a lui
+  `fullV`, apoi `reduce` cu integrare `elapsed()` (golurile > 15 min se sar), vârful = punctul cel mai plin, adâncimea =
+  coborârea maximă față de vârf. Se păstrează ciclurile cu ≥ 10 Ah și ≥ 1 h, plus cel în curs.
+- `fullV` = pragul invertorului − 0,5 V (tensiunea BMS la final de încărcare pe medii de 5 min: 56,88 V la 57 V; vara la
+  56 V vârful a fost ~55,7 V). **56.5 iarna, 55.5 vara**; se schimbă de mână în ambele interogări la schimbarea sezonului,
+  odată cu `BAT_SOC_FULL_V`. Pe 26 oct bateria a urcat doar la 56,2 V (94%) și nu e luată drept „plin" (corect).
+- Verificat cu `/api/ds/query` și capturi headless ale ambelor panouri. Nimic în aplicație, nimic scris nicăieri.
+
+### 13.77 Mesaj la căderea rețelei Enel, v3.39, și erorile de disc (2026-11-02)
+
+**Penele de azi** (ora locală): 12:42:53 (36 s), 12:55:47 (40 s), 13:46:22 (40 s). Casa n-a simțit nimic (status 12, consum
+și baterie stabile). Anterior: 28 oct 10:51–12:30, 30 oct 22:34–22:36, 17 oct 14:32–14:36 și 14:42.
+
+**Descoperirea care a schimbat proiectarea:** cererile aplicației se opresc cu ~9 s înainte ca invertorul să raporteze 0 V
+și revin la 10:47:03, 10:59:02 și 11:48:42 UTC, adică după 2–4 minute, mult după ce rețeaua a revenit (și cloudflared s-a
+reconectat la 11:48). Internetul casei cade deci odată cu rețeaua. **Cauza, confirmată de utilizator:** routerul/media-convertorul
+Digi de la poartă e alimentat din Enel, nu din invertor, deci internetul pică la toată casa. Durata de 2–4 min e pana plus repornirea lui.
+Corectează §13.73: căderea de internet din 28 oct începe în același minut cu pana de rețea.
+De aceea penele le ține minte serverul, iar telefonul află la reconectare, cu orele reale.
+
+- API: `GET /grid-outage`, `group_outages()` (`api/app.py`), `GRID_DOWN_V` 100, gol 30 s, minim 3 s, ultimele 24 h, ~30 ms.
+- Aplicație: `GridOutage.kt` (parser, `evaluateGridOutages`, texte), `SolarRepository.fetchGridOutages`, `gridDown` din
+  `/latest`, poll la 30 s în `SolarAlarmService`, id de notificare din `start` (revenirea înlocuiește mesajul de început).
+- SETARI: `RetroGridAlertRow`; cardurile s-au micșorat puțin, iar valorile „5000 W"/„300 s" au trecut pe dp (la font 130% erau tăiate).
+- Testat pe emulator cu o simulare temporară a penei: banner fără sunet, canal importance 4 cu `mSound=null`/`mVibration=null`,
+  revenirea înlocuiește mesajul, X-ul și plăcuța pe TABLOU și Simple, întrerupătorul oprește/pornește serviciul; prima rulare pe
+  datele reale n-a anunțat penele vechi. **Pană reală neîncercată încă pe telefon.**
+- Teste: API 36 (7 noi), Android 56 (9 noi).
+
+**Release:** v3.39 (versionCode 43), `SolarMonitor-v3.39.apk`, 7.244.135 bytes,
+SHA-256 `9a4d5a93f28050923cd825b0d7efdd1688ba9d5a3336cffa56fae8e00142186d`, trimis pe Telegram (mesaj 159).
+
+**Disc (GIGABYTE GP-GM30512G-G, 512 GB):** 2026-11-02 14:04:06 `critical medium error` sector 904624024, în timpul unui build
+Gradle, în `kotlin-gradle-plugin-2.0.21-gradle85.jar`; cel mai probabil de aici „bus error" (JVM-ul citește jar-urile mapate în memorie). Jurnalul
+se oprește la 14:04:06, serverul revine la 14:16:46 (cauza opririi nu e în jurnal); date lipsă 725 s. SMART: PASSED, 0% uzură, dar **519.330 Media and Data
+Integrity Errors**. Jar-ul a fost mutat în `/root/.gradle/bad-sector-quarantine/` (blocurile rămân ocupate), Gradle l-a
+redescărcat (SHA-1 corect); a mai trebuit șters un transform gol lăsat de cădere. Scanare completă nefăcută (cere acordul
+utilizatorului: o citire pe sector prost poate bloca serverul din nou). Discul trebuie înlocuit.
+
+Copie completă pe HDD, `/data/backup-nvme-2026-11-02/` (`rootfs/`, `efi/`, `rsync.log`): pornită la 15:11, ultima trecere cu
+toate containerele oprite la 15:58 (`ROOTFS_EXIT 0`), ~57 GB, fără `bad-sector-quarantine/`. Kernelul n-a raportat nicio eroare de
+citire în timpul ei, deci fișierele folosite se citesc; spațiul liber rămâne nescanat. Containerele au stat ~27 s la 15:22 și la 15:58.
+

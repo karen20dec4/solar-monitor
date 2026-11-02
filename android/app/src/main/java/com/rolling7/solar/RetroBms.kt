@@ -371,9 +371,40 @@ internal fun RetroBatteryAlarmRow(
     enabled: Boolean,
     onEnabledChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
+) = RetroAlarmToggleRow(
+    title = "ALARMĂ BATERIE",
+    status = if (enabled) "ACTIVĂ · BMS, TEMPERATURĂ, CELULE" else "OPRITĂ",
+    description = "Alarma baterie",
+    enabled = enabled,
+    onEnabledChange = onEnabledChange,
+    modifier = modifier
+)
+
+@Composable
+internal fun RetroGridAlertRow(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) = RetroAlarmToggleRow(
+    title = "MESAJ REȚEA ENEL",
+    status = if (enabled) "ACTIV · FĂRĂ SUNET" else "OPRIT",
+    description = "Mesaj retea Enel",
+    enabled = enabled,
+    onEnabledChange = onEnabledChange,
+    modifier = modifier
+)
+
+@Composable
+private fun RetroAlarmToggleRow(
+    title: String,
+    status: String,
+    description: String,
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     RetroInsetSurface(
-        modifier = modifier.semantics { contentDescription = "Setari alarma baterie" },
+        modifier = modifier.semantics { contentDescription = "Setari ${description.lowercase()}" },
         shape = RoundedCornerShape(10.dp)
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -384,7 +415,7 @@ internal fun RetroBatteryAlarmRow(
                     .padding(start = 14.dp)
             ) {
                 Text(
-                    "ALARMĂ BATERIE",
+                    title,
                     color = RetroBrassLight,
                     fontFamily = RetroMono,
                     fontSize = 11.sp,
@@ -394,7 +425,7 @@ internal fun RetroBatteryAlarmRow(
                     maxLines = 1
                 )
                 Text(
-                    if (enabled) "ACTIVĂ · BMS, TEMPERATURĂ, CELULE" else "OPRITĂ",
+                    status,
                     color = if (enabled) RetroSage else RetroBrassLight.copy(alpha = 0.7f),
                     fontFamily = RetroMono,
                     fontSize = 8.sp,
@@ -406,7 +437,7 @@ internal fun RetroBatteryAlarmRow(
             }
             RetroSettingsAnimatedToggle(
                 checked = enabled,
-                description = if (enabled) "Alarma baterie activa" else "Alarma baterie oprita",
+                description = "$description ${if (enabled) "activ" else "oprit"}",
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 12.dp)
