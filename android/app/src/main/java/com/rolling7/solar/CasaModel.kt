@@ -236,3 +236,13 @@ class CasaFreshness {
 
     fun isFresh(ticket: Long): Boolean = inFlight == 0 && ticket == generation
 }
+
+/** Lungimea maxima a unui nume dat din aplicatie (aceeasi ca pe server, `NAME_MAX`). */
+internal const val CasaNameMax = 24
+
+/** Numele nou, curatat; null daca e gol, prea lung, are caractere de control sau e acelasi cu cel vechi. */
+internal fun casaCleanName(input: String, current: String): String? {
+    val name = input.trim()
+    if (name.isEmpty() || name.length > CasaNameMax || name.any { it.isISOControl() } || name == current) return null
+    return name
+}

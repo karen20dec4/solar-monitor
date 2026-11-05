@@ -23,7 +23,7 @@ from werkzeug.exceptions import HTTPException
 from .auth import Auth, BadPassword, NoPassword, RateLimited, RateLimiter
 from .config import Config
 from .controller import COUNTDOWN_MAX_MIN, INCHING_MAX_MIN, CommandError, Controller
-from .devices import load_devices
+from .devices import NAME_MAX, clean_user_name, load_devices, local_names, set_local_name
 from .store import CorruptStore, JsonStore
 
 log = logging.getLogger("casa.web")
@@ -69,6 +69,8 @@ class Services:
     influx: object
     command_limiter: RateLimiter = field(default_factory=lambda: RateLimiter(*COMMAND_LIMIT))
     shutdown: Optional[Callable[[], None]] = None
+    data_dir: Optional[str] = None            # devices.local.json: numele date din aplicatie
+    names: dict = field(default_factory=dict)  # {id: nume} pentru senzori (numele lor vine din cloud)
 
 
 class _TtlCache:
@@ -158,7 +160,8 @@ def build_services(cfg: Optional[Config] = None) -> Services:
     for w in workers.values():
         w.start()
     cloud.start()
-    return Services(auth, controller, cloud, influx, shutdown=shutdown)
+    return Services(auth, controller, cloud, influx, shutdown=shutdown, data_dir=cfg.data_dir,
+                    names=local_names(cfg.data_dir))
 
 
 def _services_from_env() -> Services:
@@ -439,6 +442,38 @@ def create_app(services: Optional[Services] = None) -> Flask:
         known_plug(pid)
         return run(pid, lambda: controller.delete_interval(pid, sid))
 
+    def _new_name() -> str:
+        name = clean_user_name(_body(("name",))["name"])
+        if name is None:
+            raise ApiError(400, f"name: text de 1-{NAME_MAX} caractere")
+        return name
+
+    def _save_name(dev_id: str, name: str) -> None:
+        if svc.data_dir is None:
+            return
+        try:
+            set_local_name(svc.data_dir, dev_id, name)
+        except ValueError as e:
+            raise ApiError(500, str(e))
+
+    @app.put("/plugs/<pid>/name")
+    @require_token
+    def plug_name(pid):
+        known_plug(pid)
+        name = _new_name()
+        _save_name(pid, name)
+        return jsonify(controller.rename(pid, name))
+
+    @app.put("/sensors/<sid>/name")
+    @require_token
+    def sensor_name(sid):
+        if not any(s["id"] == sid for s in cloud.sensors()):
+            raise ApiError(404, "senzor necunoscut")
+        name = _new_name()
+        _save_name(sid, name)
+        svc.names[sid] = name
+        return jsonify({"id": sid, "name": name})
+
     @app.put("/plugs/<pid>/inching")
     @require_token
     def plug_inching(pid):
@@ -455,7 +490,7 @@ def create_app(services: Optional[Services] = None) -> Flask:
         out = []
         for s in cloud.sensors():
             out.append({
-                "id": s["id"], "name": s["name"], "temperature": s["temperature"],
+                "id": s["id"], "name": svc.names.get(s["id"], s["name"]), "temperature": s["temperature"],
                 "humidity": s["humidity"], "battery": s["battery"], "updated": s["updated"],
                 "spark": cache.get(("spark", s["id"]), lambda sid=s["id"]: influx.sensor_spark(sid),
                                    SPARK_TTL_S, []),
@@ -476,6 +511,6 @@ def create_app(services: Optional[Services] = None) -> Flask:
         except Exception as e:  # noqa: BLE001
             log.warning("istoric senzor esuat: %s", type(e).__name__)
             raise ApiError(503, "istoric indisponibil")
-        return jsonify({"id": sid, "name": sensor["name"], "range": range_, **hist})
+        return jsonify({"id": sid, "name": svc.names.get(sid, sensor["name"]), "range": range_, **hist})
 
     return app

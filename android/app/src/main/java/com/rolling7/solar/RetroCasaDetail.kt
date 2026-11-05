@@ -386,18 +386,78 @@ private fun CasaDetailHeader(
     subtitle: String,
     subtitleColor: Color,
     onClose: () -> Unit,
+    onRename: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     RetroPanelSurface(contentPadding = PaddingValues(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 10.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                CasaText(title, 24f, RetroText, bold = true, spacing = 3f)
+                // Atingerea titlului deschide redenumirea (creionul arata ca se poate).
+                Row(
+                    modifier = if (onRename != null) {
+                        Modifier.clickable(onClick = onRename).semantics { contentDescription = "Redenumeste $title" }
+                    } else Modifier,
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CasaText(title, 24f, RetroText, Modifier.weight(1f, fill = false), bold = true, spacing = 3f)
+                    if (onRename != null) {
+                        Canvas(Modifier.size(16.dp)) { drawPencil(RetroBrassLight) }
+                    }
+                }
                 CasaText(subtitle, 10f, subtitleColor, spacing = 1f)
             }
             CasaCloseButton(onClose)
         }
         Spacer(Modifier.height(4.dp))
         content()
+    }
+}
+
+private fun DrawScope.drawPencil(color: Color) {
+    val s = size.minDimension
+    val w = s * 0.12f
+    drawLine(color, Offset(s * 0.18f, s * 0.82f), Offset(s * 0.78f, s * 0.22f), strokeWidth = w * 1.8f, cap = StrokeCap.Round)
+    drawLine(color, Offset(s * 0.08f, s * 0.92f), Offset(s * 0.2f, s * 0.8f), strokeWidth = w, cap = StrokeCap.Round)
+    drawLine(color, Offset(s * 0.1f, s * 0.95f), Offset(s * 0.4f, s * 0.95f), strokeWidth = w * 0.7f, cap = StrokeCap.Round)
+}
+
+/** Redenumirea unei prize sau a unui senzor: numele se salveaza pe server, nu si in SmartLife. */
+@Composable
+private fun CasaRenameDialog(current: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var text by remember { mutableStateOf(current) }
+    val clean = casaCleanName(text, current)
+    CasaDialog("REDENUMESTE", onDismiss = onDismiss) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color(0xFF10110C))
+                .border(1.dp, RetroBrassLight.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
+        ) {
+            androidx.compose.foundation.text.BasicTextField(
+                value = text,
+                onValueChange = { if (it.length <= CasaNameMax) text = it },
+                singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Words,
+                    imeAction = androidx.compose.ui.text.input.ImeAction.Done
+                ),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { clean?.let(onSave) }),
+                textStyle = TextStyle(color = RetroText, fontFamily = RetroMono, fontSize = fixedSp(16f)),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(RetroSage),
+                modifier = Modifier.fillMaxSize().semantics { contentDescription = "Nume nou" },
+                decorationBox = { inner ->
+                    Box(Modifier.fillMaxSize().padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) { inner() }
+                }
+            )
+        }
+        CasaText(
+            "SE SCHIMBA IN APLICATIE SI GRAFANA, NU SI IN SMARTLIFE",
+            9f, RetroMuted, Modifier.fillMaxWidth(), spacing = 0.5f, align = TextAlign.Center
+        )
+        CasaDialogButtons(okText = "SALVEAZA", okEnabled = clean != null, onCancel = onDismiss, onOk = { clean?.let(onSave) })
     }
 }
 
@@ -537,6 +597,7 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
     var addStage by remember { mutableIntStateOf(0) }
     var addStart by remember { mutableStateOf("08:00") }
     var deleteTarget by remember { mutableStateOf<CasaSchedule?>(null) }
+    var renaming by remember { mutableStateOf(false) }
     val stale by remember { derivedStateOf { clock.value - lastGoodMs > PlugsStaleMs } }
 
     fun lose(r: CasaResult<*>) {
@@ -670,7 +731,7 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
         }
         val subColor = if (message != null || stale || !p.online) RetroRed else CasaGreenText
 
-        CasaDetailHeader(retroLabel(p.name), sub, subColor, onClose) {
+        CasaDetailHeader(retroLabel(p.name), sub, subColor, onClose, onRename = { renaming = true }) {
             PlugPowerRow(
                 plug = p,
                 on = on,
@@ -787,6 +848,12 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
                 command { CasaRepository.addInterval(it, plugId, start, stop) }
             }
         })
+    }
+    if (renaming && p != null) {
+        CasaRenameDialog(current = p.name, onDismiss = { renaming = false }) { name ->
+            renaming = false
+            command { CasaRepository.renamePlug(it, plugId, name) }
+        }
     }
     deleteTarget?.let { s ->
         CasaDialog("STERGI INTERVALUL?", onDismiss = { deleteTarget = null }) {
@@ -1105,6 +1172,9 @@ internal fun RetroSensorDetail(sensorId: String, onClose: () -> Unit) {
     var sensors by remember { mutableStateOf<CasaSensors?>(null) }
     var range by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("1d") }
     var history by remember { mutableStateOf<HistoryState>(HistoryState.Loading) }
+    var renaming by remember { mutableStateOf(false) }
+    var renameError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     fun lose(r: CasaResult<*>) {
         access.onResult(token, r)
@@ -1143,6 +1213,7 @@ internal fun RetroSensorDetail(sensorId: String, onClose: () -> Unit) {
     val stale = s == null || isStale(nowSec, s.updated)
     CasaDetailFrame {
         val sub = when {
+            renameError != null -> renameError!!
             sensors == null -> "SE INCARCA..."
             s == null -> "SENZOR NECUNOSCUT"
             !cloudOk -> "CLOUD DECONECTAT · ${formatAge(nowSec, s.updated)}"
@@ -1151,8 +1222,9 @@ internal fun RetroSensorDetail(sensorId: String, onClose: () -> Unit) {
         CasaDetailHeader(
             title = s?.let { casaSensorTitle(it.name) } ?: "SENZOR",
             subtitle = sub,
-            subtitleColor = if (sensors != null && (s == null || !cloudOk || stale)) RetroRed else CasaGreenText,
-            onClose = onClose
+            subtitleColor = if (renameError != null || (sensors != null && (s == null || !cloudOk || stale))) RetroRed else CasaGreenText,
+            onClose = onClose,
+            onRename = if (s != null) ({ renaming = true }) else null
         ) {
             Row(Modifier.fillMaxWidth().height(78.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SensorValuePlate(
@@ -1184,6 +1256,28 @@ internal fun RetroSensorDetail(sensorId: String, onClose: () -> Unit) {
         }
         SensorChartCard(range, history, Modifier.weight(1f))
         SensorStatsCard(range, (history as? HistoryState.Ready)?.data)
+    }
+    val current = s
+    if (renaming && current != null) {
+        CasaRenameDialog(current = current.name, onDismiss = { renaming = false }) { name ->
+            renaming = false
+            scope.launch {
+                when (val r = withContext(Dispatchers.IO) { CasaRepository.renameSensor(token, sensorId, name) }) {
+                    is CasaResult.Ok -> {
+                        renameError = null
+                        sensors = sensors?.let { all ->
+                            all.copy(sensors = all.sensors.map { if (it.id == sensorId) it.copy(name = r.value) else it })
+                        }
+                    }
+                    is CasaResult.Unauthorized -> lose(r)
+                    is CasaResult.Error -> {
+                        renameError = r.message
+                        delay(ErrorShownMs)
+                        renameError = null
+                    }
+                }
+            }
+        }
     }
 }
 

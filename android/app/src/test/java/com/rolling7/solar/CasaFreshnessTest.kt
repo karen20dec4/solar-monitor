@@ -53,3 +53,19 @@ class CasaFreshnessTest {
         assertTrue(f.isFresh(f.beginPoll()))
     }
 }
+
+class CasaCleanNameTest {
+    @Test
+    fun acceptsTrimmedNewName() {
+        org.junit.Assert.assertEquals("Calorifer Georgi", casaCleanName("  Calorifer Georgi ", "Priza cam Georgi"))
+    }
+
+    @Test
+    fun rejectsEmptyTooLongControlAndUnchanged() {
+        org.junit.Assert.assertNull(casaCleanName("   ", "Boiler"))
+        org.junit.Assert.assertNull(casaCleanName("x".repeat(CasaNameMax + 1), "Boiler"))
+        org.junit.Assert.assertNull(casaCleanName("a\nb", "Boiler"))
+        org.junit.Assert.assertNull(casaCleanName(" Boiler ", "Boiler"))
+        org.junit.Assert.assertEquals("x".repeat(CasaNameMax), casaCleanName("x".repeat(CasaNameMax), "Boiler"))
+    }
+}

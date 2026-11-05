@@ -416,15 +416,17 @@ private fun SimpleCasaPlugRow(
                 )
             }
         }
-        Text(
-            watts,
-            color = if (watts != "--- W" && on && (power ?: 0.0) > 0.5) CBat else CMuted,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.End,
-            maxLines = 1,
-            modifier = Modifier.widthIn(min = 58.dp)
-        )
+        if (plug.metered) {
+            Text(
+                watts,
+                color = if (watts != "--- W" && on && (power ?: 0.0) > 0.5) CBat else CMuted,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                modifier = Modifier.widthIn(min = 58.dp)
+            )
+        }
         Switch(
             checked = on,
             onCheckedChange = { if (canSwitch) onToggle() },

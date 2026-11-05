@@ -389,8 +389,29 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   `/var/lib/solar-tuya-arp/`). Run by `deploy/solar-tuya-arp.timer` (boot + every 10 min); install:
   `cp deploy/solar-tuya-arp.{service,timer} /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now
   solar-tuya-arp.timer`. Tests: `python3 -I -m unittest discover -s deploy -p 'test_tuya_arp.py'`.
-- **Inching in the plug's own firmware** (DP 44 `switch_inching`, set in SmartLife): Bucatarie 25 min and Lumina Curte
-  30 min are on **on purpose** (user, 2026-11-05). They act regardless of casa, which leaves DP 44 alone.
+- **Inching in the plug's own firmware** (DP 44 `switch_inching`, base64 of 3 bytes: enabled, seconds big-endian; mapped
+  as `dps["inching"]` by `sync`): Bucatarie 25 min and Lumina Curte 30 min are on **on purpose** (user, 2026-11-05). Since
+  v3.43 the plug is the source of truth (user's choice): every reading copies DP 44 into the plug's `inching` setting
+  (`_sync_native_inching`), so a change made in SmartLife shows up, and `PUT .../inching` writes DP 44 first (a failed
+  write changes nothing). The server keeps its own inching deadline too, so "STINGE IN …" shows and the fail-safe
+  countdown DP agrees with the firmware. Plugs without DP 44 keep the server-only inching.
+- **Names editable from the app (v3.43):** tap the title of a plug/sensor detail (pencil). `PUT /plugs/<id>/name` and
+  `PUT /sensors/<id>/name` (1–24 chars, `clean_user_name`) write `name` into `devices.local.json`; plug names change in
+  memory at once, sensor names via `Services.names`. SmartLife keeps its own name; Influx tags take the new plug name
+  from then on (history is by `device_id`).
+- **Compact plug list (v3.43):** Retro CASA rows are a fixed 54 dp (up to 7 plugs, `CompactPlugRows`; more share the
+  card), at most 2 badge lines, and plugs without metering have no watts plate (Retro and Simple).
+- **Internet cut for the plugs (test since 2026-11-05 ~18:45, user's choice):** the goal is no dependency on SmartLife /
+  the Tuya cloud. Router Access Control (blacklist) is **not** usable: it also cuts the LAN (Lumina Curte went offline
+  for casa, reverted at once). What works: Parental Controls, profile "Prize fara internet" (`owner_id` 0) with
+  `internet_blocked` on (API `admin/smart_network?form=patrol_owner_list|patrol_owner_block`, see the router memory /
+  COPILOT §13). For now only Lumina Curte is in it: local control works, the Tuya cloud sees it offline. If it stays
+  stable ~1 day, add the other four plugs to the profile; SmartLife (and its schedules) then stops working for them.
+  Undo: `internet_blocked=false` or remove the device from the profile.
+- **Later, not now (user, 2026-11-05):** Zigbee sensors (USB dongle + zigbee2mqtt) to drop the Tuya cloud for the
+  temperature sensors; OpenBeken on the current plugs (tuya-cloudcutter or serial) "when there is time"; future plugs
+  with ESPHome/Tasmota (e.g. Athom) so pairing can happen from our app. A (+) "add device" button only makes sense
+  with those; with stock Tuya plugs pairing stays in SmartLife + `scripts/casa-sync.sh`.
 - **Adding a new plug/sensor:** (1) pair it in SmartLife; (2) `scripts/casa-sync.sh` (= `sync`, then `scan`, then
   `docker compose restart casa`). `scan` runs in a throwaway container with `--network host` (the plugs' UDP broadcasts on
   6666/6667/7000 never reach the bridge network), listens ~20 s and writes the IP and protocol of every plug in
@@ -441,7 +462,7 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   change** to both buckets (not 60 s means); plug history is per minute: `on`/`online` = minimum, `power`/`voltage`/
   `current` = mean. Written by one flusher thread, so a down InfluxDB never delays plug commands. The API energy today = integral of `power` since local midnight.
   Grafana: row "🏠 Casa: prize si senzori" (panels 142–147: plug power, plugs on, sensor temperature/humidity, sensors now).
-- **App (v3.40, versionCode 44; v3.41/45 fixes the stale poll):** Retro SISTEM page has a SISTEM | CASA selector; CASA = 5 plug plates + sensors, tap
+- **App (v3.40, versionCode 44; v3.41 stale poll fix, v3.42 haptics, v3.43/47 compact list + rename):** Retro SISTEM page has a SISTEM | CASA selector; CASA = 5 plug plates + sensors, tap
   opens plug detail (switch, countdown 30M/1H/2H/6H/other, schedules, inching) or sensor detail (2h/1d/7d charts). Simple
   theme: a CASA card. SETARI: row "ACCES CASA" with "UITA TELEFONUL" (deletes only the local token; the server keeps the phone until `revoke`). The password plate shows on first open.
   Command timeout 50 s; commands stay enabled when a plug looks offline. Files: `CasaModel.kt`, `CasaRepository.kt`,
@@ -457,7 +478,7 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   (0.05 s timeout) before every `status()` and `set_dp()`. Measured after the fix on Lumina Curte: correct state 0.2 s
   after the command.
 - **Tests:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
-  solar-monitor-casa -m unittest discover -s tests -v` (279 tests, run it after any change in `casa/`; run the full
+  solar-monitor-casa -m unittest discover -s tests -v` (293 tests, run it after any change in `casa/`; run the full
   suite more than once, a non-reproducible failure was seen once during edits).
 - **Go-live steps:** done 2026-11-05: login + `sync`, real mode, every plug online, password, ARP timer. Left: (1) DHCP
   reservations on the router for the 5 plug IPs; (2) confirm the current unit with a load on (Tuya mA / 1000); (5) register the phones (Note 9, S20 FE, S26) from the app and check `phones`; (6) live tests of

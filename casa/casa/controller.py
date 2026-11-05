@@ -20,7 +20,7 @@ from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 from .devices import DeviceInfo
-from .plugs import PlugReading
+from .plugs import PlugReading, encode_inching
 from .schedule import (Interval, OffDeadline, edges_between, interval_end, missed_edges,
                        nearest_off)
 from .store import JsonStore
@@ -294,12 +294,26 @@ class Controller:
                 rt.poll_error = r.error or "offline"
                 if rt.offline_since is None:
                     rt.offline_since = now
+        if r.online and r.inching is not None and "inching" in self.devices[pid].dps:
+            self._sync_native_inching(pid, r.inching)
         if trans == "on":
             self._became_on(pid, now)
         elif trans == "first_on":
             self._became_on(pid, now, only_if_unset=True)
         elif trans == "off":
             self._became_off(pid)
+
+    def _sync_native_inching(self, pid: str, native: tuple) -> None:
+        """Setarea de inching din priza (setata si din SmartLife) e sursa de adevar pentru `st["inching"]`."""
+        enabled, seconds = native
+        want = {"enabled": bool(enabled), "minutes": min(INCHING_MAX_MIN, max(1, round(seconds / 60)))}
+        if self._get(pid)["inching"] == want:
+            return
+        def f(p):
+            p["inching"] = want
+            if not want["enabled"]:
+                p["inching_off_at"] = None
+        self._mut(pid, f)
 
     def _became_on(self, pid: str, now: datetime, only_if_unset: bool = False) -> None:
         """oprit -> pornit, din orice sursa: porneste inching-ul (din acest moment).
@@ -425,11 +439,20 @@ class Controller:
             self._after(pid)
         return self.plug_view(pid)
 
+    def rename(self, pid: str, name: str) -> dict:
+        """Numele dat din aplicatie (salvat de web in devices.local.json)."""
+        self._dev(pid).name = name
+        return self.plug_view(pid)
+
     def set_inching(self, pid: str, enabled: bool, minutes: int) -> dict:
         self._dev(pid)
         _int_in(minutes, 1, INCHING_MAX_MIN, "minute inching")
         enabled = bool(enabled)
         with self._plock[pid]:
+            native_dp = self.devices[pid].dps.get("inching")
+            if native_dp is not None:
+                # inching-ul din firmware: il scriem in priza (CommandError: nimic nu se schimba)
+                self._send(pid, native_dp, encode_inching(enabled, minutes * 60))
             now = self.clock()
             is_on = self._rt[pid].on is True
             def f(p):

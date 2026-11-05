@@ -159,6 +159,15 @@ object CasaRepository {
     fun setInching(token: String, id: String, enabled: Boolean, minutes: Int): CasaResult<CasaPlug> =
         command("PUT", token, id, "/inching", JSONObject().put("enabled", enabled).put("minutes", minutes))
 
+    /** Numele dat din aplicatie (salvat pe server, nu si in SmartLife). */
+    fun renamePlug(token: String, id: String, name: String): CasaResult<CasaPlug> =
+        command("PUT", token, id, "/name", JSONObject().put("name", name))
+
+    fun renameSensor(token: String, id: String, name: String): CasaResult<String> =
+        call("PUT", "/sensors/${enc(id)}/name", token, JSONObject().put("name", name), READ_MS) {
+            JSONObject(it).getString("name")
+        }
+
     fun sensors(token: String): CasaResult<CasaSensors> =
         call("GET", "/sensors", token, null, READ_MS) { parseSensors(it) }
 

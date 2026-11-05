@@ -98,6 +98,9 @@ internal val CasaGreenDark = Color(0xFF2C3E0D)
 /** Peste 20 s fara un raspuns bun la `/plugs` valorile devin liniute. */
 internal const val PlugsStaleMs = 20_000L
 internal const val PlugsPollMs = 3_000L
+/** Pana la atatea prize randurile au inaltime fixa (compacta); peste, isi impart cardul. */
+internal const val CompactPlugRows = 7
+internal val CompactPlugRowHeight = 54.dp
 private const val SensorsPollMs = 60_000L
 internal const val ErrorShownMs = 4_000L
 private const val MaxBadgeLines = 3
@@ -547,6 +550,9 @@ private fun CasaPlugsCard(
             plugs.isEmpty() || stale -> CasaSectionTitle("PRIZE", "ASTEPT DATE", RetroYellow, 14f)
             else -> CasaSectionTitle("PRIZE", casaSummaryText(count, watts), RetroMuted, 14f)
         }
+        // Randuri compacte de inaltime fixa (v3.43): pe Note 9 intra cel putin 7 prize; restul cardului ramane
+        // liber pentru prize noi. Peste CompactPlugRows randurile isi impart inaltimea, ca pagina sa nu deruleze.
+        val compact = plugs.size <= CompactPlugRows
         plugs.forEachIndexed { i, p ->
             if (i > 0) {
                 Box(Modifier.fillMaxWidth().height(1.dp).background(RetroBrassLight.copy(alpha = 0.28f)))
@@ -558,10 +564,10 @@ private fun CasaPlugsCard(
                 busy = p.id in optimistic,
                 onToggle = { onToggle(p) },
                 onOpen = { onOpenPlug(p.id) },
-                modifier = Modifier.weight(1f)
+                modifier = if (compact) Modifier.height(CompactPlugRowHeight) else Modifier.weight(1f)
             )
         }
-        if (plugs.isEmpty()) Spacer(Modifier.weight(1f))
+        if (compact || plugs.isEmpty()) Spacer(Modifier.weight(1f))
     }
 }
 
@@ -577,7 +583,7 @@ private fun CasaPlugRow(
 ) {
     val online = plug.online
     val usable = online && !stale
-    val badges = casaBadgeLines(plug)
+    val badges = casaBadgeLines(plug, maxLines = 2)
     val power = plug.power
     val watts = if (usable && plug.metered && power != null) power.roundToInt().toString() else "---"
     val wattsColor = when {
@@ -600,14 +606,14 @@ private fun CasaPlugRow(
         RetroLed(
             color = RetroSage,
             active = on && online,
-            modifier = Modifier.size(26.dp)
+            modifier = Modifier.size(20.dp)
         )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
                 text = retroLabel(plug.name),
                 color = if (on) Color(0xFFF4ECC8) else Color(0xFFB9AD84),
                 fontFamily = RetroMono,
-                fontSize = fixedSp(14f),
+                fontSize = fixedSp(13f),
                 fontWeight = FontWeight.Bold,
                 letterSpacing = fixedSp(0.7f),
                 maxLines = 1,
@@ -615,17 +621,20 @@ private fun CasaPlugRow(
             )
             badges.forEach { CasaBadgeLine(it) }
         }
-        CasaWattsPlate(
-            value = watts,
-            color = wattsColor,
-            modifier = Modifier.width(84.dp).height(34.dp)
-        )
+        // Prizele fara contor (Bucatarie, Lumina Curte) nu au placa de watti: numele si insignele iau locul.
+        if (plug.metered) {
+            CasaWattsPlate(
+                value = watts,
+                color = wattsColor,
+                modifier = Modifier.width(76.dp).height(30.dp)
+            )
+        }
         RetroSettingsAnimatedToggle(
             checked = on,
             description = "${retroLabel(plug.name)}: ${if (on) "opreste" else "porneste"}",
             modifier = Modifier
-                .width(64.dp)
-                .height(48.dp)
+                .width(58.dp)
+                .height(42.dp)
                 .alpha(if (!stale && !busy) 1f else 0.5f),
             // Si o priza raportata offline primeste comanda: serverul incearca oricum sa se conecteze.
             onClick = { if (!stale && !busy) onToggle() }

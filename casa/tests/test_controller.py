@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from casa.controller import CommandError, Controller
 from casa.devices import DeviceInfo
-from casa.plugs import FakeDriver, PlugError, PlugReading, decode_reading
+from casa.plugs import FakeDriver, PlugError, PlugReading, decode_inching, decode_reading, encode_inching
 from casa.store import JsonStore
 
 UTC = timezone.utc
@@ -33,10 +33,12 @@ class FlakyStore(JsonStore):
         return super().update(fn, default)
 
 
-def device(with_countdown=True, with_power=True):
+def device(with_countdown=True, with_power=True, native_inching=False):
     dps = {"switch": 1}
     if with_countdown:
         dps["countdown"] = 9
+    if native_inching:
+        dps["inching"] = 44
     scales = {}
     if with_power:
         dps.update({"current": 18, "power": 19, "voltage": 20})
@@ -1322,6 +1324,73 @@ class StaleReleaseTest(ControllerBase):
         self.assertEqual(r.c._get(PID)["release_off_at"], int(loc(10).timestamp()))
         r.tick_to(loc(10, 1))
         self.assertFalse(r.on)
+
+
+
+class RenameTest(ControllerBase):
+    def test_rename_changes_view_name(self):
+        r = self.rig(loc(9))
+        self.assertEqual(r.c.rename(PID, "Calorifer")["name"], "Calorifer")
+        self.assertEqual(r.c.plug_view(PID)["name"], "Calorifer")
+        with self.assertRaises(KeyError):
+            r.c.rename("nu-exista", "X")
+
+
+class NativeInchingTest(ControllerBase):
+    """Inching-ul din firmware-ul prizei (DP 44 `switch_inching`, base64: activ, secunde pe 2 octeti).
+    Bucatarie, 2026-11-05: setat la 25 min din SmartLife, invizibil in aplicatie."""
+
+    def native(self, value="AQXc", **kw):
+        return self.rig(loc(9), dev=device(native_inching=True), dps={"44": value}, **kw)
+
+    def test_codec(self):
+        self.assertEqual(decode_inching("AQXc"), (True, 1500))
+        self.assertEqual(decode_inching("AAcI"), (False, 1800))
+        self.assertEqual(encode_inching(True, 1800), "AQcI")
+        self.assertEqual(encode_inching(False, 1500), "AAXc")
+        for bad in (None, 5, "", "!!", "AQ==", "AQXcAA=="):
+            self.assertIsNone(decode_inching(bad))
+
+    def test_plug_setting_is_shown_and_used_on_switch_on(self):
+        r = self.native("AQXc")
+        self.assertEqual(r.c.plug_view(PID)["inching"], {"enabled": True, "minutes": 25})
+        r.driver.dps["1"] = True
+        r.worker.poll()
+        r.c.tick()
+        v = r.c.plug_view(PID)
+        self.assertEqual(v["off_deadline"]["reason"], "inching")
+        self.assertEqual(v["off_deadline"]["seconds_left"], 1500)
+        self.assertEqual(r.dp9, 1500)
+
+    def test_set_inching_writes_the_plug(self):
+        r = self.native("AQXc")
+        v = r.c.set_inching(PID, False, 25)
+        self.assertEqual(r.driver.dps["44"], "AAXc")
+        self.assertEqual(v["inching"], {"enabled": False, "minutes": 25})
+        r.c.set_inching(PID, True, 30)
+        self.assertEqual(r.driver.dps["44"], "AQcI")
+        r.worker.poll()
+        self.assertEqual(r.c.plug_view(PID)["inching"], {"enabled": True, "minutes": 30})
+
+    def test_change_made_in_smartlife_is_picked_up(self):
+        r = self.native("AQXc")
+        r.driver.dps["44"] = "AAcI"
+        r.worker.poll()
+        self.assertEqual(r.c.plug_view(PID)["inching"], {"enabled": False, "minutes": 30})
+
+    def test_failed_write_changes_nothing(self):
+        r = self.native("AQXc")
+        r.driver.fail_set = 1
+        with self.assertRaises(CommandError):
+            r.c.set_inching(PID, False, 25)
+        self.assertEqual(r.c.plug_view(PID)["inching"], {"enabled": True, "minutes": 25})
+        self.assertEqual(r.driver.dps["44"], "AQXc")
+
+    def test_plug_without_native_inching_keeps_server_inching(self):
+        r = self.rig(loc(9))
+        r.c.set_inching(PID, True, 10)
+        self.assertNotIn("44", r.driver.dps)
+        self.assertEqual(r.c.plug_view(PID)["inching"], {"enabled": True, "minutes": 10})
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ _CODE_TO_KEY = {
     "cur_power": "power",
     "cur_voltage": "voltage",
     "cur_current": "current",
+    "switch_inching": "inching",   # inching-ul din firmware-ul prizei (base64: activ, secunde)
 }
 _SCALED = ("power", "voltage", "current")
 
@@ -193,3 +194,40 @@ def apply_scan(data_dir: str, found: dict) -> tuple:
                 local[dev_id] = entry
         JsonStore(os.path.join(data_dir, LOCAL_FILE)).update(merge, {})
     return changes, unknown
+
+
+NAME_MAX = 24
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def clean_user_name(value) -> Optional[str]:
+    """Nume dat din aplicatie: text, fara caractere de control, 1-24 caractere dupa strip; altfel None."""
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    if not name or len(name) > NAME_MAX or _CONTROL.search(name):
+        return None
+    return name
+
+
+def set_local_name(data_dir: str, dev_id: str, name: str) -> None:
+    """Scrie numele in devices.local.json (celelalte campuri ale intrarii raman)."""
+    def f(local):
+        if not isinstance(local, dict):
+            raise ValueError(f"{LOCAL_FILE} nu e un obiect JSON; nu il modific")
+        entry = local.get(dev_id)
+        entry = entry if _valid_local(entry) else {}
+        entry["name"] = name
+        local[dev_id] = entry
+    JsonStore(os.path.join(data_dir, LOCAL_FILE)).update(f, {})
+
+
+def local_names(data_dir: str) -> dict:
+    """{id: nume} din devices.local.json (pentru senzori: numele lor vine altfel din cloud)."""
+    try:
+        local = JsonStore(os.path.join(data_dir, LOCAL_FILE)).load({})
+    except ValueError:
+        return {}
+    if not isinstance(local, dict):
+        return {}
+    return {k: v["name"] for k, v in local.items() if _valid_local(v) and v.get("name")}

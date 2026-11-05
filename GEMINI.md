@@ -483,8 +483,29 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   Rulat de `deploy/solar-tuya-arp.timer` (la pornire + la 10 min); instalare: `cp deploy/solar-tuya-arp.{service,timer}
   /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now solar-tuya-arp.timer`. Teste: `python3 -I -m
   unittest discover -s deploy -p 'test_tuya_arp.py'`.
-- **Inching în firmware-ul prizei** (DP 44 `switch_inching`, setat în SmartLife): Bucatarie 25 min și Lumina Curte 30 min
-  sunt pornite **intenționat** (user, 2026-11-05). Acționează indiferent de casa, care nu atinge DP 44.
+- **Inching în firmware-ul prizei** (DP 44 `switch_inching`, base64 pe 3 octeți: activ, secunde big-endian; mapat ca
+  `dps["inching"]` de `sync`): Bucatarie 25 min și Lumina Curte 30 min sunt pornite **intenționat** (user, 2026-11-05).
+  Din v3.43 priza e sursa de adevăr (alegerea userului): fiecare citire copiază DP 44 în setarea `inching` a prizei
+  (`_sync_native_inching`), deci o schimbare din SmartLife apare și la noi, iar `PUT .../inching` scrie întâi DP 44 (o
+  scriere eșuată nu schimbă nimic). Serverul își ține și termenul lui de inching, ca „STINGE ÎN …” să apară și DP-ul de
+  countdown de siguranță să fie de acord cu firmware-ul. Prizele fără DP 44 păstrează inching-ul doar pe server.
+- **Nume editabile din aplicație (v3.43):** atingerea titlului din detaliul prizei/senzorului (creionul).
+  `PUT /plugs/<id>/name` și `PUT /sensors/<id>/name` (1–24 caractere, `clean_user_name`) scriu `name` în
+  `devices.local.json`; numele prizei se schimbă imediat în memorie, al senzorului prin `Services.names`. SmartLife își
+  păstrează numele lui; în Influx eticheta prizei ia numele nou de atunci înainte (istoricul e după `device_id`).
+- **Lista compactă de prize (v3.43):** în Retro CASA rândurile au fix 54 dp (până la 7 prize, `CompactPlugRows`; peste,
+  își împart cardul), cel mult 2 rânduri de insigne, iar prizele fără contor nu au placa de wați (Retro și Simple).
+- **Internetul tăiat prizelor (probă din 2026-11-05 ~18:45, alegerea userului):** scopul e să nu mai depindem de
+  SmartLife / cloud-ul Tuya. Access Control (lista neagră) din router **nu** se poate folosi: taie și rețeaua locală
+  (Lumina Curte a căzut pentru casa, anulat imediat). Ce merge: Parental Controls, profilul „Prize fara internet”
+  (`owner_id` 0) cu `internet_blocked` pornit (API `admin/smart_network?form=patrol_owner_list|patrol_owner_block`, vezi
+  memoria routerului / COPILOT §13). Deocamdată doar Lumina Curte e în profil: comanda locală merge, cloud-ul Tuya o vede
+  offline. Dacă rămâne stabilă ~o zi, se adaugă și celelalte patru; SmartLife (și programările lui) nu mai merg pentru ele.
+  Anulare: `internet_blocked=false` sau scoaterea prizei din profil.
+- **Mai târziu, nu acum (user, 2026-11-05):** senzori Zigbee (stick USB + zigbee2mqtt), ca senzorii să nu mai depindă de
+  cloud-ul Tuya; OpenBeken pe prizele actuale (tuya-cloudcutter sau prin serial) „când avem timp”; prize viitoare cu
+  ESPHome/Tasmota (ex. Athom), ca asocierea să se facă din aplicația noastră. Un buton (+) „adaugă dispozitiv” are rost
+  doar cu acestea; cu prize Tuya de fabrică asocierea rămâne în SmartLife + `scripts/casa-sync.sh`.
 - **Adăugarea unei prize/unui senzor nou:** (1) îl asociezi în SmartLife; (2) `scripts/casa-sync.sh` (= `sync`, apoi `scan`,
   apoi `docker compose restart casa`). `scan` rulează într-un container temporar cu `--network host` (anunțurile UDP ale
   prizelor pe 6666/6667/7000 nu ajung în rețeaua bridge), ascultă ~20 s și scrie în `devices.local.json` IP-ul și protocolul
@@ -537,7 +558,7 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   `voltage`/`current` = media. Le scrie un singur fir de flush, deci un InfluxDB căzut nu întârzie comenzile. Energia azi din API = integrala lui `power` de la miezul
   nopții local. Grafana: rândul „🏠 Casa: prize si senzori" (panourile 142–147: putere prize, prize pornite,
   temperatură/umiditate senzori, senzori acum).
-- **Aplicația (v3.40, versionCode 44; v3.41/45 repară sondarea veche):** pagina SISTEM din Retro are comutatorul SISTEM | CASA; CASA = 5 plăci de priză +
+- **Aplicația (v3.40, versionCode 44; v3.41 sondarea veche, v3.42 vibrație, v3.43/47 listă compactă + redenumire):** pagina SISTEM din Retro are comutatorul SISTEM | CASA; CASA = 5 plăci de priză +
   senzori, atingerea deschide detaliul prizei (comutator, countdown 30M/1H/2H/6H/altă durată, programări, inching) sau al
   senzorului (grafice 2h/1d/7d). Tema Simple: un card CASA. SETARI: rândul „ACCES CASA" cu „UITA TELEFONUL" (șterge doar
   token-ul local; serverul ține telefonul până la `revoke`). Placa de parolă apare la prima deschidere. Timeout comandă 50 s;
@@ -554,7 +575,7 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   socketul (timeout 0,05 s) înainte de fiecare `status()` și `set_dp()`. Măsurat după reparație pe Lumina Curte: starea
   corectă la 0,2 s după comandă.
 - **Teste:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
-  solar-monitor-casa -m unittest discover -s tests -v` (279 de teste; rulează după orice modificare în `casa/`, suita
+  solar-monitor-casa -m unittest discover -s tests -v` (293 de teste; rulează după orice modificare în `casa/`, suita
   completă de mai multe ori: un eșec nereproductibil a apărut o dată în timpul editărilor).
 - **Pașii de punere în funcțiune:** făcute 2026-11-05: login + `sync`, mod real, toate prizele online, parola, timerul ARP.
   Rămân: (1) rezervări DHCP în router pentru cele 5 IP-uri; (2) confirmarea unității curentului cu un consumator pornit

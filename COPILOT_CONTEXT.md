@@ -2158,3 +2158,22 @@ READ-ONLY, nimic din `collector/` sau `bms/` nu s-a schimbat.
 set-password` (parola de test rămasă pe server se înlocuiește); (5) telefoane înregistrate: Note 9, S20 FE, S26; (6) teste live
 (comutare, countdown, programare, inching; boilerul la urmă); (7) **ștergerea programărilor echivalente din SmartLife**.
 Apoi merge în `main` și livrare APK pe Telegram.
+
+
+### 13.79 CASA în funcțiune reală, v3.41–v3.43 (2026-11-05, după-amiază)
+
+- Login QR + `sync` reale. Mapare confirmată: Boiler .204, Living sus .244, Priza cam Georgi .104 (WiFi Plug, `cz`, contor),
+  Bucatarie .185 și Lumina Curte .158 (T34, `tdq`, fără contor). „Boiler Buc” (în sertar) ascunsă cu `"hidden": true`.
+- Firewalld: UDP 6666/6667/7000 doar din LAN (aprobat); `scripts/casa-sync.sh` = sync + scan (`--network host`) + restart.
+- Cele 3 WiFi Plug nu răspund la ARP: `deploy/solar-tuya-arp.timer` (instalat de user) pune intrări ARP statice din anunțuri.
+- Senzorii tdq: fără stare prin REST; valorile vin prin MQTT pe DP 27/46/101; la pornire ultimele valori din InfluxDB.
+- Rezervări DHCP făcute din script în routerul TP-Link Archer A6 (parola în `.env`, `ROUTER_PASSWORD`).
+- Bug „comutatorul revine / starea apare după 5 s”: (1) în aplicație, o sondare plecată înainte de sfârșitul comenzii
+  suprascria starea (v3.41, `CasaFreshness`); (2) cauza principală, pe server: tinytuya pe socket persistent citește
+  următorul mesaj, nu răspunsul, iar anunțurile prizei decalau răspunsurile cu unul → `_drain` înainte de fiecare cerere.
+  Măsurat pe Lumina Curte: starea corectă la 0,2 s. v3.42: vibrație la confirmare/eșec.
+- v3.43: inching-ul din firmware (DP 44) citit și scris de server (Bucatarie 25 min apare acum), nume editabile, listă
+  compactă (7 prize), fără placă de wați la prizele fără contor.
+- Independență de cloud: comanda e deja locală; Tuya rămâne doar pentru asociere și pentru senzori. Probă: Lumina Curte
+  fără internet (Parental Controls, profil „Prize fara internet”; Access Control taie și LAN-ul, nu se folosește).
+  Pe viitor: senzori Zigbee, OpenBeken pe prizele actuale, prize ESPHome/Tasmota (asociere din aplicația noastră).

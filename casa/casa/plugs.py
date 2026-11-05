@@ -3,6 +3,8 @@
 Reguli: o singura conexiune TCP per priza, folosita DOAR din thread-ul workerului.
 Comenzile (telefoane, programator) intra intr-o coada si sunt executate pe rand.
 """
+import base64
+import binascii
 import logging
 import queue
 import threading
@@ -181,6 +183,24 @@ class PlugReading:
     countdown_s: Optional[int]
     error: Optional[str]
     at: float
+    inching: Optional[tuple] = None   # (activ, secunde) din DP-ul `switch_inching` al prizei
+
+
+def decode_inching(value) -> Optional[tuple]:
+    """DP `switch_inching` (Tuya, base64 pe 3 octeti: activ 0/1, secunde big-endian) -> (activ, secunde)."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(raw) != 3:
+        return None
+    return bool(raw[0]), int.from_bytes(raw[1:3], "big")
+
+
+def encode_inching(enabled: bool, seconds: int) -> str:
+    return base64.b64encode(bytes([1 if enabled else 0]) + int(seconds).to_bytes(2, "big")).decode("ascii")
 
 
 def decode_reading(device: DeviceInfo, dps: dict, at: Optional[float] = None) -> PlugReading:
@@ -206,6 +226,7 @@ def decode_reading(device: DeviceInfo, dps: dict, at: Optional[float] = None) ->
         countdown_s=int(cd) if isinstance(cd, (int, float)) and not isinstance(cd, bool) else None,
         error=None,
         at=time.time() if at is None else at,
+        inching=decode_inching(raw("inching")),
     )
 
 

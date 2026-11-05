@@ -56,7 +56,10 @@ GET    /solar/casa/plugs                  -> {plugs:[{id,name,online,on,metered,
 POST   /solar/casa/plugs/<id>/switch      {on}
 PUT    /solar/casa/plugs/<id>/countdown   {action:"on"|"off", minutes}   DELETE: anulează
 POST   /solar/casa/plugs/<id>/schedules   {start:"HH:MM", stop:"HH:MM", enabled?}   PUT/DELETE .../schedules/<sid>
-PUT    /solar/casa/plugs/<id>/inching     {enabled, minutes}      (fiecare întoarce priza actualizată; 502 {error, plug} dacă nu răspunde)
+PUT    /solar/casa/plugs/<id>/inching     {enabled, minutes}      (fiecare întoarce priza actualizată; 502 {error, plug} dacă nu răspunde;
+                                                                  priza cu DP `switch_inching` primește setarea în firmware)
+PUT    /solar/casa/plugs/<id>/name        {name}  (1-24 caractere; salvat în devices.local.json) -> priza
+PUT    /solar/casa/sensors/<id>/name      {name}  -> {id, name}
 GET    /solar/casa/sensors                -> {cloud:"ok"|"disconnected"|"no_session", sensors:[{id,name,temperature,humidity,battery,updated,spark}]}
 GET    /solar/casa/sensors/<id>/history?range=2h|1d|7d   -> {temperature[],humidity[],stats{...}}
 (toate, în afară de /register și /health)  Authorization: Bearer <token>; corp ≤ 16 KB; comenzile: 3 la 3 s per telefon, doar non-GET

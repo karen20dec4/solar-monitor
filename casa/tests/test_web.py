@@ -70,6 +70,9 @@ class FakeController:
             raise KeyError("interval necunoscut: nope")
         return self._do("delete", pid, sid)
 
+    def rename(self, pid, name):
+        return dict(self._do("rename", pid, name), name=name)
+
 
 class FakeCloud:
     def __init__(self):
@@ -123,7 +126,7 @@ class WebCase(unittest.TestCase):
 
     def make_app(self):
         svc = Services(auth=self.auth, controller=self.ctl, cloud=self.cloud, influx=self.influx,
-                       command_limiter=self.limiter)
+                       command_limiter=self.limiter, data_dir=self.tmp.name)
         return create_app(svc)
 
     def register(self, client=None, ip="10.0.0.5"):
@@ -157,7 +160,7 @@ class TestAuthRoutes(WebCase):
                 self.assertEqual(r.headers.get("WWW-Authenticate"), 'Bearer realm="casa"',
                                  f"{method} {url}")
                 checked += 1
-        self.assertEqual(checked, 11)
+        self.assertEqual(checked, 13)
 
     def test_bad_and_malformed_token_is_401(self):
         for hdr in ({"Authorization": "Bearer nu-exista"}, {"Authorization": "Basic abc"},
@@ -354,6 +357,42 @@ class TestPlugRoutes(WebCase):
         # alt telefon are limita proprie
         h2 = self.h(self.register(c, ip="10.0.0.6"))
         self.assertEqual(c.post("/plugs/p1/switch", json={"on": True}, headers=h2).status_code, 200)
+
+
+class TestRenameRoutes(WebCase):
+    def local(self):
+        with open(os.path.join(self.tmp.name, "devices.local.json")) as f:
+            return json.load(f)
+
+    def test_rename_plug_saved_and_returned(self):
+        r = self.c.put("/plugs/p1/name", json={"name": "  Calorifer Georgi "}, headers=self.h())
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["name"], "Calorifer Georgi")
+        self.assertIn(("rename", "p1", ("Calorifer Georgi",), {}), self.ctl.calls)
+        self.assertEqual(self.local(), {"p1": {"name": "Calorifer Georgi"}})
+
+    def test_rename_sensor_shows_everywhere(self):
+        r = self.c.put("/sensors/s1/name", json={"name": "Dormitor"}, headers=self.h())
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json(), {"id": "s1", "name": "Dormitor"})
+        names = {s["id"]: s["name"] for s in self.c.get("/sensors", headers=self.h()).get_json()["sensors"]}
+        self.assertEqual(names, {"s1": "Dormitor", "s2": "Afara"})
+        self.assertEqual(self.c.get("/sensors/s1/history?range=2h", headers=self.h()).get_json()["name"], "Dormitor")
+        self.assertEqual(self.local(), {"s1": {"name": "Dormitor"}})
+
+    def test_rename_keeps_other_local_fields(self):
+        with open(os.path.join(self.tmp.name, "devices.local.json"), "w") as f:
+            json.dump({"p1": {"ip": "192.168.1.5", "version": "3.4"}}, f)
+        self.c.put("/plugs/p1/name", json={"name": "Boiler"}, headers=self.h())
+        self.assertEqual(self.local(), {"p1": {"ip": "192.168.1.5", "version": "3.4", "name": "Boiler"}})
+
+    def test_rename_validation(self):
+        h = self.h()
+        for body in ({"name": ""}, {"name": "   "}, {"name": "x" * 25}, {"name": 5}, {"name": "a\nb"}, {}):
+            self.assertEqual(self.c.put("/plugs/p1/name", json=body, headers=h).status_code, 400, body)
+        self.assertEqual(self.c.put("/plugs/zz/name", json={"name": "A"}, headers=h).status_code, 404)
+        self.assertEqual(self.c.put("/sensors/zz/name", json={"name": "A"}, headers=h).status_code, 404)
+        self.assertEqual(self.c.put("/plugs/p1/name", json={"name": "A"}).status_code, 401)
 
 
 class TestSensorRoutes(WebCase):
