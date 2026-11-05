@@ -31,7 +31,7 @@ log = logging.getLogger("casa.web")
 HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 RANGES = ("2h", "1d", "7d")
 CHALLENGE = 'Bearer realm="casa"'
-MAX_BODY_BYTES = 16 * 1024
+MAX_BODY_BYTES = 16000            # = max_size 16KB din Caddy (KB zecimal)
 MAX_PASSWORD_LEN = 256
 MAX_DEVICE_LEN = 100
 COMMAND_LIMIT = (3, 3.0)           # 3 comenzi / 3 s / telefon
@@ -41,9 +41,10 @@ SPARK_TTL_S = 60.0
 FAIL_TTL_S = 30.0                  # dupa o eroare nu mai asteptam Influx la fiecare cerere
 # Cat asteapta o cerere o comanda in curs catre aceeasi priza. Cel mai rau caz al unei comenzi:
 # PLUG_BUSY_WAIT_S + asteptarea lock-ului priza din controller (pana la CMD_TIMEOUT_S, daca programatorul
-# trimite chiar atunci) + CMD_TIMEOUT_S = 5 + 10 + 10 = 25 s. Trebuie sa ramana sub read_timeout-ul Caddy
-# (45 s, caddy/Caddyfile), ca telefonul sa primeasca JSON-ul 502/503 al serviciului, nu un 502 gol de la
-# proxy. Timeout-ul de citire al comenzilor din aplicatia Android trebuie sa fie >= 35 s.
+# trimite chiar atunci) + CMD_TIMEOUT_S = 5 + 10 + 10 = 25 s; teoretic cel mult ~45 s (comutare + scrierea DP
+# + un tick al programatorului). Trebuie sa ramana sub read_timeout-ul Caddy (60 s, caddy/Caddyfile), ca
+# telefonul sa primeasca JSON-ul 502/503 al serviciului, nu un 502 gol de la proxy. Timeout-ul de citire al
+# comenzilor din aplicatia Android trebuie sa fie 50 s.
 PLUG_BUSY_WAIT_S = 5.0
 STATE_FILE = "state.json"
 DEMO_STATE_FILE = "state.demo.json"   # demo: niciodata starea prizelor reale
