@@ -56,6 +56,10 @@ def _blank() -> dict:
             "inching": {"enabled": False, "minutes": 30},
             "last_done": {}, "started_by": None,
             "inching_off_at": None, "last_manual_at": None,
+            # termen de oprire propriu: "ramane pornita pana la vechiul stop" dupa ce intervalul
+            # care tinea priza a fost sters/dezactivat/editat. NU sta in slotul countdown
+            # (vizibil si modificabil de utilizator), ca un countdown nou sa nu-l stearga.
+            "release_off_at": None,
             # last_done = fronturi "consumate" (executate sau sarite); last_start_at = ultimul
             # start EXECUTAT cu adevarat; cutoff = momentul crearii/editarii unui interval
             # (fronturile lui mai vechi nu se mai executa). Sunt separate ca o creare/editare
@@ -109,6 +113,7 @@ class _Rt:
     next_dp_try: Optional[datetime] = None
     next_resync: Optional[datetime] = None
     off_sent_at: Optional[datetime] = None
+    offline_since: Optional[datetime] = None
     # UN singur ritm de reincercare pe priza, respectat de TOATE caile automate
     # (fronturi, countdown, inching): cel mult o incercare la 30 s cat timp esueaza.
     next_cmd_try: Optional[datetime] = None
@@ -268,7 +273,11 @@ class Controller:
                     # prima citire / reconectare: poate a repornit priza si si-a pierdut countdown-ul
                     rt.needs_missed = True
                     rt.cd_written = None
-                    rt.next_cmd_try = rt.next_dp_try = None
+                    # O comanda esuata produce ea insasi offline -> online in ~2 s: ritmul de
+                    # reincercare se reseteaza doar daca priza a fost cazuta cel putin cat ritmul.
+                    if (rt.offline_since is None
+                            or now - rt.offline_since >= timedelta(seconds=RETRY_S)):
+                        rt.next_cmd_try = rt.next_dp_try = None
                 elif (rt.cd_written is not None and r.countdown_s is not None
                       and abs(r.countdown_s - (rt.cd_written - _epoch(now))) > RESYNC_TOL_S
                       and (rt.next_resync is None or now >= rt.next_resync)):
@@ -280,8 +289,11 @@ class Controller:
                         trans = "on" if prev_on is False else "first_on"
                     elif prev_on is True and not r.on:
                         trans = "off"
+                rt.offline_since = None
             else:
                 rt.poll_error = r.error or "offline"
+                if rt.offline_since is None:
+                    rt.offline_since = now
         if trans == "on":
             self._became_on(pid, now)
         elif trans == "first_on":
@@ -309,18 +321,26 @@ class Controller:
         def f(p):
             p["started_by"] = None
             p["inching_off_at"] = None
+            p["release_off_at"] = None
             if p["countdown"] and p["countdown"].get("action") == "off":
                 p["countdown"] = None
         self._mut(pid, f)
 
     # ------------------------------------------------------------------ vederi
     def _candidates(self, st: dict, now: datetime) -> list:
+        """Termenele la care serverul va opri priza (cel mai apropiat castiga). Sfarsitul unui
+        interval conteaza pentru ORICE interval a carui fereastra contine `now` si al carui
+        stop ar actiona (nu il tine alt interval) - exact ce va face frontul de stop."""
         c = []
         sb = st["started_by"]
-        iv = self._intervals(st).get(sb) if sb else None
-        end = self._window_end(iv, now) if iv and iv.enabled else None
-        if end:
-            c.append(OffDeadline(end, "schedule"))
+        for iv in self._intervals(st).values():
+            if not iv.enabled or (sb is not None and sb != iv.id):
+                continue
+            end = self._window_end(iv, now)
+            if end:
+                c.append(OffDeadline(end, "schedule"))
+        if st["release_off_at"] is not None:
+            c.append(OffDeadline(_from_epoch(st["release_off_at"]), "schedule"))
         if st["inching_off_at"] is not None:
             c.append(OffDeadline(_from_epoch(st["inching_off_at"]), "inching"))
         cd = st["countdown"]
@@ -374,6 +394,7 @@ class Controller:
             def f(p):
                 p["countdown"] = None
                 p["started_by"] = None
+                p["release_off_at"] = None
                 p["last_manual_at"] = now.isoformat()
                 if not on:
                     p["inching_off_at"] = None
@@ -437,17 +458,15 @@ class Controller:
         return self.plug_view(pid)
 
     @staticmethod
-    def _earlier_off_countdown(p: dict, at: int) -> None:
-        """Pune un countdown "oprire" la `at`, doar daca nu exista deja unul mai devreme."""
-        cd = p["countdown"]
-        if not (cd and cd.get("action") == "off" and cd["at"] <= at):
-            p["countdown"] = {"action": "off", "at": at}
+    def _earlier_release(p: dict, at: int) -> None:
+        cur = p["release_off_at"]
+        p["release_off_at"] = at if cur is None else min(cur, at)
 
     def _release_holder(self, pid: str, now: datetime, old: Interval,
                         new_end: Optional[datetime], retired: bool) -> Optional[int]:
         """Intervalul `old` tine priza (started_by) si e editat/dezactivat/sters.
         Priza nu ramane NICIODATA pornita fara termen. Intoarce (epoch) momentul
-        pentru un countdown "oprire", sau None daca intervalul ramane valabil.
+        pentru `release_off_at`, sau None daca intervalul ramane valabil.
           * editat, fereastra noua contine `now`  -> ramane started_by, termen = noul sfarsit;
           * editat, fereastra noua nu mai contine -> oprire acum;
           * dezactivat / sters                     -> ramane pornita pana la vechiul stop."""
@@ -485,7 +504,7 @@ class Controller:
                     if p["started_by"] == interval_id and new_end is None:
                         p["started_by"] = None
                 if off_at is not None:
-                    self._earlier_off_countdown(p, off_at)
+                    self._earlier_release(p, off_at)
             self._mut(pid, f)
             self._flush_due(pid, now, off_at)
         return self.plug_view(pid)
@@ -509,17 +528,17 @@ class Controller:
                 if p["started_by"] == interval_id:
                     p["started_by"] = None
                 if off_at is not None:
-                    self._earlier_off_countdown(p, off_at)
+                    self._earlier_release(p, off_at)
             self._mut(pid, f)
             self._flush_due(pid, now, off_at)
         return self.plug_view(pid)
 
     def _flush_due(self, pid: str, now: datetime, off_at: Optional[int]) -> None:
         """Dupa o editare: daca s-a cerut oprire imediata o incearca acum (esecul ramane in
-        countdown si se reincearca la 30 s), apoi rescrie termenul pe priza."""
+        release_off_at si se reincearca la 30 s), apoi rescrie termenul pe priza."""
         try:
             if off_at is not None and off_at <= _epoch(now):
-                self._due_countdown(pid, now, force=True)
+                self._due_off(pid, now, "release_off_at", force=True)
         except Exception:  # noqa: BLE001
             log.exception("oprire imediata esuata pentru %s", pid)
         self._after(pid)
@@ -552,7 +571,8 @@ class Controller:
         if (rt.reading is not None and not self._throttled(rt, now)
                 and (rt.needs_missed or (rt.retry_at is not None and now >= rt.retry_at))):
             self._process_missed(pid, now)
-        self._due_inching(pid, now)
+        self._due_off(pid, now, "inching_off_at")
+        self._due_off(pid, now, "release_off_at")
         self._sync_deadline(pid, now)
 
     def _grace(self, pid: str) -> timedelta:
@@ -586,15 +606,16 @@ class Controller:
         if self._auto_switch(pid, now, action == "on", force=force):
             self._mut(pid, clear)
 
-    def _due_inching(self, pid: str, now: datetime) -> None:
-        off_at = self._get(pid)["inching_off_at"]
+    def _due_off(self, pid: str, now: datetime, key: str, force: bool = False) -> None:
+        """Termen de oprire scadent din starea persistenta (`inching_off_at`/`release_off_at`)."""
+        off_at = self._get(pid)[key]
         rt = self._rt[pid]
         if off_at is None or rt.on is False:
             return
-        if now < _from_epoch(off_at) + self._grace(pid):
+        if now < _from_epoch(off_at) + (timedelta(0) if force else self._grace(pid)):
             return
-        if self._auto_switch(pid, now, False):
-            self._mut(pid, lambda p: p.__setitem__("inching_off_at", None))
+        if self._auto_switch(pid, now, False, force=force):
+            self._mut(pid, lambda p: p.__setitem__(key, None))
 
     # ------------------------------------------------------------------ fronturi
     def _process_missed(self, pid: str, now: datetime) -> None:

@@ -71,6 +71,7 @@ class FakeWorker:
         # defer=True: ca PlugWorker real, future-ul se rezolva INAINTE ca citirea sa ajunga
         self.defer = defer
         self.pending = []
+        self._cd = None
         driver.connect()
 
     def flush(self):
@@ -82,8 +83,11 @@ class FakeWorker:
         return self.clock().timestamp()
 
     def poll(self):
-        self.on_reading(self.device.id, decode_reading(
-            self.device, self.driver.status(), at=self._ts()))
+        dps = self.driver.status()
+        # ca o priza reala, countdown-ul scris scade cu timpul (ceasul fals)
+        if self._cd is not None and dps.get("9") == self._cd[0]:
+            dps["9"] = max(0, self._cd[0] - int((self.clock() - self._cd[1]).total_seconds()))
+        self.on_reading(self.device.id, decode_reading(self.device, dps, at=self._ts()))
 
     def submit(self, dp, value):
         self.submitted.append((dp, value))
@@ -91,6 +95,8 @@ class FakeWorker:
         try:
             self.driver.connect()
             self.driver.set_dp(dp, value)
+            if dp == 9:
+                self._cd = (value, self.clock())
         except PlugError as e:
             fut.set_exception(e)
             offline = lambda: self.on_reading(self.device.id, PlugReading(  # noqa: E731
@@ -149,11 +155,13 @@ class Rig:
         idx = max(i for i, x in enumerate(self.worker.submitted) if x == (1, False))
         return self.worker.submitted[idx + 1:]
 
-    def tick_to(self, target, step=timedelta(seconds=30)):
-        """Tick-uri la fiecare `step` pana la `target` inclusiv."""
+    def tick_to(self, target, step=timedelta(seconds=30), poll=False):
+        """Tick-uri la fiecare `step` pana la `target` inclusiv (poll: o citire intre tick-uri)."""
         while self.clock.now < target:
             self.clock.set(min(self.clock.now + step, target))
             self.worker.flush()  # citirile ajung intre tick-uri
+            if poll:
+                self.worker.poll()
             self.c.tick()
 
     def close(self):
@@ -677,15 +685,16 @@ class IntervalCrudTest(ControllerBase):
         r.c.delete_interval(PID, iid)
         st = r.c._get(PID)
         self.assertIsNone(st["started_by"])
-        self.assertEqual(st["countdown"], {"action": "off", "at": int(loc(16).timestamp())})
+        self.assertIsNone(st["countdown"])  # slotul countdown ramane liber
+        self.assertEqual(st["release_off_at"], int(loc(16).timestamp()))
         v = r.c.plug_view(PID)
-        self.assertEqual(v["off_deadline"]["reason"], "countdown")
+        self.assertEqual(v["off_deadline"]["reason"], "schedule")
         self.assertEqual(r.dp9, 19800)  # DP-ul ramane armat
         r.tick_to(loc(15, 59))
         self.assertTrue(r.on)
         r.tick_to(loc(16, 1))
         self.assertFalse(r.on)
-        self.assertIsNone(r.c.plug_view(PID)["countdown"])
+        self.assertIsNone(r.c._get(PID)["release_off_at"])
 
     def test_bad_inching_and_countdown_values_rejected(self):
         r = self.rig(loc(8))
@@ -765,11 +774,12 @@ class DstTest(ControllerBase):
         self.assertFalse(r.on)
         r.tick_to(datetime(2026, 10, 25, 2, 0, tzinfo=UTC), step=timedelta(minutes=1))
         self.assertTrue(r.on)
-        n = len(r.worker.submitted)
+        switches = lambda: len([x for x in r.worker.submitted if x[0] == 1])  # noqa: E731
+        n = switches()
         r.c.switch(PID, False)
         r.tick_to(datetime(2026, 10, 25, 3, 0, tzinfo=UTC), step=timedelta(minutes=1))
         self.assertFalse(r.on)  # nu mai porneste a doua oara
-        self.assertEqual(len(r.worker.submitted), n + 1)
+        self.assertEqual(switches(), n + 1)
 
 
 class OffNeverFollowedByArmedDpTest(ControllerBase):
@@ -863,7 +873,8 @@ class HolderEditTest(ControllerBase):
         r.driver.fail_set = 1
         r.c.update_interval(PID, iid, stop="10:45")  # nu ridica eroarea
         self.assertTrue(r.on)
-        self.assertEqual(r.c._get(PID)["countdown"]["action"], "off")
+        self.assertIsNotNone(r.c._get(PID)["release_off_at"])  # reincercat pana reuseste
+        self.assertIsNone(r.c._get(PID)["countdown"])
         self.assertIsNotNone(r.c.plug_view(PID)["error"])
         r.tick_to(loc(11, 1))
         self.assertFalse(r.on)
@@ -872,24 +883,50 @@ class HolderEditTest(ControllerBase):
         r, iid = self.running()
         r.c.update_interval(PID, iid, enabled=False)
         self.assertTrue(r.on)
-        self.assertEqual(r.c._get(PID)["countdown"]["at"], int(loc(16).timestamp()))
+        self.assertEqual(r.c._get(PID)["release_off_at"], int(loc(16).timestamp()))
+        self.assertIsNone(r.c._get(PID)["countdown"])
         self.assertEqual(r.dp9, 19800)  # acelasi termen absolut: nu se rescrie
         r.tick_to(loc(15, 59))
         self.assertTrue(r.on)
         r.tick_to(loc(16, 1))
         self.assertFalse(r.on)
 
-    def test_disable_keeps_earlier_off_countdown(self):
+    def test_disable_keeps_earlier_off_countdown_as_nearest(self):
         r, iid = self.running()
         r.c.set_countdown(PID, "off", 30)
         r.c.update_interval(PID, iid, enabled=False)
-        self.assertEqual(r.c._get(PID)["countdown"]["at"], int(loc(11, 30).timestamp()))
+        v = r.c.plug_view(PID)
+        self.assertEqual(v["countdown"]["at"], int(loc(11, 30).timestamp()))
+        self.assertEqual(v["off_deadline"]["reason"], "countdown")
+        self.assertEqual(r.c._get(PID)["release_off_at"], int(loc(16).timestamp()))
 
-    def test_disable_replaces_later_off_countdown(self):
+    def test_disable_with_later_off_countdown_old_stop_wins(self):
         r, iid = self.running()
         r.c.set_countdown(PID, "off", 600)
         r.c.update_interval(PID, iid, enabled=False)
-        self.assertEqual(r.c._get(PID)["countdown"]["at"], int(loc(16).timestamp()))
+        v = r.c.plug_view(PID)
+        self.assertEqual(v["off_deadline"]["at"], int(loc(16).timestamp()))
+        self.assertEqual(v["countdown"]["at"], int(loc(21).timestamp()))
+
+    def test_released_deadline_survives_new_countdown_on_and_cancel(self):
+        r, iid = self.running()
+        r.c.delete_interval(PID, iid)
+        v = r.c.set_countdown(PID, "on", 30)
+        self.assertEqual(v["off_deadline"]["at"], int(loc(16).timestamp()))
+        self.assertEqual(r.dp9, 19800)
+        v = r.c.cancel_countdown(PID)
+        self.assertEqual(v["off_deadline"]["at"], int(loc(16).timestamp()))
+        self.assertEqual(r.dp9, 19800)
+        r.tick_to(loc(16, 1))
+        self.assertFalse(r.on)
+
+    def test_manual_switch_clears_released_deadline(self):
+        r, iid = self.running()
+        r.c.delete_interval(PID, iid)
+        r.c.switch(PID, True)
+        self.assertIsNone(r.c._get(PID)["release_off_at"])
+        r.tick_to(loc(17))
+        self.assertTrue(r.on)
 
     def test_edit_of_other_interval_leaves_holder(self):
         r, iid = self.running()
@@ -1116,6 +1153,107 @@ class ThrottleAndLocksTest(ControllerBase):
             t.join(5)
             self.assertTrue(done and done[0]["on"])
             self.assertTrue(drv_b.dps["1"])
+
+
+class ReconnectThrottleTest(ControllerBase):
+    def test_failed_command_reconnect_does_not_reset_throttle(self):
+        """Workerul real: comanda esuata -> citire offline, apoi ~2 s mai tarziu o citire
+        online (priza raspunde la status, dar set_dp esueaza)."""
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.tick_to(loc(15, 59))
+        self.assertTrue(r.on)
+        r.driver.fail_set = 10 ** 6
+        offs = lambda: len([x for x in r.worker.submitted if x == (1, False)])  # noqa: E731
+        r.clock.set(loc(16, 0))
+        r.c.tick()
+        for sec in range(5, 60, 5):
+            r.clock.set(loc(16, 0, sec))
+            r.worker.poll()  # offline -> online intre tick-uri
+            r.c.tick()
+        self.assertEqual(offs(), 2)  # la 0 s si la 30 s, nu la fiecare tick
+
+    def test_long_offline_reconnect_retries_at_once(self):
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.tick_to(loc(15, 59))
+        r.driver.fail_set = 10 ** 6
+        r.tick_to(loc(16, 0))
+        r.driver.fail_set = 0
+        r.clock.set(loc(16, 0, 40))  # offline de peste 30 s
+        r.worker.poll()
+        self.assertTrue(r.on)
+        r.c.tick()
+        self.assertFalse(r.on)
+
+
+class ScheduleEndAsDeadlineTest(ControllerBase):
+    def test_manual_on_inside_window_shows_and_arms_schedule_end(self):
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        r.c.switch(PID, False)
+        r.tick_to(loc(12))
+        v = r.c.switch(PID, True)
+        self.assertEqual(v["off_deadline"]["reason"], "schedule")
+        self.assertEqual(v["off_deadline"]["at"], int(loc(16).timestamp()))
+        self.assertEqual(r.dp9, 4 * 3600)
+        r.tick_to(loc(15, 59))
+        self.assertTrue(r.on)
+        r.tick_to(loc(16))
+        self.assertFalse(r.on)
+
+    def test_external_on_inside_window_after_manual_off(self):
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        r.c.switch(PID, False)
+        r.tick_to(loc(13))
+        r.driver.dps["1"] = True  # buton fizic
+        r.worker.poll()
+        r.c.tick()
+        self.assertEqual(r.c.plug_view(PID)["off_deadline"]["reason"], "schedule")
+        self.assertEqual(r.dp9, 3 * 3600)
+
+    def test_other_holder_stop_is_not_a_deadline(self):
+        r = self.rig(loc(9))
+        r.set_schedules([("aaaa", "10:00", "14:00"), ("bbbb", "12:00", "16:00")])
+        r.tick_to(loc(13))
+        v = r.c.plug_view(PID)
+        self.assertEqual(r.c._get(PID)["started_by"], "bbbb")
+        self.assertEqual(v["off_deadline"]["at"], int(loc(16).timestamp()))
+        self.assertEqual(r.dp9, 4 * 3600)  # armat la 12:00 pentru B, nu 2 h pentru A
+
+    def test_no_deadline_outside_any_window(self):
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.tick_to(loc(17))
+        r.c.switch(PID, True)
+        self.assertIsNone(r.c.plug_view(PID)["off_deadline"])
+        self.assertEqual(r.dp9, 0)
+
+
+class DpCountdownRealismTest(ControllerBase):
+    def test_no_rewrite_loop_when_plug_counts_down_normally(self):
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        writes = lambda: len([x for x in r.worker.submitted if x[0] == 9])  # noqa: E731
+        self.assertEqual(writes(), 1)
+        r.tick_to(loc(15, 59), step=timedelta(seconds=30), poll=True)
+        self.assertEqual(writes(), 1)  # citiri la fiecare tick, scrisa o singura data
+        r.tick_to(loc(16, 1), step=timedelta(seconds=30), poll=True)
+        self.assertFalse(r.on)
+
+    def test_cleared_from_outside_rewritten_once_within_a_minute(self):
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        r.driver.dps["9"] = 0
+        r.tick_to(loc(11, 0), step=timedelta(seconds=5), poll=True)
+        writes = [x for x in r.worker.submitted if x[0] == 9]
+        self.assertEqual(len(writes), 2)  # initiala + o singura rescriere
+        self.assertEqual(r.dp9, 19800 - 5)  # rescris la primul tick dupa stergere
 
 
 if __name__ == "__main__":
