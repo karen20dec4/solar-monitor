@@ -1,5 +1,9 @@
+import threading
 import unittest
 from datetime import datetime, timezone
+
+from influxdb_client.client.write_api import SYNCHRONOUS
+from influxdb_client.rest import ApiException
 
 from casa.config import Config
 from casa.devices import DeviceInfo
@@ -30,8 +34,15 @@ class FakeWrite:
     def __init__(self):
         self.calls = []
         self.fail = False
+        self.exc = None
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def write(self, bucket=None, org=None, record=None, **kw):
+        if self.exc is not None:
+            raise self.exc
         if self.fail:
             raise OSError("jos")
         self.calls.append((bucket, org, list(record)))
@@ -50,9 +61,17 @@ class FakeQuery:
 class FakeClient:
     def __init__(self):
         self.w, self.q = FakeWrite(), FakeQuery()
+        self.write_api_calls = 0
+        self.closed = False
 
-    def write_api(self, *a, **k):
+    def write_api(self, write_options=None, **k):
+        # orice altceva decat SYNCHRONOUS ar insemna mod batching (erori inghitite, fire in plus)
+        assert write_options is SYNCHRONOUS, "write_api trebuie creat cu SYNCHRONOUS"
+        self.write_api_calls += 1
         return self.w
+
+    def close(self):
+        self.closed = True
 
     def query_api(self):
         return self.q
@@ -76,10 +95,12 @@ class InfluxTest(unittest.TestCase):
     def setUp(self):
         self.c = FakeClient()
         self.now = [1_000_000.0]
-        self.db = CasaInflux(CFG, client=self.c, clock=lambda: self.now[0])
+        self.db = CasaInflux(CFG, client=self.c, clock=lambda: self.now[0], threaded=False)
 
     def test_plug_point_fields_and_tags(self):
         self.db.write_plug(DEV, reading(1_700_000_000.0))
+        self.assertEqual(self.c.w.calls, [])  # scrierea nu face retea
+        self.db.flush()
         bucket, org, pts = self.c.w.calls[0]
         self.assertEqual((bucket, org), ("live", "casa"))
         s = line(pts[0])
@@ -91,6 +112,7 @@ class InfluxTest(unittest.TestCase):
     def test_none_fields_omitted(self):
         self.db.write_plug(DEV, reading(1_700_000_000.0, on=None, online=False, power=None,
                                         voltage=None, current=None))
+        self.db.flush()
         s = line(self.c.w.calls[0][2][0])
         self.assertIn("online=0", s)
         for f in ("on=", "power", "voltage", "current"):
@@ -101,8 +123,10 @@ class InfluxTest(unittest.TestCase):
         self.db.write_plug(DEV, reading(base + 1, on=True, power=100, voltage=230, current=1))
         self.db.write_plug(DEV, reading(base + 20, on=False, online=False, power=300,
                                         voltage=232, current=3))
+        self.db.flush()
         self.assertEqual([c[0] for c in self.c.w.calls if c[0] == "history"], [])
         self.db.write_plug(DEV, reading(base + 61))  # minut nou -> se emite media
+        self.db.flush()
         hist = [c for c in self.c.w.calls if c[0] == "history"]
         self.assertEqual(len(hist), 1)
         s = line(hist[0][2][0])
@@ -113,6 +137,7 @@ class InfluxTest(unittest.TestCase):
     def test_sensor_written_to_both_buckets_at_updated_time(self):
         self.db.write_sensor({"id": "s1", "name": "Temp BECI", "temperature": 21.5,
                               "humidity": 40, "battery": 90, "updated": 1_700_000_123})
+        self.db.flush()
         by = {c[0]: c[2] for c in self.c.w.calls}
         self.assertEqual(set(by), {"live", "history"})
         s = line(by["live"][0])
@@ -123,6 +148,7 @@ class InfluxTest(unittest.TestCase):
 
     def test_sensor_without_values_not_written(self):
         self.db.write_sensor({"id": "s1", "name": "x", "updated": None})
+        self.db.flush()
         self.assertEqual(self.c.w.calls, [])
 
     def test_history_range_selects_bucket_and_window(self):
@@ -193,17 +219,57 @@ class InfluxTest(unittest.TestCase):
     def test_write_error_is_buffered_not_raised(self):
         self.c.w.fail = True
         self.db.write_plug(DEV, reading(1_700_000_000.0))  # nu ridica
+        self.db._flush(False)
         self.assertEqual(self.c.w.calls, [])
         # inainte de 10 s nu reincearca
         self.c.w.fail = False
         self.now[0] += 5
         self.db.write_plug(DEV, reading(1_700_000_001.0))
+        self.db._flush(False)
         self.assertEqual(self.c.w.calls, [])
         # dupa 10 s trimite tot ce s-a strans
         self.now[0] += 6
         self.db.write_plug(DEV, reading(1_700_000_002.0))
+        self.db._flush(False)
         self.assertEqual(len(self.c.w.calls), 1)
         self.assertEqual(len(self.c.w.calls[0][2]), 3)
+
+    def test_write_api_is_synchronous_and_created_once(self):
+        for i in range(3):
+            self.db.write_plug(DEV, reading(1_700_000_000.0 + i))
+            self.db.flush()
+        self.assertEqual(self.c.write_api_calls, 1)  # FakeClient respinge orice alt write_options
+
+    def test_write_error_with_synchronous_api_reaches_buffer(self):
+        self.c.w.exc = ApiException(status=503, reason="jos")
+        self.db.write_plug(DEV, reading(1_700_000_000.0))
+        self.db.flush()
+        self.assertEqual(len(self.db._buf["live"]), 1)
+
+    def test_rejected_400_422_batch_is_dropped(self):
+        for status in (400, 422):
+            self.c.w.exc = ApiException(status=status, reason="respins")
+            self.db.write_plug(DEV, reading(1_700_000_000.0))
+            self.db.flush()
+            self.assertEqual(len(self.db._buf["live"]), 0, status)
+        # dupa respingere, scrierile urmatoare merg normal
+        self.c.w.exc = None
+        self.db.write_plug(DEV, reading(1_700_000_001.0))
+        self.db.flush()
+        self.assertEqual(len(self.c.w.calls), 1)
+
+    def test_non_finite_values_skipped(self):
+        self.db.write_plug(DEV, reading(1_700_000_000.0, power=float("nan"),
+                                        voltage=float("inf"), current=0.5))
+        self.db.flush()
+        s = line(self.c.w.calls[0][2][0])
+        self.assertNotIn("power", s)
+        self.assertNotIn("voltage", s)
+        self.assertIn("current=0.5", s)
+        self.db.write_sensor({"id": "s1", "name": "x", "temperature": float("nan"),
+                              "updated": 5})
+        self.db.flush()
+        self.assertEqual(len(self.c.w.calls), 1)  # senzorul fara valori finite nu se scrie
 
     def test_buffer_is_bounded(self):
         self.c.w.fail = True
@@ -211,12 +277,75 @@ class InfluxTest(unittest.TestCase):
             self.db.write_plug(DEV, reading(1_700_000_000.0 + i))
         self.assertEqual(len(self.db._buf["live"]), 900)
 
+    def test_requeue_after_failure_drops_oldest(self):
+        self.c.w.fail = True
+        for i in range(900):
+            self.db.write_plug(DEV, reading(1_700_000_000.0 + i))
+        # flush esueaza cu 900 in batch; intre timp apar 50 puncte noi
+        orig = self.c.w.write
+
+        def failing_write(**kw):
+            if kw["bucket"] == "live":
+                for i in range(900, 950):
+                    self.db.write_plug(DEV, reading(1_700_000_000.0 + i))
+            return orig(**kw)
+        self.c.w.write = failing_write
+        self.db.flush()
+        buf = list(self.db._buf["live"])
+        self.assertEqual(len(buf), 900)
+        ts = [int(line(p).split()[-1]) // 1_000_000_000 for p in buf]
+        self.assertEqual(ts[-1], 1_700_000_949)   # cele mai noi au ramas
+        self.assertEqual(ts[0], 1_700_000_050)    # cele mai vechi 50 au cazut
+        self.assertEqual(ts, sorted(ts))
+
     def test_flush_forces_attempt(self):
         self.c.w.fail = True
         self.db.write_sensor({"id": "s1", "name": "x", "temperature": 1, "updated": 5})
+        self.db.flush()
         self.c.w.fail = False
         self.db.flush()
         self.assertEqual({c[0] for c in self.c.w.calls}, {"live", "history"})
+
+    def test_device_id_trailing_newline_rejected(self):
+        for fn in (lambda: self.db.sensor_history("abc\n", "2h"),
+                   lambda: self.db.sensor_spark("abc\n"),
+                   lambda: self.db.energy_today("abc\n")):
+            with self.assertRaises(ValueError):
+                fn()
+
+    def test_energy_today_on_dst_day(self):
+        # 2026-03-29: trecerea la ora de vara are loc la 03:00; miezul noptii e inca EET (+2)
+        self.now[0] = datetime(2026, 3, 29, 10, 0, tzinfo=timezone.utc).timestamp()
+        self.db.energy_today("bf1")
+        self.assertIn("start: 2026-03-28T22:00:00Z", self.c.q.queries[0])
+
+    def test_writes_do_not_touch_network_on_caller_thread_and_flusher_sends(self):
+        sent = threading.Event()
+        callers = []
+        orig = self.c.w.write
+
+        def write(**kw):
+            callers.append(threading.current_thread())
+            orig(**kw)
+            sent.set()
+        self.c.w.write = write
+        db = CasaInflux(CFG, client=self.c, clock=lambda: self.now[0])  # cu fir
+        try:
+            db.write_plug(DEV, reading(1_700_000_000.0))
+            self.assertTrue(sent.wait(5))
+            self.assertNotIn(threading.current_thread(), callers)
+            self.assertTrue(all(t.daemon for t in callers))
+        finally:
+            db.close()
+        self.assertTrue(self.c.closed)
+        self.assertTrue(self.c.w.closed)
+
+    def test_close_stops_thread(self):
+        db = CasaInflux(CFG, client=self.c, clock=lambda: self.now[0])
+        db.start()
+        t = db._thread
+        db.close()
+        self.assertFalse(t.is_alive())
 
 
 if __name__ == "__main__":

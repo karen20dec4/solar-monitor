@@ -2,10 +2,12 @@
 
 Masuratori: `casa_plug` (tag-uri device_id, name; campuri on, online, power, voltage, current)
 si `casa_sensor` (tag-uri device_id, name; campuri temperature, humidity, battery).
-Caile de scriere nu ridica niciodata exceptii: punctele raman intr-un buffer marginit si sunt
-reincercate la cel mult 10 s.
+Caile de scriere nu ridica niciodata exceptii si nu fac retea: `write_plug`/`write_sensor` doar pun
+punctele intr-un buffer marginit, iar un singur fir daemon (`start()`, pornit si la prima scriere)
+le trimite sincron la ~1 s; dupa o eroare reincearca la cel mult 10 s. Respingerile 400/422 se arunca.
 """
 import logging
+import math
 import re
 import threading
 import time
@@ -15,6 +17,8 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from influxdb_client import InfluxDBClient, Point, WritePrecision
+from influxdb_client.client.write_api import SYNCHRONOUS
+from influxdb_client.rest import ApiException
 
 from .config import Config
 from .devices import DeviceInfo
@@ -25,6 +29,7 @@ log = logging.getLogger("casa.influx")
 BUFFER_LIVE = 900
 BUFFER_HISTORY = 1440
 RETRY_S = 10.0
+FLUSH_EVERY_S = 1.0
 
 PLUG = "casa_plug"
 SENSOR = "casa_sensor"
@@ -41,15 +46,20 @@ _SENSOR_FIELDS = ("temperature", "humidity", "battery")
 
 
 def _check_id(device_id: str) -> str:
-    if not isinstance(device_id, str) or not _ID.match(device_id):
+    if not isinstance(device_id, str) or not _ID.fullmatch(device_id):
         raise ValueError("device_id invalid")
     return device_id
 
 
-def _point(measurement: str, device_id: str, name: str, fields: dict, at: float) -> Point:
+def _point(measurement: str, device_id: str, name: str, fields: dict,
+           at: float) -> Optional[Point]:
+    """Punct Influx; valorile ne-finite (NaN/inf) sunt omise, fara campuri -> None."""
+    good = {k: float(v) for k, v in fields.items() if math.isfinite(float(v))}
+    if not good:
+        return None
     p = Point(measurement).tag("device_id", device_id).tag("name", name or device_id)
-    for k, v in fields.items():
-        p = p.field(k, float(v))
+    for k, v in good.items():
+        p = p.field(k, v)
     return p.time(int(at * 1_000_000_000), WritePrecision.NS)
 
 
@@ -88,10 +98,15 @@ class _Minute:
 
 
 class CasaInflux:
-    def __init__(self, cfg: Config, client=None, clock=time.time):
+    def __init__(self, cfg: Config, client=None, clock=time.time, threaded: bool = True):
         self.cfg = cfg
         self._client = client
+        self._write_api = None
         self._clock = clock
+        self._threaded = threaded
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._flush_lock = threading.Lock()
         self._buf = {"live": deque(maxlen=BUFFER_LIVE), "history": deque(maxlen=BUFFER_HISTORY)}
@@ -106,10 +121,19 @@ class CasaInflux:
                                           org=self.cfg.influx_org, timeout=5000)
         return self._client
 
+    def _writer(self):
+        if self._write_api is None:
+            self._write_api = self._cli().write_api(write_options=SYNCHRONOUS)
+        return self._write_api
+
     def _bucket(self, which: str) -> str:
         return self.cfg.bucket_live if which == "live" else self.cfg.bucket_history
 
     # ---- scriere ----
+    def _enqueue(self, which: str, p: Optional[Point]) -> None:
+        if p is not None:
+            self._buf[which].append(p)
+
     def write_plug(self, device: DeviceInfo, reading: PlugReading) -> None:
         try:
             fields = {"online": float(bool(reading.online))}
@@ -119,11 +143,11 @@ class CasaInflux:
                 v = getattr(reading, k)
                 if v is not None:
                     fields[k] = v
-            done = None
             with self._lock:
-                self._buf["live"].append(_point(PLUG, device.id, device.name, fields, reading.at))
+                self._enqueue("live", _point(PLUG, device.id, device.name, fields, reading.at))
                 minute = int(reading.at // 60)
                 cur = self._minutes.get(device.id)
+                done = None
                 if cur is not None and minute != cur.minute:
                     done = cur
                     cur = None
@@ -131,12 +155,12 @@ class CasaInflux:
                     cur = self._minutes[device.id] = _Minute(minute, device)
                 cur.add(reading)
                 if done is not None:
-                    self._buf["history"].append(_point(
+                    self._enqueue("history", _point(
                         PLUG, done.device.id, done.device.name, done.fields(), done.minute * 60))
         except Exception as e:  # noqa: BLE001
             log.warning("pregatire punct priza esuata: %s", e)
             return
-        self._flush(False)
+        self._signal()
 
     def write_sensor(self, sensor: dict) -> None:
         try:
@@ -147,15 +171,65 @@ class CasaInflux:
             at = float(at) if at is not None else self._clock()
             with self._lock:
                 for which in ("live", "history"):
-                    self._buf[which].append(_point(
+                    self._enqueue(which, _point(
                         SENSOR, sensor["id"], sensor.get("name", ""), fields, at))
         except Exception as e:  # noqa: BLE001
             log.warning("pregatire punct senzor esuata: %s", e)
             return
-        self._flush(False)
+        self._signal()
+
+    # ---- firul de scriere ----
+    def start(self) -> None:
+        """Porneste firul daemon care trimite punctele (idempotent)."""
+        with self._lock:
+            if self._thread is not None or self._stop.is_set():
+                return
+            self._thread = threading.Thread(target=self._run, name="casa-influx", daemon=True)
+            self._thread.start()
+
+    def _signal(self) -> None:
+        if self._threaded:
+            self.start()
+        self._wake.set()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._wake.wait(FLUSH_EVERY_S)
+            self._wake.clear()
+            if self._stop.is_set():
+                break
+            self._flush(False)
+
+    def close(self) -> None:
+        """Opreste firul, mai incearca o data sa trimita si inchide clientul."""
+        self._stop.set()
+        self._wake.set()
+        t = self._thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=10)
+        try:
+            self._flush(True)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._write_api is not None:
+                self._write_api.close()
+            if self._client is not None and hasattr(self._client, "close"):
+                self._client.close()
+        except Exception as e:  # noqa: BLE001
+            log.warning("inchidere client InfluxDB esuata: %s", e)
 
     def flush(self) -> None:
+        """Trimite acum, sincron, tot ce e in buffer (ignora pauza de reincercare)."""
         self._flush(True)
+
+    def _requeue(self, which: str, batch: list) -> None:
+        """Punctele esuate revin in fata; daca nu mai incap, cad cele mai vechi."""
+        with self._lock:
+            items = batch + list(self._buf[which])
+            keep = self._buf[which].maxlen
+            self._buf[which].clear()
+            self._buf[which].extend(items[-keep:])
 
     def _flush(self, force: bool) -> None:
         if not force and self._clock() < self._retry_at:
@@ -170,20 +244,26 @@ class CasaInflux:
                 if not batch:
                     continue
                 try:
-                    self._cli().write_api().write(
+                    self._writer().write(
                         bucket=self._bucket(which), org=self.cfg.influx_org, record=batch)
+                except ApiException as e:
+                    if e.status in (400, 422):
+                        log.warning("InfluxDB a respins %s puncte (HTTP %s), le arunc",
+                                    len(batch), e.status)
+                        continue
+                    self._fail(which, batch, e)
                 except Exception as e:  # noqa: BLE001
-                    self._retry_at = self._clock() + RETRY_S
-                    log.warning("scriere InfluxDB esuata (%s puncte in asteptare): %s",
-                                len(batch), e)
-                    with self._lock:
-                        # punctele vechi inapoi in fata; deque-ul marginit le taie pe cele mai vechi
-                        self._buf[which].extendleft(reversed(batch))
+                    self._fail(which, batch, e)
         except Exception as e:  # noqa: BLE001
             self._retry_at = self._clock() + RETRY_S
             log.warning("flush InfluxDB esuat: %s", e)
         finally:
             self._flush_lock.release()
+
+    def _fail(self, which: str, batch: list, e: Exception) -> None:
+        self._retry_at = self._clock() + RETRY_S
+        log.warning("scriere InfluxDB esuata (%s puncte in asteptare): %s", len(batch), e)
+        self._requeue(which, batch)
 
     # ---- interogari ----
     def _rows(self, flux: str):
