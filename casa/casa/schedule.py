@@ -49,12 +49,34 @@ class OffDeadline:
 
 
 def _local_to_utc(d: date, hhmm: str, tz: ZoneInfo) -> datetime:
-    """Ora locala -> UTC. fold=0: la ora ambigua (trecerea la ora de iarna)
-    se ia prima aparitie; la ora inexistenta (trecerea la ora de vara)
-    zoneinfo foloseste offsetul de dinainte, deci rezulta instantul de dupa
-    gol (03:30 -> 04:30 local)."""
+    """Ora locala -> UTC. Ora ambigua (trecerea la ora de iarna): prima
+    aparitie (fold=0). Ora inexistenta (trecerea la ora de vara): primul
+    instant valid de dupa gol, adica 04:00 local (01:00Z)."""
     h, m = parse_hhmm(hhmm)
-    return datetime(d.year, d.month, d.day, h, m, tzinfo=tz, fold=0).astimezone(UTC)
+    dt = datetime(d.year, d.month, d.day, h, m, tzinfo=tz, fold=0)
+    u = dt.astimezone(UTC)
+    if u.astimezone(tz).replace(tzinfo=None) == dt.replace(tzinfo=None):
+        return u
+    # ora inexistenta: tranzitia e intre fold=1 (offset vechi) si fold=0 (offset nou)
+    lo = dt.replace(fold=1).astimezone(UTC)
+    hi = u
+    old = lo.astimezone(tz).utcoffset()
+    while (hi - lo) > timedelta(seconds=1):
+        mid = lo + (hi - lo) / 2
+        if mid.astimezone(tz).utcoffset() == old:
+            lo = mid
+        else:
+            hi = mid
+    return hi.replace(microsecond=0)
+
+
+def _window(iv: "Interval", d: date, tz: ZoneInfo) -> Optional[tuple[datetime, datetime]]:
+    """Fereastra (start, stop) a intervalului care incepe in ziua locala d,
+    sau None daca start si stop se prabusesc pe acelasi instant (ambele in gol DST)."""
+    over_midnight = parse_hhmm(iv.stop) < parse_hhmm(iv.start)
+    s = _local_to_utc(d, iv.start, tz)
+    e = _local_to_utc(d + timedelta(days=1) if over_midnight else d, iv.stop, tz)
+    return (s, e) if s < e else None
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -75,8 +97,10 @@ def edges_between(intervals: list[Interval], t0: datetime, t1: datetime,
         for iv in intervals:
             if not iv.enabled:
                 continue
-            for kind, hhmm in (("start", iv.start), ("stop", iv.stop)):
-                at = _local_to_utc(d, hhmm, tz)
+            w = _window(iv, d, tz)
+            if w is None:
+                continue
+            for kind, at in (("start", w[0]), ("stop", w[1])):
                 key = (iv.id, kind, at)
                 if t0u < at <= t1u and key not in seen:
                     seen.add(key)
@@ -91,13 +115,10 @@ def _window_containing(iv: Interval, now: datetime,
     """Fereastra [start, stop) a intervalului care contine `now`, sau None."""
     nowu = _as_utc(now)
     today = nowu.astimezone(tz).date()
-    over_midnight = parse_hhmm(iv.stop) < parse_hhmm(iv.start)
     for d in (today - timedelta(days=1), today):
-        s = _local_to_utc(d, iv.start, tz)
-        e = _local_to_utc(d + timedelta(days=1) if over_midnight else d,
-                          iv.stop, tz)
-        if s <= nowu < e:
-            return s, e
+        w = _window(iv, d, tz)
+        if w and w[0] <= nowu < w[1]:
+            return w
     return None
 
 

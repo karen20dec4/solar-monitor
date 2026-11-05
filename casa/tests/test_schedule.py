@@ -59,7 +59,8 @@ class ScheduleTest(unittest.TestCase):
         edges = edges_between([iv], loc(2026, 3, 28, 12), loc(2026, 3, 29, 12), TZ)
         starts = [e for e in edges if e.kind == "start"]
         self.assertEqual(len(starts), 1)
-        self.assertEqual(starts[0].at.utcoffset(), timedelta(0))
+        # ora inexistenta -> primul instant dupa gol: 04:00 local = 01:00Z
+        self.assertEqual(starts[0].at, datetime(2026, 3, 29, 1, 0, tzinfo=UTC))
 
     def test_fall_back_edge_fires_once(self):
         iv = Interval("a", "03:30", "07:00", True)
@@ -68,6 +69,32 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual(len(starts), 1)
         # prima aparitie (fold=0): 03:30 EEST = 00:30Z
         self.assertEqual(starts[0].at, datetime(2026, 10, 25, 0, 30, tzinfo=UTC))
+
+    def test_spring_forward_start_in_gap_stop_just_after(self):
+        iv = Interval("a", "03:30", "04:15", True)
+        edges = edges_between([iv], loc(2026, 3, 28, 12), loc(2026, 3, 29, 12), TZ)
+        self.assertEqual([(e.kind, e.at) for e in edges], [
+            ("start", datetime(2026, 3, 29, 1, 0, tzinfo=UTC)),
+            ("stop", datetime(2026, 3, 29, 1, 15, tzinfo=UTC)),
+        ])
+        at = datetime(2026, 3, 29, 1, 5, tzinfo=UTC)
+        self.assertEqual(active_interval([iv], at, TZ), iv)
+        self.assertEqual(interval_end(iv, at, TZ),
+                         datetime(2026, 3, 29, 1, 15, tzinfo=UTC))
+        # in zilele normale nu se schimba nimic
+        edges = edges_between([iv], loc(2026, 3, 29, 12), loc(2026, 3, 30, 12), TZ)
+        self.assertEqual([(e.kind, e.at) for e in edges], [
+            ("start", datetime(2026, 3, 30, 0, 30, tzinfo=UTC)),
+            ("stop", datetime(2026, 3, 30, 1, 15, tzinfo=UTC)),
+        ])
+
+    def test_spring_forward_both_in_gap_no_edges(self):
+        iv = Interval("a", "03:10", "03:50", True)
+        edges = edges_between([iv], loc(2026, 3, 28, 12), loc(2026, 3, 29, 12), TZ)
+        self.assertEqual(edges, [])
+        for h, m in ((0, 59), (1, 0), (1, 30)):
+            at = datetime(2026, 3, 29, h, m, tzinfo=UTC)
+            self.assertIsNone(active_interval([iv], at, TZ))
 
     def test_over_midnight_across_dst(self):
         iv = Interval("n", "22:00", "06:00", True)
