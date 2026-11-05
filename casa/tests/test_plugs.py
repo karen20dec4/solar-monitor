@@ -4,7 +4,7 @@ import unittest
 from concurrent.futures import Future
 
 from casa.devices import DeviceInfo
-from casa.plugs import FakeDriver, PlugError, PlugReading, PlugWorker
+from casa.plugs import FakeDriver, PlugError, PlugReading, PlugWorker, TinyTuyaDriver
 
 
 def _device():
@@ -195,6 +195,70 @@ class PlugWorkerTest(WorkerBase):
         self.assertTrue(f2.cancelled())
         self.assertEqual(d.calls[-1][0], "close")
         self.assertFalse(d.connected)
+
+
+
+class FakeTuyaDevice:
+    """Socket persistent tinytuya: fiecare cerere citeste URMATORUL mesaj din socket, nu neaparat raspunsul ei."""
+
+    def __init__(self, on=False):
+        self.on = on
+        self.pending = []
+        self.timeouts = []
+
+    def _full(self):
+        return {"dps": {"1": self.on, "9": 0}}
+
+    def status(self):
+        self.pending.append(self._full())
+        return self.pending.pop(0)
+
+    def set_value(self, dp, value):
+        self.on = bool(value)
+        self.pending.append({"dps": {"1": self.on}})     # raspunsul comenzii
+        self.pending.append({"dps": {"9": 0}})           # anunt asincron al prizei (countdown)
+        return self.pending.pop(0)
+
+    def receive(self):
+        return self.pending.pop(0) if self.pending else None
+
+    def set_socketTimeout(self, s):
+        self.timeouts.append(s)
+
+    def close(self):
+        pass
+
+
+class TinyTuyaDriverTest(unittest.TestCase):
+    def driver(self, dev):
+        d = TinyTuyaDriver("p", "192.168.1.158", "k", "3.4")
+        d._dev = dev
+        return d
+
+    def test_status_after_command_is_current_not_one_message_behind(self):
+        # Lumina Curte, 2026-11-05: dupa comanda, anuntul asincron decala raspunsurile cu unul,
+        # iar fiecare citire aducea starea de la citirea precedenta (5 s mai veche).
+        dev = FakeTuyaDevice(on=False)
+        drv = self.driver(dev)
+        self.assertEqual(drv.status()["1"], False)
+        drv.set_dp(1, True)
+        self.assertEqual(drv.status()["1"], True)
+        self.assertEqual(drv.status()["1"], True)
+        drv.set_dp(1, False)
+        self.assertEqual(drv.status()["1"], False)
+
+    def test_stale_buffered_error_does_not_fail_a_command(self):
+        dev = FakeTuyaDevice(on=False)
+        dev.pending.append({"Error": "vechi", "Err": "904"})
+        drv = self.driver(dev)
+        drv.set_dp(1, True)            # nu ridica PlugError din mesajul ramas in socket
+        self.assertTrue(dev.on)
+
+    def test_drain_restores_socket_timeout(self):
+        dev = FakeTuyaDevice()
+        drv = self.driver(dev)
+        drv.status()
+        self.assertEqual(dev.timeouts[-1], 5)
 
 
 if __name__ == "__main__":

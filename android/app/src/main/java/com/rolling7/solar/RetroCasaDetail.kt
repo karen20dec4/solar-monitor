@@ -602,6 +602,9 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
             }
             if (group != null) busy = busy - group
             onDone()
+            if (group == "power") {
+                if (r is CasaResult.Ok) CasaHaptics.confirm(context) else if (r is CasaResult.Error) CasaHaptics.reject(context)
+            }
             when (r) {
                 is CasaResult.Ok -> accept(r.value)
                 is CasaResult.Unauthorized -> lose(r)

@@ -546,7 +546,13 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   înainte să se termine o comandă poate sosi după răspunsul comenzii, cu starea veche (comutatorul revenea ~3 s, Living
   sus, 2026-11-05). `CasaFreshness` (`CasaModel.kt`) dă fiecărei sondări un bilet; răspunsul ei se folosește doar dacă
   între timp n-a început și nu s-a terminat nicio comandă. Orice cale nouă de comandă trebuie să apeleze
-  `commandStarted/Finished`. Log-ul de acces casa arată durata fiecărei cereri (`… 200 240 1.234s`).
+  `commandStarted/Finished`. Log-ul de acces casa arată durata fiecărei cereri (`… 200 240 1.234s`). **Vibrație
+  (v3.42):** `CasaHaptics` vibrează o dată (70 ms) când serverul confirmă comutarea, de două ori la eșec.
+- **Citiri vechi pe socketul persistent (reparat 2026-11-05):** tinytuya întoarce URMĂTORUL mesaj din socket, nu
+  răspunsul cererii; anunțurile nesolicitate ale prizei (countdown, putere) decalau răspunsurile cu unul, deci fiecare
+  citire la 5 s aducea starea citirii precedente și comutarea părea neexecutată ~5 s. `TinyTuyaDriver._drain` golește
+  socketul (timeout 0,05 s) înainte de fiecare `status()` și `set_dp()`. Măsurat după reparație pe Lumina Curte: starea
+  corectă la 0,2 s după comandă.
 - **Teste:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
   solar-monitor-casa -m unittest discover -s tests -v` (279 de teste; rulează după orice modificare în `casa/`, suita
   completă de mai multe ori: un eșec nereproductibil a apărut o dată în timpul editărilor).

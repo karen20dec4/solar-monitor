@@ -449,7 +449,13 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   `GET /plugs` that left before a command finished can land after the command's reply with the old state (the switch
   flipped back for ~3 s, Living sus, 2026-11-05). `CasaFreshness` (`CasaModel.kt`) gives each poll a ticket; its reply
   is used only if no command started or finished meanwhile. Any new command path must call `commandStarted/Finished`.
-  The casa access log shows each request's duration (`… 200 240 1.234s`).
+  The casa access log shows each request's duration (`… 200 240 1.234s`). **Haptics (v3.42):** `CasaHaptics` vibrates
+  once (70 ms) when the server confirms a switch, twice on failure (list, Simple card, plug detail).
+- **Stale reads on the persistent socket (fixed 2026-11-05):** tinytuya returns the NEXT message on the socket, not the
+  reply to the request; a plug's unsolicited pushes (countdown, power) shifted every reply by one, so each 5 s poll
+  returned the previous poll's state and a switch looked undone for ~5 s. `TinyTuyaDriver._drain` empties the socket
+  (0.05 s timeout) before every `status()` and `set_dp()`. Measured after the fix on Lumina Curte: correct state 0.2 s
+  after the command.
 - **Tests:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
   solar-monitor-casa -m unittest discover -s tests -v` (279 tests, run it after any change in `casa/`; run the full
   suite more than once, a non-reproducible failure was seen once during edits).

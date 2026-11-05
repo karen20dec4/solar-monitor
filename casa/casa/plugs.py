@@ -27,8 +27,19 @@ class PlugDriver(Protocol):
     def close(self) -> None: ...
 
 
+SOCKET_TIMEOUT_S = 5
+DRAIN_TIMEOUT_S = 0.05
+DRAIN_MAX = 20
+
+
 class TinyTuyaDriver:
-    """Conexiune persistenta la o priza prin tinytuya (TCP 6668)."""
+    """Conexiune persistenta la o priza prin tinytuya (TCP 6668).
+
+    Pe socketul persistent tinytuya intoarce URMATORUL mesaj primit, nu neaparat raspunsul cererii.
+    Priza trimite si mesaje nesolicitate (countdown, putere, raspunsuri intarziate), deci fara golirea
+    socketului inainte de fiecare cerere raspunsurile raman decalate cu unul: fiecare citire aducea
+    starea citirii precedente, adica 5 s mai veche (Lumina Curte, 2026-11-05).
+    """
 
     def __init__(self, dev_id: str, ip: Optional[str], local_key: Optional[str],
                  version: Optional[str]):
@@ -48,7 +59,7 @@ class TinyTuyaDriver:
                 self.dev_id, address=self.ip, local_key=self.local_key,
                 version=float(self.version), persist=True)
             dev.set_socketPersistent(True)
-            dev.set_socketTimeout(5)
+            dev.set_socketTimeout(SOCKET_TIMEOUT_S)
             dev.set_socketRetryLimit(1)
         except Exception as e:  # noqa: BLE001
             raise PlugError(f"init tinytuya: {e}") from e
@@ -59,8 +70,24 @@ class TinyTuyaDriver:
             raise PlugError("neconectat")
         return self._dev
 
+    def _drain(self, dev) -> None:
+        """Arunca mesajele ramase in socket (mai vechi decat raspunsul pe care il cerem acum)."""
+        try:
+            dev.set_socketTimeout(DRAIN_TIMEOUT_S)
+            for _ in range(DRAIN_MAX):
+                if dev.receive() is None:
+                    break
+        except Exception:  # noqa: BLE001 - o eroare reala apare oricum la cererea de dupa
+            pass
+        finally:
+            try:
+                dev.set_socketTimeout(SOCKET_TIMEOUT_S)
+            except Exception:  # noqa: BLE001
+                pass
+
     def status(self) -> dict:
         dev = self._need()
+        self._drain(dev)
         try:
             result = dev.status()
         except Exception as e:  # noqa: BLE001
@@ -74,6 +101,7 @@ class TinyTuyaDriver:
 
     def set_dp(self, dp: int, value) -> None:
         dev = self._need()
+        self._drain(dev)
         try:
             result = dev.set_value(dp, value)
         except Exception as e:  # noqa: BLE001

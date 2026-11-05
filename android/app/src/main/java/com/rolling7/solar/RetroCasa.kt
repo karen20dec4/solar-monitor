@@ -400,6 +400,7 @@ private fun CasaContent(
     var switchError by remember { mutableStateOf<String?>(null) }
     var errorStamp by remember { mutableLongStateOf(0L) }
     val scope = rememberCoroutineScope()
+    val hapticContext = LocalContext.current
     val plugsStale by remember { derivedStateOf { clock.value - lastGoodPlugsMs > PlugsStaleMs } }
 
     fun lose(usedToken: String, r: CasaResult<*>) {
@@ -458,11 +459,13 @@ private fun CasaContent(
             optimistic = optimistic - p.id
             when (r) {
                 is CasaResult.Ok -> {
+                    CasaHaptics.confirm(hapticContext)
                     plugs = plugs.map { if (it.id == r.value.id) r.value else it }
                     lastGoodPlugsMs = System.currentTimeMillis()
                 }
                 is CasaResult.Unauthorized -> lose(t, r)
                 is CasaResult.Error -> {
+                    CasaHaptics.reject(hapticContext)
                     switchError = r.message
                     val stamp = System.currentTimeMillis()
                     errorStamp = stamp
