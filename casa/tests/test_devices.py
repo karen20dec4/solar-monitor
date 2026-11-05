@@ -148,6 +148,25 @@ class StoreDevicesTest(unittest.TestCase):
         self.assertEqual(len(cm.records), 4)
 
 
+class HiddenDeviceTest(unittest.TestCase):
+    setUp = StoreDevicesTest.setUp
+    _dev = StoreDevicesTest._dev
+
+    def test_hidden_device_is_not_loaded(self):
+        save_devices(self.dir, [self._dev("a"), self._dev("b")])
+        with open(os.path.join(self.dir, "devices.local.json"), "w") as f:
+            json.dump({"b": {"hidden": True}, "a": {"hidden": False, "name": "Priza A"}}, f)
+        got = load_devices(self.dir)
+        self.assertEqual([(d.id, d.name) for d in got], [("a", "Priza A")])
+
+    def test_hidden_must_be_bool(self):
+        save_devices(self.dir, [self._dev("b")])
+        with open(os.path.join(self.dir, "devices.local.json"), "w") as f:
+            json.dump({"b": {"hidden": "da"}}, f)
+        with self.assertLogs("casa.devices", level="WARNING"):
+            self.assertEqual([d.id for d in load_devices(self.dir)], ["b"])
+
+
 class ApplyScanTest(unittest.TestCase):
     """Scanarea retelei pune IP-ul si protocolul prizelor in devices.local.json."""
     setUp = StoreDevicesTest.setUp

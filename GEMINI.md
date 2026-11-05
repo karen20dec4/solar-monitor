@@ -468,8 +468,18 @@ de dimineață (lista de mai jos). Release-ul v3.40 se construiește după recen
   poate și nu aduce date azi (SDK-ul abonează doar dispozitivele cu `set_up=True`, pe care casa nu îl setează). Fără
   rezervă prin cloud pentru comenzile prizelor: o priză care refuză conexiunea locală apare OFFLINE.
 - **Dispozitivele se încarcă o singură dată, la pornire** (`casa/casa/web.py`). După `login`/`sync`, o redenumire în
-  SmartLife sau o editare a lui `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "..."}}`;
-  o intrare greșită se sare cu avertisment în log) → `docker compose restart casa`.
+  SmartLife sau o editare a lui `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "...", "hidden": true}}`;
+  `hidden` scoate un dispozitiv din aplicație, ex. „Boiler Buc”, nefolosit, în sertar; o intrare greșită se sare cu
+  avertisment în log) → `docker compose restart casa`.
+- **Cele trei „WiFi Plug” (Boiler, Living sus, Priza cam Georgi) nu răspund la ARP** (2026-11-05): se anunță în rețea,
+  dar `ip neigh` arată FAILED, deci ping și TCP 6668 eșuează. O intrare statică (`ip neigh replace <ip> lladdr <mac> nud
+  permanent`) rezolvă. `deploy/tuya_arp.py` (pe host, root) ascultă ~25 s anunțurile Tuya, ia IP + MAC din cadrul Ethernet
+  și pune intrările; șterge una când MAC-ul trece pe alt IP sau nu mai e văzut 24 h (stare în `/var/lib/solar-tuya-arp/`).
+  Rulat de `deploy/solar-tuya-arp.timer` (la pornire + la 10 min); instalare: `cp deploy/solar-tuya-arp.{service,timer}
+  /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now solar-tuya-arp.timer`. Teste: `python3 -I -m
+  unittest discover -s deploy -p 'test_tuya_arp.py'`.
+- **Inching în firmware-ul prizei** (DP 44 `switch_inching`, setat în SmartLife): Bucatarie 25 min și Lumina Curte 30 min
+  sunt pornite **intenționat** (user, 2026-11-05). Acționează indiferent de casa, care nu atinge DP 44.
 - **Adăugarea unei prize/unui senzor nou:** (1) îl asociezi în SmartLife; (2) `scripts/casa-sync.sh` (= `sync`, apoi `scan`,
   apoi `docker compose restart casa`). `scan` rulează într-un container temporar cu `--network host` (anunțurile UDP ale
   prizelor pe 6666/6667/7000 nu ajung în rețeaua bridge), ascultă ~20 s și scrie în `devices.local.json` IP-ul și protocolul

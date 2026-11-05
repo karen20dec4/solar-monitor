@@ -110,9 +110,10 @@ def save_devices(data_dir: str, devices: list, raw_names: Optional[dict] = None,
 
 
 def _valid_local(over) -> bool:
-    """Intrare din devices.local.json: dict cu `ip`/`version`/`name` optionale, doar text."""
+    """Intrare din devices.local.json: dict cu `ip`/`version`/`name` optionale (text) si `hidden` (true/false)."""
     return isinstance(over, dict) and all(
-        isinstance(over[k], str) for k in ("ip", "version", "name") if k in over)
+        isinstance(over[k], str) for k in ("ip", "version", "name") if k in over) and (
+        isinstance(over.get("hidden", False), bool))
 
 
 def load_devices(data_dir: str) -> list:
@@ -149,6 +150,8 @@ def load_devices(data_dir: str) -> list:
             log.warning("%s: intrare gresita pentru %s (asteptat obiect cu ip/version/name text); o sar",
                         LOCAL_FILE, dev.id)
             over = None
+        if over and over.get("hidden"):
+            continue  # ascuns din aplicatie (ex. priza nefolosita, ramasa in contul Smart Life)
         for key in ("ip", "version", "name"):
             if over and over.get(key):
                 setattr(dev, key, over[key])

@@ -1,0 +1,13 @@
+[Unit]
+Description=Solar Monitor - intrari ARP statice pentru prizele Tuya (CASA) care nu raspund la ARP
+Documentation=file:/opt/solar-monitor/deploy/README-firewalld.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/solar-monitor/deploy/tuya_arp.py
+StateDirectory=solar-tuya-arp
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes

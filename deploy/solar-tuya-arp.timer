@@ -1,0 +1,10 @@
+[Unit]
+Description=Solar Monitor - reimprospateaza ARP-ul prizelor Tuya (la pornire si la 10 min)
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=10min
+Unit=solar-tuya-arp.service
+
+[Install]
+WantedBy=timers.target

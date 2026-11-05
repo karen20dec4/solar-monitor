@@ -375,8 +375,18 @@ morning steps (list below). Release v3.40 is built after the final review.**
   devices with `set_up=True`, which casa never sets). No cloud fallback for plug commands: a plug that refuses the local
   connection shows OFFLINE.
 - **Devices are loaded once, at boot** (`casa/casa/web.py`). After `login`/`sync`, a rename in SmartLife, or an edit of
-  `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "..."}}`; a malformed entry is skipped
-  with a warning in the log) → `docker compose restart casa`.
+  `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "...", "hidden": true}}`; `hidden` keeps a
+  device out of the app, e.g. "Boiler Buc", unused, in a drawer; a malformed entry is skipped with a warning in the log) →
+  `docker compose restart casa`.
+- **The three "WiFi Plug" units (Boiler, Living sus, Priza cam Georgi) do not answer ARP** (2026-11-05): they broadcast,
+  but `ip neigh` shows FAILED, so ping and TCP 6668 fail. A static entry (`ip neigh replace <ip> lladdr <mac> nud permanent`)
+  fixes it. `deploy/tuya_arp.py` (host, root) listens ~25 s for Tuya broadcasts, takes IP + MAC from the Ethernet frame and
+  sets those entries; it drops an entry when the MAC moves to another IP or is unseen for 24 h (state in
+  `/var/lib/solar-tuya-arp/`). Run by `deploy/solar-tuya-arp.timer` (boot + every 10 min); install:
+  `cp deploy/solar-tuya-arp.{service,timer} /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now
+  solar-tuya-arp.timer`. Tests: `python3 -I -m unittest discover -s deploy -p 'test_tuya_arp.py'`.
+- **Inching in the plug's own firmware** (DP 44 `switch_inching`, set in SmartLife): Bucatarie 25 min and Lumina Curte
+  30 min are on **on purpose** (user, 2026-11-05). They act regardless of casa, which leaves DP 44 alone.
 - **Adding a new plug/sensor:** (1) pair it in SmartLife; (2) `scripts/casa-sync.sh` (= `sync`, then `scan`, then
   `docker compose restart casa`). `scan` runs in a throwaway container with `--network host` (the plugs' UDP broadcasts on
   6666/6667/7000 never reach the bridge network), listens ~20 s and writes the IP and protocol of every plug in
