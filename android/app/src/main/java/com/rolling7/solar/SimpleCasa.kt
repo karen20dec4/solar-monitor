@@ -1,7 +1,9 @@
 package com.rolling7.solar
 
+import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
+import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,7 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -28,6 +30,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -40,7 +44,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -52,7 +58,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.view.WindowCompat
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -101,6 +109,12 @@ internal fun CasaForgetDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     )
 }
 
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 /**
  * Detaliul unei prize sau al unui senzor pe tema Simple: aceleasi ecrane Retro, pe tot ecranul, intr-un dialog.
  * Cat timp e deschis, cardul din spate nu mai interogheaza serverul.
@@ -108,13 +122,40 @@ internal fun CasaForgetDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 @Composable
 internal fun SimpleCasaDetailDialog(plugId: String?, sensorId: String?, onClose: () -> Unit) {
     if (plugId == null && sensorId == null) return
+    // Barele de sistem apartin ferestrei aplicatiei, nu dialogului: cat e deschis detaliul le facem de culoarea
+    // fundalului Retro (altfel se vede pagina Simple, deschisa la culoare, prin ele) si le readucem la inchidere.
+    val activityWindow = LocalContext.current.findActivity()?.window
+    val activityView = LocalView.current
+    DisposableEffect(activityWindow) {
+        if (activityWindow == null) return@DisposableEffect onDispose { }
+        val controller = WindowCompat.getInsetsController(activityWindow, activityView)
+        val oldStatus = activityWindow.statusBarColor
+        val oldNav = activityWindow.navigationBarColor
+        val oldLightStatus = controller.isAppearanceLightStatusBars
+        val oldLightNav = controller.isAppearanceLightNavigationBars
+        activityWindow.statusBarColor = RetroBackground.toArgb()
+        activityWindow.navigationBarColor = RetroBackground.toArgb()
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+        onDispose {
+            activityWindow.statusBarColor = oldStatus
+            activityWindow.navigationBarColor = oldNav
+            controller.isAppearanceLightStatusBars = oldLightStatus
+            controller.isAppearanceLightNavigationBars = oldLightNav
+        }
+    }
     Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
+        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            window?.setDimAmount(0f)
+        }
         Box(Modifier.fillMaxSize()) {
             RetroIndustrialBackdrop(Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().statusBarsPadding()) {
+            Box(Modifier.fillMaxSize().systemBarsPadding()) {
                 if (plugId != null) RetroPlugDetail(plugId, onClose) else RetroSensorDetail(sensorId!!, onClose)
             }
         }
@@ -253,6 +294,10 @@ private fun SimpleCasaCardContent(
     val clock = rememberCasaClock()
     val plugsStale by remember { derivedStateOf { clock.value - lastGoodPlugsMs > PlugsStaleMs } }
 
+    // La inchiderea detaliului sondarea reporneste: ceasul de dinainte ar arata o clipa "Astept date".
+    LaunchedEffect(paused) {
+        if (!paused && lastGoodPlugsMs != 0L) lastGoodPlugsMs = System.currentTimeMillis()
+    }
     // Un 401 sterge jetonul (daca el era cel respins); `rememberCasaToken` muta cardul pe parola.
     WhileVisibleEffect(token, paused) {
         if (paused) return@WhileVisibleEffect
@@ -362,7 +407,10 @@ private fun SimpleCasaPlugRow(
     onToggle: () -> Unit,
     onOpen: () -> Unit
 ) {
+    // Priza raportata offline primeste totusi comanda (serverul incearca sa se conecteze), ca pe pagina Retro:
+    // comutatorul se blocheaza doar la date vechi sau comanda in zbor; `usable` conduce doar afisarea W.
     val usable = plug.online && !stale
+    val canSwitch = !stale && !busy
     val badges = casaBadgeLines(plug, maxLines = 2)
     val power = plug.power
     val watts = if (usable && plug.metered && power != null) "${power.roundToInt()} W" else "--- W"
@@ -399,8 +447,8 @@ private fun SimpleCasaPlugRow(
         )
         Switch(
             checked = on,
-            onCheckedChange = { if (usable && !busy) onToggle() },
-            enabled = usable && !busy,
+            onCheckedChange = { if (canSwitch) onToggle() },
+            enabled = canSwitch,
             modifier = Modifier.semantics { contentDescription = "${plug.name}: ${if (on) "opreste" else "porneste"}" }
         )
     }
