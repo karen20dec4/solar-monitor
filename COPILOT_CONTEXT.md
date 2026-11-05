@@ -187,6 +187,13 @@ Validat dupa mutarea pe serverul HP: la consum din baterie, `battery_current=-8.
 - Lanț rețea (dublu NAT): `https://vyra.go.ro:31443` → router ZTE poartă, alimentat din Enel, deci internetul cade la pană (§13.77) (`31443→192.168.100.210:443`)
   → TP-Link (`443→192.168.1.199:443`) → `caddy:443` → `grafana:3000`.
   - Pe ZTE mai există: `31422→22` (SSH, funcțional) și `31480→80` (HTTP, rezervă).
+  - **Routerul TP-Link al casei** (LAN `192.168.1.0/24`, gateway `192.168.1.1`): **Archer A6 v2.0**, firmware 1.3.7 Build
+    20220613. Interfață web `http://192.168.1.1/` (doar parolă, fără user). **Datele de acces stau în `.env` pe server**
+    (`ROUTER_URL`, `ROUTER_PASSWORD`; `.env` e gitignored, mod 600) — niciodată în git sau pe Telegram. Din script:
+    biblioteca Python `tplinkrouterc6u` (protocolul criptat al interfeței), ex. `r.request("admin/dhcps?form=reservation",
+    "operation=load")`. Rezervări DHCP (2026-11-05): `.199` server beci, `.104` Priza cam Georgi, `.204` Boiler,
+    `.244` Living sus, `.185` Bucatarie, `.158` Lumina Curte. `login.html` are comentat un script de depanare spre
+    `192.168.1.101:1070` (rămas din firmware, inactiv).
 - Grafana: `GF_SERVER_ROOT_URL=http://...`→ acum `https://vyra.go.ro:31443/`, `GF_SECURITY_DISABLE_GRAVATAR=true`.
 - Root CA Caddy extras în `caddy/vyra-root-ca.crt` (de instalat pe telefon ca să nu mai dea warning).
 - ⚠️ Acces local neschimbat: `http://192.168.1.199:3000`. Doar 443→Caddy e expus pe WAN (8086/8088 NU).
