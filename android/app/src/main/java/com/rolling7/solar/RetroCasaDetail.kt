@@ -518,6 +518,7 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     val clock = rememberCasaClock()
     val lock = remember { Mutex() }
+    val freshness = remember { CasaFreshness() }
 
     var plug by remember { mutableStateOf<CasaPlug?>(null) }
     var position by remember { mutableStateOf(0 to 0) }
@@ -562,6 +563,7 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
 
     WhileVisibleEffect(token) {
         while (true) {
+            val ticket = freshness.beginPoll()
             val r = withContext(Dispatchers.IO) { CasaRepository.plugs(token) }
             when (r) {
                 is CasaResult.Ok -> {
@@ -573,8 +575,9 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
                     } else {
                         missing = false
                         position = (i + 1) to r.value.size
-                        // Nu suprascriem vederea proaspata primita ca raspuns la o comanda aflata in zbor.
-                        if (!lock.isLocked) accept(r.value[i])
+                        // Nu suprascriem vederea primita ca raspuns la o comanda cu o sondare pornita
+                        // inainte ca acea comanda sa se termine (ar aduce starea veche).
+                        if (freshness.isFresh(ticket)) accept(r.value[i])
                     }
                 }
                 is CasaResult.Unauthorized -> {
@@ -590,8 +593,13 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
     /** Trimite o comanda; comenzile unei prize se succed una dupa alta (serverul limiteaza ~1/s). */
     fun command(group: String? = null, onDone: () -> Unit = {}, call: (String) -> CasaResult<CasaPlug>) {
         if (group != null) busy = busy + group
+        freshness.commandStarted()
         scope.launch {
-            val r = lock.withLock { withContext(Dispatchers.IO) { call(token) } }
+            val r = try {
+                lock.withLock { withContext(Dispatchers.IO) { call(token) } }
+            } finally {
+                freshness.commandFinished()
+            }
             if (group != null) busy = busy - group
             onDone()
             when (r) {

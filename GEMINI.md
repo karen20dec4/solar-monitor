@@ -537,14 +537,18 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   `voltage`/`current` = media. Le scrie un singur fir de flush, deci un InfluxDB căzut nu întârzie comenzile. Energia azi din API = integrala lui `power` de la miezul
   nopții local. Grafana: rândul „🏠 Casa: prize si senzori" (panourile 142–147: putere prize, prize pornite,
   temperatură/umiditate senzori, senzori acum).
-- **Aplicația (v3.40, versionCode 44):** pagina SISTEM din Retro are comutatorul SISTEM | CASA; CASA = 5 plăci de priză +
+- **Aplicația (v3.40, versionCode 44; v3.41/45 repară sondarea veche):** pagina SISTEM din Retro are comutatorul SISTEM | CASA; CASA = 5 plăci de priză +
   senzori, atingerea deschide detaliul prizei (comutator, countdown 30M/1H/2H/6H/altă durată, programări, inching) sau al
   senzorului (grafice 2h/1d/7d). Tema Simple: un card CASA. SETARI: rândul „ACCES CASA" cu „UITA TELEFONUL" (șterge doar
   token-ul local; serverul ține telefonul până la `revoke`). Placa de parolă apare la prima deschidere. Timeout comandă 50 s;
   comenzile rămân active chiar dacă priza pare offline. Fișiere: `CasaModel.kt`, `CasaRepository.kt`, `CasaAccess.kt`,
-  `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt`.
+  `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt`. **Ordinea sondare/comandă (v3.41):** un `GET /plugs` plecat
+  înainte să se termine o comandă poate sosi după răspunsul comenzii, cu starea veche (comutatorul revenea ~3 s, Living
+  sus, 2026-11-05). `CasaFreshness` (`CasaModel.kt`) dă fiecărei sondări un bilet; răspunsul ei se folosește doar dacă
+  între timp n-a început și nu s-a terminat nicio comandă. Orice cale nouă de comandă trebuie să apeleze
+  `commandStarted/Finished`. Log-ul de acces casa arată durata fiecărei cereri (`… 200 240 1.234s`).
 - **Teste:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
-  solar-monitor-casa -m unittest discover -s tests -v` (264 de teste; rulează după orice modificare în `casa/`, suita
+  solar-monitor-casa -m unittest discover -s tests -v` (279 de teste; rulează după orice modificare în `casa/`, suita
   completă de mai multe ori: un eșec nereproductibil a apărut o dată în timpul editărilor).
 - **Pașii de punere în funcțiune:** făcute 2026-11-05: login + `sync`, mod real, toate prizele online, parola, timerul ARP.
   Rămân: (1) rezervări DHCP în router pentru cele 5 IP-uri; (2) confirmarea unității curentului cu un consumator pornit

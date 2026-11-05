@@ -257,6 +257,7 @@ private fun SimpleCasaCardContent(
     var lastGoodPlugsMs by remember { mutableLongStateOf(0L) }
     // Starea dorita de utilizator pana raspunde priza: id -> pornit?
     var optimistic by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    val freshness = remember { CasaFreshness() }
     var switchError by remember { mutableStateOf<String?>(null) }
     var errorStamp by remember { mutableLongStateOf(0L) }
     val scope = rememberCoroutineScope()
@@ -271,10 +272,12 @@ private fun SimpleCasaCardContent(
     WhileVisibleEffect(token, paused) {
         if (paused) return@WhileVisibleEffect
         while (true) {
+            val ticket = freshness.beginPoll()
             val r = withContext(Dispatchers.IO) { CasaRepository.plugs(token) }
             when (r) {
                 is CasaResult.Ok -> {
-                    plugs = r.value
+                    // o sondare pornita inainte de sfarsitul unei comenzi aduce starea veche
+                    if (freshness.isFresh(ticket)) plugs = r.value
                     lastGoodPlugsMs = System.currentTimeMillis()
                 }
                 is CasaResult.Unauthorized -> {
@@ -306,8 +309,13 @@ private fun SimpleCasaCardContent(
         if (p.id in optimistic) return
         val target = !(optimistic[p.id] ?: p.on)
         optimistic = optimistic + (p.id to target)
+        freshness.commandStarted()
         scope.launch {
-            val r = withContext(Dispatchers.IO) { CasaRepository.switch(token, p.id, target) }
+            val r = try {
+                withContext(Dispatchers.IO) { CasaRepository.switch(token, p.id, target) }
+            } finally {
+                freshness.commandFinished()
+            }
             optimistic = optimistic - p.id
             when (r) {
                 is CasaResult.Ok -> {

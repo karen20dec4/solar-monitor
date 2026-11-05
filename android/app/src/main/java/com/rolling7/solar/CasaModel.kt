@@ -210,3 +210,29 @@ fun plugBadges(p: CasaPlug): List<String> {
     }
     return out
 }
+
+/**
+ * Ordinea dintre sondarea `GET /plugs` si comenzi. O sondare pornita inainte ca o comanda sa se termine
+ * poate sosi DUPA raspunsul comenzii, cu starea veche (serverul raspunde la GET cat priza inca executa):
+ * aplicatia arata atunci 2-3 s starea dinainte (Living sus, 2026-11-05). Sondarea isi ia un bilet la
+ * plecare; raspunsul ei se foloseste doar daca intre timp n-a inceput/terminat nicio comanda si nu e
+ * nicio comanda in zbor. Apelat doar din firul principal (Compose).
+ */
+class CasaFreshness {
+    private var generation = 0L
+    private var inFlight = 0
+
+    fun beginPoll(): Long = generation
+
+    fun commandStarted() {
+        inFlight++
+        generation++
+    }
+
+    fun commandFinished() {
+        if (inFlight > 0) inFlight--
+        generation++
+    }
+
+    fun isFresh(ticket: Long): Boolean = inFlight == 0 && ticket == generation
+}

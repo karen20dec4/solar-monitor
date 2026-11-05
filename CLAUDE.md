@@ -441,13 +441,17 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   change** to both buckets (not 60 s means); plug history is per minute: `on`/`online` = minimum, `power`/`voltage`/
   `current` = mean. Written by one flusher thread, so a down InfluxDB never delays plug commands. The API energy today = integral of `power` since local midnight.
   Grafana: row "🏠 Casa: prize si senzori" (panels 142–147: plug power, plugs on, sensor temperature/humidity, sensors now).
-- **App (v3.40, versionCode 44):** Retro SISTEM page has a SISTEM | CASA selector; CASA = 5 plug plates + sensors, tap
+- **App (v3.40, versionCode 44; v3.41/45 fixes the stale poll):** Retro SISTEM page has a SISTEM | CASA selector; CASA = 5 plug plates + sensors, tap
   opens plug detail (switch, countdown 30M/1H/2H/6H/other, schedules, inching) or sensor detail (2h/1d/7d charts). Simple
   theme: a CASA card. SETARI: row "ACCES CASA" with "UITA TELEFONUL" (deletes only the local token; the server keeps the phone until `revoke`). The password plate shows on first open.
   Command timeout 50 s; commands stay enabled when a plug looks offline. Files: `CasaModel.kt`, `CasaRepository.kt`,
-  `CasaAccess.kt`, `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt`.
+  `CasaAccess.kt`, `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt`. **Poll vs. command order (v3.41):** a
+  `GET /plugs` that left before a command finished can land after the command's reply with the old state (the switch
+  flipped back for ~3 s, Living sus, 2026-11-05). `CasaFreshness` (`CasaModel.kt`) gives each poll a ticket; its reply
+  is used only if no command started or finished meanwhile. Any new command path must call `commandStarted/Finished`.
+  The casa access log shows each request's duration (`… 200 240 1.234s`).
 - **Tests:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
-  solar-monitor-casa -m unittest discover -s tests -v` (264 tests, run it after any change in `casa/`; run the full
+  solar-monitor-casa -m unittest discover -s tests -v` (279 tests, run it after any change in `casa/`; run the full
   suite more than once, a non-reproducible failure was seen once during edits).
 - **Go-live steps:** done 2026-11-05: login + `sync`, real mode, every plug online, password, ARP timer. Left: (1) DHCP
   reservations on the router for the 5 plug IPs; (2) confirm the current unit with a load on (Tuya mA / 1000); (5) register the phones (Note 9, S20 FE, S26) from the app and check `phones`; (6) live tests of
