@@ -68,9 +68,10 @@ Forma exactă a câmpurilor e în `casa/casa/web.py` și `casa/casa/controller.p
 
 **Priză/senzor nou sau schimbat:** dispozitivele se încarcă o singură dată, la pornire; după `login`/`sync`, o redenumire în
 SmartLife sau o editare a `casa/data/devices.local.json` → `docker compose restart casa`. Procedura „Adăugare priză/senzor nou":
-asociezi în SmartLife → `docker exec -it solar-casa python -m casa sync` → dacă IP-ul prizei nu e cunoscut, îl pui (cu `version`)
-în `devices.local.json` (IP-ul din lista DHCP a routerului după MAC, plus rezervare DHCP) → `docker compose restart casa` →
-apare în aplicație, fără APK nou. Pagina CASA din Retro e făcută pentru cel mult 5 prize și 3 senzori. Detalii: `CLAUDE.md` §„CASA".
+asociezi în SmartLife → `scripts/casa-sync.sh` (`sync` + `scan` cu `--network host`, care scrie IP-ul și protocolul prizelor
+în `devices.local.json`, + `docker compose restart casa`; `--scan-only` dacă doar s-a schimbat un IP) → rezervare DHCP pentru IP-ul
+nou → apare în aplicație, fără APK nou. Scanarea are nevoie de regulile firewalld din zona `public` (UDP 6666/6667/7000, doar
+`192.168.1.0/24`). Pagina CASA din Retro e făcută pentru cel mult 5 prize și 3 senzori. Detalii: `CLAUDE.md` §„CASA".
 
 ### Ce bucket alegi pentru un interval
 

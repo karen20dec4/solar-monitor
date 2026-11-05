@@ -2,14 +2,16 @@
 import argparse
 import getpass
 import os
+import shutil
 import sys
+import tempfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .auth import Auth
 from .cloud import CloudSession, LoginFailed
 from .config import Config
-from .devices import DeviceInfo, load_devices, save_devices
+from .devices import DeviceInfo, apply_scan, load_devices, save_devices
 from .notify import make_notify
 from .store import JsonStore
 
@@ -63,12 +65,13 @@ def _cloud(cfg: Config) -> CloudSession:
 
 
 def _print_devices(cfg: Config) -> None:
-    """Tabel fara chei locale: nume, tip, id, IP cunoscut, DP de masurare."""
+    """Tabel fara chei locale: nume, tip, id, IP si protocol, DP de masurare."""
     devices = load_devices(cfg.data_dir)
-    print(f"{'NUME':<22}{'TIP':<8}{'ID':<26}{'IP':<5}{'MASURAT'}")
+    print(f"{'NUME':<22}{'TIP':<8}{'ID':<26}{'IP':<20}{'MASURAT'}")
     for d in devices:
         metered = d.kind == "plug" and "power" in d.dps
-        print(f"{d.name:<22}{d.kind:<8}{d.id:<26}{'da' if d.ip else 'nu':<5}{'da' if metered else 'nu'}")
+        where = f"{d.ip} ({d.version})" if d.ip else ("-" if d.kind != "plug" else "NECUNOSCUT")
+        print(f"{d.name:<22}{d.kind:<8}{d.id:<26}{where:<20}{'da' if metered else 'nu'}")
     print(f"{len(devices)} dispozitive.")
 
 
@@ -97,6 +100,45 @@ def _cmd_sync(args, cfg: Config) -> int:
         print(f"Eroare: sincronizare esuata ({type(e).__name__}). Verifica reteaua si sesiunea.",
               file=sys.stderr)
         return 1
+    _print_devices(cfg)
+    return 0
+
+
+def _discover() -> dict:
+    """Asculta anunturile UDP ale prizelor din LAN (6666/6667/7000). Merge doar cu `--network host`."""
+    import tinytuya
+    old, tmp = os.getcwd(), tempfile.mkdtemp()
+    os.chdir(tmp)  # tinytuya citeste devices.json din directorul curent; sa nu-l vada pe al nostru (chei)
+    try:
+        raw = tinytuya.deviceScan(verbose=False, maxretry=None, color=False, poll=False, byID=True)
+    finally:
+        os.chdir(old)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {k: {"ip": v.get("ip"), "version": v.get("version")} for k, v in raw.items() if isinstance(v, dict)}
+
+
+def _cmd_scan(args, cfg: Config) -> int:
+    if not any(d.kind == "plug" for d in load_devices(cfg.data_dir)):
+        print("Nicio priza in devices.json: ruleaza intai `python -m casa sync`.", file=sys.stderr)
+        return 1
+    print("Ascult prizele din retea (~20 s)...")
+    found = _discover()
+    if not found:
+        print("Nicio priza nu s-a anuntat. Comanda trebuie rulata cu `docker run --network host` "
+              "(scripts/casa-sync.sh), iar firewall-ul trebuie sa lase UDP 6666/6667/7000 din LAN.",
+              file=sys.stderr)
+        return 1
+    try:
+        changes, unknown = apply_scan(cfg.data_dir, found)
+    except ValueError as e:
+        print(f"Eroare: {e}", file=sys.stderr)
+        return 1
+    for name, ip, version in changes:
+        print(f"Actualizat: {name} -> {ip} (protocol {version})")
+    for dev_id, ip in unknown:
+        print(f"Necunoscut: {dev_id} la {ip} (nu e in devices.json; ruleaza sync daca e o priza noua din Smart Life)")
+    if not changes:
+        print("Nicio schimbare: IP-urile stiute sunt corecte.")
     _print_devices(cfg)
     return 0
 
@@ -162,6 +204,8 @@ def main(argv=None) -> int:
     p.set_defaults(fn=_cmd_login)
     p = sub.add_parser("sync", help="descarca dispozitivele si cheile locale in devices.json")
     p.set_defaults(fn=_cmd_sync)
+    p = sub.add_parser("scan", help="gaseste IP-ul prizelor in LAN (doar cu --network host: scripts/casa-sync.sh)")
+    p.set_defaults(fn=_cmd_scan)
     p = sub.add_parser("demo-devices", help="scrie devices.json de demonstratie (CASA_DEMO=1), fara chei")
     p.add_argument("--force", action="store_true", help="suprascrie si un devices.json cu chei locale")
     p.set_defaults(fn=_cmd_demo_devices)

@@ -4,7 +4,7 @@ import stat
 import tempfile
 import unittest
 
-from casa.devices import (DeviceInfo, clean_name, dp_map_from_strategy,
+from casa.devices import (DeviceInfo, apply_scan, clean_name, dp_map_from_strategy,
                           load_devices, save_devices)
 
 
@@ -146,6 +146,64 @@ class StoreDevicesTest(unittest.TestCase):
             got = load_devices(self.dir)
         self.assertEqual([d.id for d in got], ["bun"])
         self.assertEqual(len(cm.records), 4)
+
+
+class ApplyScanTest(unittest.TestCase):
+    """Scanarea retelei pune IP-ul si protocolul prizelor in devices.local.json."""
+    setUp = StoreDevicesTest.setUp
+    _dev = StoreDevicesTest._dev
+
+    def _local(self):
+        with open(os.path.join(self.dir, "devices.local.json")) as f:
+            return json.load(f)
+
+    def test_new_plug_ip_written_and_loaded(self):
+        save_devices(self.dir, [self._dev("noua", name="Priza noua")])
+        changes, unknown = apply_scan(self.dir, {"noua": {"ip": "192.168.1.77", "version": "3.4"}})
+        self.assertEqual(changes, [("Priza noua", "192.168.1.77", "3.4")])
+        self.assertEqual(unknown, [])
+        self.assertEqual(self._local(), {"noua": {"ip": "192.168.1.77", "version": "3.4"}})
+        path = os.path.join(self.dir, "devices.local.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        dev = load_devices(self.dir)[0]
+        self.assertEqual((dev.ip, dev.version), ("192.168.1.77", "3.4"))
+
+    def test_known_ip_not_rewritten(self):
+        save_devices(self.dir, [self._dev("bf5cc0f2db15b9eab2a0zy")])  # default .244 / 3.3
+        changes, _ = apply_scan(self.dir, {"bf5cc0f2db15b9eab2a0zy": {"ip": "192.168.1.244", "version": "3.3"}})
+        self.assertEqual(changes, [])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "devices.local.json")))
+
+    def test_changed_ip_keeps_name_override(self):
+        save_devices(self.dir, [self._dev("bf5cc0f2db15b9eab2a0zy")])
+        with open(os.path.join(self.dir, "devices.local.json"), "w") as f:
+            json.dump({"bf5cc0f2db15b9eab2a0zy": {"name": "Boiler mare", "ip": "192.168.1.244"}}, f)
+        changes, _ = apply_scan(self.dir, {"bf5cc0f2db15b9eab2a0zy": {"ip": "192.168.1.50", "version": "3.3"}})
+        self.assertEqual(changes, [("Boiler mare", "192.168.1.50", "3.3")])
+        self.assertEqual(self._local()["bf5cc0f2db15b9eab2a0zy"],
+                         {"name": "Boiler mare", "ip": "192.168.1.50", "version": "3.3"})
+
+    def test_unknown_device_reported_not_written(self):
+        save_devices(self.dir, [self._dev("bf5cc0f2db15b9eab2a0zy")])
+        changes, unknown = apply_scan(self.dir, {"strain": {"ip": "192.168.1.9", "version": "3.3"},
+                                                 "bf5cc0f2db15b9eab2a0zy": {"ip": "192.168.1.244", "version": "3.3"}})
+        self.assertEqual((changes, unknown), ([], [("strain", "192.168.1.9")]))
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "devices.local.json")))
+
+    def test_sensor_and_bad_entries_ignored(self):
+        save_devices(self.dir, [self._dev("senzor", kind="sensor"), self._dev("p")])
+        changes, unknown = apply_scan(self.dir, {"senzor": {"ip": "192.168.1.5", "version": "3.3"},
+                                                 "p": {"ip": None, "version": "3.3"}})
+        self.assertEqual((changes, unknown), ([], []))
+
+    def test_local_file_not_an_object_is_left_alone(self):
+        save_devices(self.dir, [self._dev("p")])
+        with open(os.path.join(self.dir, "devices.local.json"), "w") as f:
+            json.dump(["gresit"], f)
+        with self.assertLogs("casa.devices", level="WARNING"):
+            with self.assertRaises(ValueError):
+                apply_scan(self.dir, {"p": {"ip": "192.168.1.5", "version": "3.3"}})
+        self.assertEqual(self._local(), ["gresit"])
 
 
 if __name__ == "__main__":

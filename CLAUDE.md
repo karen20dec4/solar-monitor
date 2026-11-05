@@ -377,10 +377,13 @@ morning steps (list below). Release v3.40 is built after the final review.**
 - **Devices are loaded once, at boot** (`casa/casa/web.py`). After `login`/`sync`, a rename in SmartLife, or an edit of
   `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "..."}}`; a malformed entry is skipped
   with a warning in the log) → `docker compose restart casa`.
-- **Adding a new plug/sensor:** (1) pair it in SmartLife; (2) `docker exec -it solar-casa python -m casa sync`; (3) if the
-  plug's IP is not known, put it (and `version`) in `casa/data/devices.local.json` (IP from the router's DHCP list by MAC,
-  plus a DHCP reservation); (4) `docker compose restart casa`. It appears in the app, no new APK. The Retro CASA page is laid
-  out for **≤ 5 plugs and ≤ 3 sensors**.
+- **Adding a new plug/sensor:** (1) pair it in SmartLife; (2) `scripts/casa-sync.sh` (= `sync`, then `scan`, then
+  `docker compose restart casa`). `scan` runs in a throwaway container with `--network host` (the plugs' UDP broadcasts on
+  6666/6667/7000 never reach the bridge network), listens ~20 s and writes the IP and protocol of every plug in
+  `devices.json` whose address differs into `devices.local.json` (a hand-set `name` stays); devices not in `devices.json`
+  are listed as "Necunoscut". `--scan-only` skips `sync` (a plug changed its IP). firewalld zone `public` has three rich rules
+  for this, **LAN only** (`192.168.1.0/24`, UDP 6666, 6667, 7000; user approval 2026-11-05). Then add a DHCP reservation
+  for the new IP. It appears in the app, no new APK. The Retro CASA page is laid out for **≤ 5 plugs and ≤ 3 sensors**.
 - **Route:** Caddy `handle_path /solar/casa/*` → `casa:8100`, placed **before** `/solar/*`. `request_body max_size 16KB`,
   `request_buffers 20KB` (must stay larger than max_size; Flask `MAX_BODY_BYTES` 16000 must stay ≤ max_size),
   read/write timeouts 60 s (a command takes ≈ 25 s typical, 45 s theoretical worst case; the app waits 50 s), `header_up X-Forwarded-For {remote_host}`
@@ -395,7 +398,8 @@ morning steps (list below). Release v3.40 is built after the final review.**
   `login [user_code]` (QR login with Smart Life: Eu > Setari > Cont si securitate > User Code, then scan the QR in the
   terminal), `sync` (refresh devices + local keys into `devices.json`), `set-password [--stdin]` (asked twice, never in
   argv; changing it does not log phones out), `phones` (registered phones), `revoke <phone_id>`,
-  `demo-devices [--force]` (fake `devices.json` for `CASA_DEMO=1`; refuses to overwrite real keys without `--force`).
+  `demo-devices [--force]` (fake `devices.json` for `CASA_DEMO=1`; refuses to overwrite real keys without `--force`),
+  `scan` (plug IPs from the LAN; only useful with `--network host`, so run it through `scripts/casa-sync.sh`).
 - **Data dir `casa/data/`** (gitignored, mounted at `/data`, files mode 600): `devices.json` (**local keys**),
   `cloud_session.json` (**cloud session**), `auth.json` (password hash + token hashes), `state.json` (schedules,
   countdowns, inching; real mode) / `state.demo.json` (demo mode, carries a demo marker; real mode **refuses** a

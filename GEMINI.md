@@ -470,10 +470,13 @@ de dimineață (lista de mai jos). Release-ul v3.40 se construiește după recen
 - **Dispozitivele se încarcă o singură dată, la pornire** (`casa/casa/web.py`). După `login`/`sync`, o redenumire în
   SmartLife sau o editare a lui `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "..."}}`;
   o intrare greșită se sare cu avertisment în log) → `docker compose restart casa`.
-- **Adăugarea unei prize/unui senzor nou:** (1) îl asociezi în SmartLife; (2) `docker exec -it solar-casa python -m casa
-  sync`; (3) dacă IP-ul prizei nu se cunoaște, îl pui (și `version`) în `casa/data/devices.local.json` (IP-ul din lista DHCP
-  a routerului după MAC, plus rezervare DHCP); (4) `docker compose restart casa`. Apare în aplicație, fără APK nou. Pagina
-  CASA din Retro e făcută pentru **cel mult 5 prize și 3 senzori**.
+- **Adăugarea unei prize/unui senzor nou:** (1) îl asociezi în SmartLife; (2) `scripts/casa-sync.sh` (= `sync`, apoi `scan`,
+  apoi `docker compose restart casa`). `scan` rulează într-un container temporar cu `--network host` (anunțurile UDP ale
+  prizelor pe 6666/6667/7000 nu ajung în rețeaua bridge), ascultă ~20 s și scrie în `devices.local.json` IP-ul și protocolul
+  fiecărei prize din `devices.json` a cărei adresă diferă (un `name` pus de mână rămâne); ce nu e în `devices.json` apare ca
+  „Necunoscut". `--scan-only` sare peste `sync` (o priză și-a schimbat IP-ul). În firewalld, zona `public` are trei reguli rich
+  pentru asta, **doar din LAN** (`192.168.1.0/24`, UDP 6666, 6667, 7000; aprobate de user 2026-11-05). Apoi rezervare DHCP
+  pentru IP-ul nou. Apare în aplicație, fără APK nou. Pagina CASA din Retro e făcută pentru **cel mult 5 prize și 3 senzori**.
 - **Rută:** Caddy `handle_path /solar/casa/*` → `casa:8100`, pusă **înaintea** lui `/solar/*`. `request_body max_size 16KB`,
   `request_buffers 20KB` (trebuie să rămână mai mare decât max_size; `MAX_BODY_BYTES` 16000 din Flask rămâne ≤ max_size),
   timeout citire/scriere 60 s (o comandă durează ≈ 25 s în mod obișnuit, 45 s în cel mai rău caz teoretic; aplicația așteaptă 50 s), `header_up X-Forwarded-For
@@ -488,7 +491,7 @@ de dimineață (lista de mai jos). Release-ul v3.40 se construiește după recen
   terminal), `sync` (reîmprospătează dispozitivele și cheile locale în `devices.json`), `set-password [--stdin]` (se cere
   de două ori, niciodată în argv; schimbarea nu deconectează telefoanele), `phones` (telefoanele înregistrate),
   `revoke <phone_id>`, `demo-devices [--force]` (`devices.json` fals pentru `CASA_DEMO=1`; refuză să suprascrie chei reale
-  fără `--force`).
+  fără `--force`), `scan` (IP-urile prizelor din LAN; merge doar cu `--network host`, deci prin `scripts/casa-sync.sh`).
 - **Directorul de date `casa/data/`** (ignorat de git, montat la `/data`, fișiere cu mod 600): `devices.json` (**chei
   locale**), `cloud_session.json` (**sesiunea cloud**), `auth.json` (hash de parolă + hash-uri de token), `state.json`
   (programări, countdown, inching; mod real) / `state.demo.json` (mod demo, poartă un marcaj demo; modul real **refuză** o

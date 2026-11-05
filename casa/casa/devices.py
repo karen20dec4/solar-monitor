@@ -153,3 +153,39 @@ def load_devices(data_dir: str) -> list:
                 setattr(dev, key, over[key])
         result.append(dev)
     return result
+
+
+def apply_scan(data_dir: str, found: dict) -> tuple:
+    """Scrie in devices.local.json IP-ul si protocolul gasite la scanarea retelei pentru prizele din devices.json.
+
+    `found`: {id Tuya: {"ip": ..., "version": ...}} (din `tinytuya.deviceScan(byID=True)`). Se scrie doar
+    ce difera de ce stie deja `load_devices`; numele pus de mana in devices.local.json ramane.
+    Intoarce (schimbari [(nume, ip, protocol)], necunoscute [(id, ip)] care lipsesc din devices.json).
+    """
+    devices = {d.id: d for d in load_devices(data_dir)}
+    updates, changes, unknown = {}, [], []
+    for dev_id, info in sorted(found.items()):
+        ip = info.get("ip") if isinstance(info, dict) else None
+        if not isinstance(ip, str) or not ip:
+            continue
+        version = info.get("version")
+        version = str(version) if version else None
+        dev = devices.get(dev_id)
+        if dev is None:
+            unknown.append((dev_id, ip))
+            continue
+        if dev.kind != "plug" or (dev.ip == ip and (version is None or dev.version == version)):
+            continue
+        updates[dev_id] = {"ip": ip, **({"version": version} if version else {})}
+        changes.append((dev.name, ip, version or dev.version))
+    if updates:
+        def merge(local):
+            if not isinstance(local, dict):
+                raise ValueError(f"{LOCAL_FILE} nu e un obiect JSON; nu il modific")
+            for dev_id, upd in updates.items():
+                entry = local.get(dev_id)
+                entry = entry if _valid_local(entry) else {}
+                entry.update(upd)
+                local[dev_id] = entry
+        JsonStore(os.path.join(data_dir, LOCAL_FILE)).update(merge, {})
+    return changes, unknown

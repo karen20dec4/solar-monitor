@@ -103,6 +103,21 @@ STATE_DIR=/tmp/wd NTFY_BASE=http://127.0.0.1:9 PROBE_PORT=9999 deploy/solar-watc
 STATE_DIR=/tmp/wd NTFY_BASE=http://127.0.0.1:9 MAX_AGE_S=0     deploy/solar-watchdog.sh  # date vechi
 ```
 
+## 5. Descoperirea prizelor Tuya (CASA, 2026-11-05)
+
+Aprobat de user: zona `public` lasa sa intre anunturile UDP ale prizelor Tuya, **doar din LAN**:
+
+```bash
+for p in 6666 6667 7000; do
+  r="rule family=\"ipv4\" source address=\"192.168.1.0/24\" port port=\"$p\" protocol=\"udp\" accept"
+  firewall-cmd --zone=public --add-rich-rule="$r" && firewall-cmd --permanent --zone=public --add-rich-rule="$r"
+done
+```
+
+Adaugate runtime + permanent, fara `--reload` (vezi mai sus de ce un restart de firewalld strica Docker). Pe porturile
+astea asculta ceva doar cat ruleaza `scripts/casa-sync.sh` (~20 s, container temporar cu `--network host`); comenzile spre
+prize sunt TCP 6668 iesite din server si nu au nevoie de nicio regula. Verificare: `firewall-cmd --zone=public --list-rich-rules`.
+
 ## Diagnostic rapid daca reapare "astept date"
 
 ```bash

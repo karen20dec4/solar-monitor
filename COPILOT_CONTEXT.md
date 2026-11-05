@@ -2100,7 +2100,12 @@ READ-ONLY, nimic din `collector/` sau `bms/` nu s-a schimbat.
   din cloud la 5 min; starea e `ok` doar dacă ultima citire REST are ≤ 10 min; MQTT doar pe cât se poate).
 - Prizele (IP-uri de rezervat în DHCP; perechea nume↔IP e o presupunere din scanarea pasivă până după `sync`): Boiler
   192.168.1.244 (v3.3), Living sus .104 (3.3), Priza cam Georgi .204 (3.3), Bucatarie .185 (3.4), Lumina Curte .158 (3.4); senzorii: Temp Etaj, Temp afara, Temp BECI.
-- CLI: `docker exec -it solar-casa python -m casa login | sync | set-password [--stdin] | phones | revoke <id> | demo-devices [--force]`.
+- CLI: `docker exec -it solar-casa python -m casa login | sync | set-password [--stdin] | phones | revoke <id> | demo-devices [--force]`;
+  `scan` (IP-urile prizelor din LAN) rulează doar prin `scripts/casa-sync.sh`, cu `--network host`.
+- Prize noi (2026-11-05): userul a aprobat deschiderea în firewalld, zona `public`, a porturilor UDP 6666/6667/7000 **doar
+  din `192.168.1.0/24`** (reguli rich, runtime + permanent, fără reload). `scripts/casa-sync.sh` = `sync` + `scan` (container
+  temporar cu `--network host`, ~20 s, scrie IP/protocol în `devices.local.json`) + `docker compose restart casa`. Probat:
+  toate 5 prizele s-au anunțat (.204/.104/.244 v3.3, .185/.158 v3.4), aceleași id↔IP ca în tabelul de mai sus.
 - Date în `casa/data/` (gitignored, mod 600): `devices.json` (chei locale), `cloud_session.json`, `auth.json` (hash parolă +
   hash-uri token), `state.json` / `state.demo.json`. Nimic secret în git, log-uri sau Telegram.
 - Caddy: `handle_path /solar/casa/*` înaintea lui `/solar/*`, `request_body max_size 16KB`, `request_buffers 20KB`, timeout 60 s,
