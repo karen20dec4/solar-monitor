@@ -19,9 +19,12 @@ class CasaAccess(private val prefs: SharedPreferences) {
         prefs.edit().remove(KEY_TOKEN).apply()
     }
 
-    /** Pastreaza jetonul, in afara de cazul in care serverul l-a respins. */
-    fun onResult(r: CasaResult<*>) {
-        if (r is CasaResult.Unauthorized) forget()
+    /**
+     * Sterge jetonul doar daca serverul a respins chiar jetonul retinut. Un 401 tarziu pentru un jeton
+     * vechi (cererea a plecat inainte de o noua inregistrare) nu are voie sa-l stearga pe cel nou.
+     */
+    fun onResult(usedToken: String, r: CasaResult<*>) {
+        if (r is CasaResult.Unauthorized && token == usedToken) forget()
     }
 
     companion object {

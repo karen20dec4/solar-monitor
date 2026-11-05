@@ -1,6 +1,7 @@
 package com.rolling7.solar
 
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.text.Normalizer
 import java.util.Locale
@@ -66,8 +67,13 @@ private fun JSONObject.longOrNull(key: String): Long? =
 private fun JSONObject.objOrNull(key: String): JSONObject? =
     if (has(key) && !isNull(key)) optJSONObject(key) else null
 
-private fun JSONObject.stringOrNull(key: String): String? =
+// Pe telefon optString/getString intorc textul "null" pentru un null din JSON (json.org din teste intoarce
+// valoarea implicita), asa ca orice text trece prin acest filtru.
+internal fun JSONObject.stringOrNull(key: String): String? =
     if (has(key) && !isNull(key)) optString(key).ifBlank { null } else null
+
+private fun JSONObject.requiredString(key: String): String =
+    stringOrNull(key) ?: throw JSONException("lipseste $key")
 
 private fun parsePairs(a: JSONArray?): List<Pair<Long, Double>> {
     if (a == null) return emptyList()
@@ -91,17 +97,17 @@ internal fun parsePlugObject(j: JSONObject): CasaPlug {
     val schedules = j.optJSONArray("schedules")?.let { a ->
         (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map {
             CasaSchedule(
-                id = it.getString("id"),
-                start = it.getString("start"),
-                stop = it.getString("stop"),
+                id = it.requiredString("id"),
+                start = it.requiredString("start"),
+                stop = it.requiredString("stop"),
                 enabled = it.optBoolean("enabled", true)
             )
         }
     } ?: emptyList()
     val inching = j.objOrNull("inching")
     return CasaPlug(
-        id = j.getString("id"),
-        name = j.optString("name", j.getString("id")),
+        id = j.requiredString("id"),
+        name = j.stringOrNull("name") ?: j.requiredString("id"),
         online = j.optBoolean("online", false),
         on = j.optBoolean("on", false),
         metered = j.optBoolean("metered", false),
@@ -111,12 +117,12 @@ internal fun parsePlugObject(j: JSONObject): CasaPlug {
         energyToday = j.doubleOrNull("energy_today"),
         schedules = schedules,
         countdown = j.objOrNull("countdown")?.let {
-            CasaCountdown(it.getString("action"), it.getLong("at"), it.optLong("seconds_left", 0))
+            CasaCountdown(it.requiredString("action"), it.getLong("at"), it.optLong("seconds_left", 0))
         },
         inchingEnabled = inching?.optBoolean("enabled", false) ?: false,
         inchingMinutes = inching?.optInt("minutes", 0) ?: 0,
         offDeadline = j.objOrNull("off_deadline")?.let {
-            CasaOffDeadline(it.getLong("at"), it.optLong("seconds_left", 0), it.optString("reason", ""))
+            CasaOffDeadline(it.getLong("at"), it.optLong("seconds_left", 0), it.stringOrNull("reason") ?: "")
         },
         error = j.stringOrNull("error")
     )
@@ -137,8 +143,8 @@ fun parseSensors(json: String): CasaSensors {
     val sensors = (0 until (a?.length() ?: 0)).map { i ->
         val s = a!!.getJSONObject(i)
         CasaSensor(
-            id = s.getString("id"),
-            name = s.optString("name", s.getString("id")),
+            id = s.requiredString("id"),
+            name = s.stringOrNull("name") ?: s.requiredString("id"),
             temperature = s.doubleOrNull("temperature"),
             humidity = s.doubleOrNull("humidity"),
             battery = s.doubleOrNull("battery"),
@@ -146,14 +152,14 @@ fun parseSensors(json: String): CasaSensors {
             spark = parsePairs(s.optJSONArray("spark"))
         )
     }
-    return CasaSensors(cloudOk = j.optString("cloud") == "ok", sensors = sensors)
+    return CasaSensors(cloudOk = j.stringOrNull("cloud") == "ok", sensors = sensors)
 }
 
 fun parseSensorHistory(json: String): CasaSensorHistory {
     val j = JSONObject(json)
     val stats = j.objOrNull("stats")
     return CasaSensorHistory(
-        range = j.optString("range", ""),
+        range = j.stringOrNull("range") ?: "",
         temperature = parsePairs(j.optJSONArray("temperature")),
         humidity = parsePairs(j.optJSONArray("humidity")),
         tempMin = parseStat(stats, "temp_min"),

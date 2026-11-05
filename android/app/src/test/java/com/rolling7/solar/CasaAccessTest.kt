@@ -57,7 +57,7 @@ class CasaAccessTest {
         val prefs = FakePrefs()
         val access = CasaAccess(prefs)
         access.save("abc")
-        access.onResult(CasaResult.Unauthorized)
+        access.onResult("abc", CasaResult.Unauthorized)
         assertNull(access.token)
         assertNull(CasaAccess(prefs).token)
     }
@@ -66,10 +66,21 @@ class CasaAccessTest {
     fun `ok and errors keep the token`() {
         val access = CasaAccess(FakePrefs())
         access.save("abc")
-        access.onResult(CasaResult.Ok(1))
+        access.onResult("abc", CasaResult.Ok(1))
         assertEquals("abc", access.token)
-        access.onResult(CasaResult.Error("FARA LEGATURA"))
+        access.onResult("abc", CasaResult.Error("FARA LEGATURA"))
         assertEquals("abc", access.token)
+    }
+
+    @Test
+    fun `late 401 for an old token keeps the new token`() {
+        val access = CasaAccess(FakePrefs())
+        access.save("old")
+        access.save("new")
+        access.onResult("old", CasaResult.Unauthorized)
+        assertEquals("new", access.token)
+        access.onResult("new", CasaResult.Unauthorized)
+        assertNull(access.token)
     }
 
     @Test

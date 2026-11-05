@@ -15,17 +15,19 @@ sealed interface CasaResult<out T> {
 
 /**
  * Traduce un raspuns HTTP de eroare in rezultat. Mesajele sunt majuscule fara diacritice (ecran Retro).
- * 401 = jeton (sau parola) respins; 400 = mesajul serverului, transformat cu [retroLabel].
+ * 401 pe o ruta cu jeton = jeton revocat sau necunoscut -> [CasaResult.Unauthorized]. La inregistrare
+ * ([authenticated] = false) un 401 inseamna parola gresita -> `Error("PAROLA GRESITA")`, niciodata
+ * Unauthorized (care e rezervat jetonului). 400 = mesajul serverului, transformat cu [retroLabel].
  */
-internal fun casaFailure(code: Int, body: String): CasaResult<Nothing> = when (code) {
-    401 -> CasaResult.Unauthorized
+internal fun casaFailure(code: Int, body: String, authenticated: Boolean = true): CasaResult<Nothing> = when (code) {
+    401 -> if (authenticated) CasaResult.Unauthorized else CasaResult.Error("PAROLA GRESITA")
     429 -> CasaResult.Error("PREA MULTE INCERCARI")
     502 -> CasaResult.Error("PRIZA NU RASPUNDE")
     404 -> CasaResult.Error("PRIZA NECUNOSCUTA")
     503 -> CasaResult.Error("SERVER INDISPONIBIL")
     400 -> {
         val msg = try {
-            JSONObject(body).optString("error", "")
+            JSONObject(body).stringOrNull("error") ?: ""
         } catch (e: Exception) {
             ""
         }
@@ -63,6 +65,8 @@ object CasaRepository {
         var conn: HttpURLConnection? = null
         return try {
             conn = (URL(BASE + path).openConnection() as HttpURLConnection).apply {
+                // Jetonul nu pleaca pe alt URL; un redirect e tratat ca eroare.
+                instanceFollowRedirects = false
                 connectTimeout = 5000
                 readTimeout = readMs
                 requestMethod = method
@@ -78,7 +82,7 @@ object CasaRepository {
                 conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             }
             val code = conn.responseCode
-            if (code == 200) {
+            if (code in 200..299) {
                 val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
                 try {
                     CasaResult.Ok(parse(text))
@@ -91,10 +95,15 @@ object CasaRepository {
                 } catch (e: IOException) {
                     ""
                 }
-                casaFailure(code, text)
+                casaFailure(code, text, token != null)
             }
         } catch (e: Exception) {
-            CasaResult.Error("FARA LEGATURA")
+            // Unele stive HttpURLConnection arunca asta la un 401 fara WWW-Authenticate.
+            if (e is IOException && e.message?.contains("authentication challenge", ignoreCase = true) == true) {
+                casaFailure(401, "", token != null)
+            } else {
+                CasaResult.Error("FARA LEGATURA")
+            }
         } finally {
             conn?.disconnect()
         }
@@ -105,7 +114,10 @@ object CasaRepository {
     ): CasaResult<CasaPlug> =
         call(method, "/plugs/${enc(id)}$sub", token, body, COMMAND_READ_MS) { parsePlug(it) }
 
-    /** Schimba parola comuna cu un jeton propriu telefonului. */
+    /**
+     * Schimba parola comuna cu un jeton propriu telefonului. Un 401 aici inseamna parola gresita si vine ca
+     * `Error("PAROLA GRESITA")`, nu ca [CasaResult.Unauthorized] (rezervat jetonului respins).
+     */
     fun register(password: String, device: String): CasaResult<String> =
         call("POST", "/register", null, JSONObject().put("password", password).put("device", device), READ_MS) {
             JSONObject(it).getString("token")

@@ -166,6 +166,29 @@ class CasaModelTest {
     }
 
     @Test
+    fun `register 401 is a wrong password not a revoked token`() {
+        assertEquals(CasaResult.Error("PAROLA GRESITA"), casaFailure(401, """{"error":"parola gresita"}""", authenticated = false))
+        assertEquals(CasaResult.Error("PREA MULTE INCERCARI"), casaFailure(429, "", authenticated = false))
+    }
+
+    @Test
+    fun `json nulls never become the text null`() {
+        val p = parsePlug(
+            """{"id":"bf3","name":null,"online":true,"on":false,"metered":false,"schedules":[],
+            "countdown":null,"inching":{"enabled":false,"minutes":30},
+            "off_deadline":{"at":1,"seconds_left":2,"reason":null},"error":null}"""
+        )
+        assertEquals("bf3", p.name)
+        assertEquals("", p.offDeadline!!.reason)
+        assertNull(p.error)
+        val s = parseSensors("""{"cloud":null,"sensors":[{"id":"s9","name":null,"temperature":null,"spark":[]}]}""")
+        assertFalse(s.cloudOk)
+        assertEquals("s9", s.sensors[0].name)
+        assertEquals("", parseSensorHistory("""{"id":"s9","name":null,"range":null,"temperature":[],"humidity":[]}""").range)
+        assertEquals(CasaResult.Error("CERERE INVALIDA"), casaFailure(400, """{"error":null}"""))
+    }
+
+    @Test
     fun `http answers map to messages`() {
         assertEquals(CasaResult.Unauthorized, casaFailure(401, """{"error":"token invalid"}"""))
         assertEquals(CasaResult.Error("PREA MULTE INCERCARI"), casaFailure(429, """{"error":"prea multe incercari","retry_after":30}"""))
