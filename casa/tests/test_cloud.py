@@ -274,9 +274,15 @@ class StateTest(Base):
         cs.check_health()
         self.assertEqual(self.notes, [])
 
-    def test_ok_when_mqtt_connected(self):
+    def test_ok_after_recent_rest_refresh(self):
         cs, mgr = self.started()
         self.assertEqual(cs.state(), "ok")
+
+    def test_mqtt_connected_does_not_make_state_ok_without_rest_refresh(self):
+        cs, mgr = self.started()
+        self.assertTrue(mgr.mq.client.is_connected())
+        self.clock.t += 601
+        self.assertEqual(cs.state(), "disconnected")  # MQTT conectat dar fara date: nu conteaza
 
     def test_disconnected_without_mqtt_and_old_refresh_ok_with_recent_refresh(self):
         cs, mgr = self.started()
@@ -302,20 +308,20 @@ class StateTest(Base):
         self.clock.t += 3600
         cs.check_health()
         self.assertEqual(len(self.notes), 1)  # o singura data
-        mgr.mq.client.connected = True
-        cs.check_health()  # revenire
-        mgr.mq.client.connected = False
+        cs._refresh_cache()  # revenire: o citire REST reusita
+        self.assertEqual(cs.state(), "ok")
+        cs.check_health()
         self.clock.t += 700
         cs.check_health()
         self.clock.t += 1900
         cs.check_health()
         self.assertEqual(len(self.notes), 2)
 
-    def test_quiet_mqtt_refreshes_cache_at_most_every_5_min(self):
+    def test_rest_refresh_every_5_min_at_most(self):
         cs, mgr = self.started()
         n = mgr.cache_updates
         cs._tick()
-        self.assertEqual(mgr.cache_updates, n)  # MQTT nu e tacut inca
+        self.assertEqual(mgr.cache_updates, n)  # abia s-a citit
         self.clock.t += 301
         cs._tick()
         self.assertEqual(mgr.cache_updates, n + 1)
@@ -326,14 +332,23 @@ class StateTest(Base):
         cs._tick()
         self.assertEqual(mgr.cache_updates, n + 2)
 
-    def test_message_resets_quiet_timer(self):
+    def test_sensor_messages_do_not_postpone_rest_refresh(self):
         cs, mgr = self.started()
         n = mgr.cache_updates
         self.clock.t += 250
         mgr.report("s1", {"va_humidity": 56})
         self.clock.t += 250
         cs._tick()
-        self.assertEqual(mgr.cache_updates, n)
+        self.assertEqual(mgr.cache_updates, n + 1)  # starea "ok" depinde de citirea REST
+
+    def test_only_sensor_messages_update_last_msg(self):
+        cs, mgr = self.started([sensor(), dev("p1", "Priza", "cz", status={})])
+        t0 = cs._last_msg
+        self.clock.t += 50
+        mgr.device_listeners[0].update_device(mgr.device_map["p1"], ["switch_1"], {})
+        self.assertEqual(cs._last_msg, t0)
+        mgr.report("s1", {"va_humidity": 56})
+        self.assertEqual(cs._last_msg, t0 + 50)
 
     def test_failed_cache_refresh_does_not_count_as_ok(self):
         cs, mgr = self.started()

@@ -1,5 +1,6 @@
 """Registrul dispozitivelor Tuya: devices.json (scris de sincronizare) + devices.local.json (suprascrieri)."""
 import json
+import logging
 import os
 import re
 import time
@@ -7,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Literal, Optional
 
 from .store import JsonStore
+
+log = logging.getLogger("casa.devices")
 
 DEVICES_FILE = "devices.json"
 LOCAL_FILE = "devices.local.json"
@@ -105,22 +108,48 @@ def save_devices(data_dir: str, devices: list, raw_names: Optional[dict] = None,
         {"devices": out, "synced_at": time.time()}, mode=0o600)
 
 
+def _valid_local(over) -> bool:
+    """Intrare din devices.local.json: dict cu `ip`/`version`/`name` optionale, doar text."""
+    return isinstance(over, dict) and all(
+        isinstance(over[k], str) for k in ("ip", "version", "name") if k in over)
+
+
 def load_devices(data_dir: str) -> list:
+    """Citeste devices.json + devices.local.json; intrarile gresite se sar cu avertisment (nu opresc pornirea)."""
     data = JsonStore(os.path.join(data_dir, DEVICES_FILE)).load({"devices": []})
     local = JsonStore(os.path.join(data_dir, LOCAL_FILE)).load({})
+    if not isinstance(local, dict):
+        log.warning("%s: nu e un obiect JSON; il ignor", LOCAL_FILE)
+        local = {}
     known = {f for f in DeviceInfo.__dataclass_fields__}
+    entries = data.get("devices", []) if isinstance(data, dict) else []
+    if not isinstance(entries, list):
+        log.warning("%s: 'devices' nu e o lista; o ignor", DEVICES_FILE)
+        entries = []
     result = []
-    for entry in data.get("devices", []):
-        entry = {k: v for k, v in entry.items() if k in known}
-        dev = DeviceInfo(**entry)
+    for entry in entries:
+        try:
+            if not isinstance(entry, dict):
+                raise TypeError("intrarea nu e un obiect")
+            dev = DeviceInfo(**{k: v for k, v in entry.items() if k in known})
+            if not isinstance(dev.id, str) or not dev.id or not isinstance(dev.name, str):
+                raise ValueError("id/name lipsa sau nu sunt text")
+        except (TypeError, ValueError) as exc:
+            ident = entry.get("id") if isinstance(entry, dict) else None
+            log.warning("%s: intrare gresita (id=%s): %s; o sar", DEVICES_FILE, ident, exc)
+            continue
         defaults = BUILTIN_DEFAULTS.get(dev.id, {})
         if not dev.ip:
             dev.ip = defaults.get("ip")
         if not dev.version:
             dev.version = defaults.get("version")
-        over = local.get(dev.id) or {}
+        over = local.get(dev.id)
+        if over is not None and not _valid_local(over):
+            log.warning("%s: intrare gresita pentru %s (asteptat obiect cu ip/version/name text); o sar",
+                        LOCAL_FILE, dev.id)
+            over = None
         for key in ("ip", "version", "name"):
-            if over.get(key):
+            if over and over.get(key):
                 setattr(dev, key, over[key])
         result.append(dev)
     return result

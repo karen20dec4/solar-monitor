@@ -497,6 +497,16 @@ class TestBuildServices(unittest.TestCase):
                 build_services(self.cfg(False))
         boom.assert_not_called()
 
+    def test_demo_marked_state_exits_with_gunicorn_app_load_error(self):
+        # cod 4 = APP_LOAD_ERROR: gunicorn se opreste in loc sa respawneze workerul in bucla
+        with mock.patch.object(web, "_services", None), \
+                mock.patch.object(web, "build_services", side_effect=StateIsDemo("marcaj demo")):
+            with self.assertLogs("casa.web", level="CRITICAL"):
+                with self.assertRaises(SystemExit) as cm:
+                    web._services_from_env()
+        self.assertEqual(cm.exception.code, 4)
+        self.assertEqual(web.GUNICORN_APP_LOAD_ERROR, 4)
+
     def test_real_mode_ignores_demo_state_file(self):
         with open(os.path.join(self.dir, "state.demo.json"), "w") as f:
             json.dump({"demo": True, "plugs": {"bfplug1": {"countdown": {"action": "on", "at": 1}}}}, f)

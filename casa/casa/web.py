@@ -93,6 +93,7 @@ class _TtlCache:
 
 
 # ---------------------------------------------------------------------------- constructie --
+GUNICORN_APP_LOAD_ERROR = 4  # gunicorn.arbiter.Arbiter.APP_LOAD_ERROR
 _services: Optional[Services] = None
 _services_lock = threading.Lock()
 
@@ -164,7 +165,9 @@ def _services_from_env() -> Services:
                 _services = build_services()
             except StateIsDemo as e:
                 log.critical("%s", e)
-                sys.exit(1)
+                # 4 = gunicorn APP_LOAD_ERROR: arbiterul se opreste (nu mai respawneaza workerul in bucla)
+                # si backoff-ul de restart al Docker ia controlul.
+                sys.exit(GUNICORN_APP_LOAD_ERROR)
             except Exception as e:  # noqa: BLE001 - orice defect la pornire se vede in log, apoi gunicorn se opreste
                 log.critical("pornirea serviciului CASA a esuat: %s: %s", type(e).__name__, str(e)[:200])
                 raise

@@ -1,4 +1,4 @@
-"""Sesiune cloud Tuya (Smart Life): login cu cod QR, lista dispozitivelor cu chei locale, senzori prin MQTT.
+"""Sesiune cloud Tuya (Smart Life): login cu cod QR, lista dispozitivelor cu chei locale, senzori cititi din cloud la 5 min (MQTT doar bonus).
 
 Fara cont de dezvoltator Tuya: se foloseste SDK-ul oficial `tuya-device-sharing-sdk` (aceeasi cale ca
 integrarea Home Assistant). Verificat pe:
@@ -47,8 +47,8 @@ METERING_CODES = {"power": "cur_power", "voltage": "cur_voltage", "current": "cu
 
 LOGIN_TIMEOUT_S = 120
 LOGIN_POLL_S = 2
-OK_REFRESH_S = 600       # un refresh reusit din ultimele 10 min conteaza ca "ok"
-QUIET_MQTT_S = 300       # MQTT tacut -> update_device_cache(), cel mult o data la 5 min
+OK_REFRESH_S = 600       # un refresh REST reusit din ultimele 10 min = "ok" (singurul criteriu de stare)
+REFRESH_EVERY_S = 300    # citire din cloud (update_device_cache) la 5 min; MQTT e doar bonus
 NOTIFY_AFTER_S = 1800    # nu e ok de 30 min -> notificare, o singura data pana la revenire
 TICK_S = 30
 
@@ -353,9 +353,9 @@ class CloudSession:
         return entry
 
     def _on_device_update(self, dev, props, timestamps) -> None:
-        self._last_msg = self._clock()
         if _kind(getattr(dev, "category", "")) != "sensor":
             return
+        self._last_msg = self._clock()  # doar mesajele senzorilor (informativ; nu decide starea)
         touched = set(props or ()) & SENSOR_CODES
         with self._lock:
             if not touched:
@@ -389,8 +389,8 @@ class CloudSession:
             return "no_session"
         if self._manager is None:
             return "disconnected"
-        if self._mqtt_connected():
-            return "ok"
+        # MQTT nu intra in socoteala: `refresh_mq()` aboneaza doar dispozitivele cu set_up=True, iar
+        # casa nu il seteaza, deci MQTT nu aduce date de senzor. Datele vin din citirea REST la 5 min.
         if self._last_refresh_ok is not None and self._clock() - self._last_refresh_ok <= OK_REFRESH_S:
             return "ok"
         return "disconnected"
@@ -436,8 +436,7 @@ class CloudSession:
                 self._start_once()
             else:
                 now = self._clock()
-                if (now - self._last_msg >= QUIET_MQTT_S
-                        and (self._last_refresh_try is None or now - self._last_refresh_try >= QUIET_MQTT_S)):
+                if self._last_refresh_try is None or now - self._last_refresh_try >= REFRESH_EVERY_S:
                     self._refresh_cache()
         except Exception as exc:  # noqa: BLE001
             # nu logam textul exceptiei: poate contine URL-uri cu tokeni

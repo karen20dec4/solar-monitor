@@ -107,6 +107,46 @@ class StoreDevicesTest(unittest.TestCase):
         d = got["necunoscut"]
         self.assertEqual((d.ip, d.version), (None, None))
 
+    def test_bad_local_entries_are_skipped_with_warning(self):
+        save_devices(self.dir, [self._dev("bfc30380ff8a29c0d88wcz"), self._dev("bf5cc0f2db15b9eab2a0zy"),
+                                self._dev("x3"), self._dev("x4")])
+        with open(os.path.join(self.dir, "devices.local.json"), "w") as f:
+            json.dump({"bfc30380ff8a29c0d88wcz": "192.168.1.9",
+                       "bf5cc0f2db15b9eab2a0zy": {"ip": 5},
+                       "x3": {"ip": "10.0.0.3", "name": ["lista"]},
+                       "x4": {"ip": "10.0.0.4"}}, f)
+        with self.assertLogs("casa.devices", level="WARNING") as cm:
+            got = {d.id: d for d in load_devices(self.dir)}
+        self.assertEqual(len(cm.records), 3)
+        self.assertEqual(got["bfc30380ff8a29c0d88wcz"].ip, "192.168.1.185")   # implicit, nu suprascris
+        self.assertEqual(got["bf5cc0f2db15b9eab2a0zy"].ip, "192.168.1.244")
+        self.assertIsNone(got["x3"].ip)
+        self.assertEqual(got["x4"].ip, "10.0.0.4")                            # intrarea buna merge
+
+    def test_local_file_not_an_object_is_ignored(self):
+        save_devices(self.dir, [self._dev("x4")])
+        with open(os.path.join(self.dir, "devices.local.json"), "w") as f:
+            json.dump(["nu", "obiect"], f)
+        with self.assertLogs("casa.devices", level="WARNING"):
+            got = load_devices(self.dir)
+        self.assertEqual([d.id for d in got], ["x4"])
+
+    def test_malformed_device_entry_is_skipped_with_warning(self):
+        save_devices(self.dir, [self._dev("bun")])
+        path = os.path.join(self.dir, "devices.json")
+        with open(path) as f:
+            raw = json.load(f)
+        raw["devices"] += ["nu-obiect", {"name": "fara id", "kind": "plug"}, {"id": 7, "name": "id numeric",
+                                                                              "kind": "plug", "local_key": None,
+                                                                              "ip": None, "version": None},
+                           {"id": "fara-nume", "kind": "plug", "local_key": None, "ip": None, "version": None}]
+        with open(path, "w") as f:
+            json.dump(raw, f)
+        with self.assertLogs("casa.devices", level="WARNING") as cm:
+            got = load_devices(self.dir)
+        self.assertEqual([d.id for d in got], ["bun"])
+        self.assertEqual(len(cm.records), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

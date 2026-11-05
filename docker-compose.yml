@@ -137,7 +137,6 @@ services:
     build: ./casa
     container_name: solar-casa
     restart: unless-stopped
-    env_file: ./.env
     depends_on:
       influxdb:
         condition: service_healthy
@@ -147,7 +146,10 @@ services:
       INFLUX_ORG: ${INFLUXDB_ORG}
       INFLUX_BUCKET_LIVE: ${INFLUXDB_BUCKET_LIVE}
       INFLUX_BUCKET_HISTORY: ${INFLUXDB_BUCKET_HISTORY}
+      NTFY_URL: ${NTFY_URL:-}
       CASA_DATA_DIR: /data
+      CASA_DEMO: ${CASA_DEMO:-0}
+      CASA_POLL_S: ${CASA_POLL_S:-5}
     volumes:
       - ./casa/data:/data
 
