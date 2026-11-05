@@ -14,7 +14,8 @@ log = logging.getLogger("casa.devices")
 DEVICES_FILE = "devices.json"
 LOCAL_FILE = "devices.local.json"
 
-# IP si protocol cunoscute din scanarea pasiva a retelei (id Tuya = gwId).
+# IP si protocol din scanarea retelei (id Tuya = gwId), confirmate de `sync` 2026-11-05:
+# Living sus .244, Priza cam Georgi .104, Boiler .204, Bucatarie .185, Lumina Curte .158.
 BUILTIN_DEFAULTS = {
     "bf5cc0f2db15b9eab2a0zy": {"ip": "192.168.1.244", "version": "3.3"},
     "bf3bac46d1a367e845thx2": {"ip": "192.168.1.104", "version": "3.3"},

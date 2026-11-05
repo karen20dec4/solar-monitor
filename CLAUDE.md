@@ -367,9 +367,9 @@ Container `solar-casa` (Python, gunicorn 1 worker x 8 threads, port 8100, **no p
 morning steps (list below). Release v3.40 is built after the final review.**
 
 - **What it does:** 5 plugs controlled locally (`tinytuya`, TCP 6668, one persistent connection per plug; IPs/protocol
-  defaults in `casa/casa/devices.py`, matched by device id: Boiler .244, Living sus .104, Priza cam Georgi .204,
-  Bucatarie .185, Lumina Curte .158; the name↔IP pairing is a **guess from the passive scan until `sync` has run** and
-  must be checked against SmartLife). 3 temperature/humidity sensors read from the Tuya cloud
+  defaults in `casa/casa/devices.py`, matched by device id: Boiler .204, Living sus .244, Priza cam Georgi .104,
+  Bucatarie .185, Lumina Curte .158 (confirmed by the first real `sync`, 2026-11-05; Bucatarie and Lumina Curte are
+  "T34-Smart Plug", protocol 3.4, no metering, Tuya category `tdq`)). 3 temperature/humidity sensors read from the Tuya cloud
   (`tuya-device-sharing-sdk`, session from a QR login) **by REST every 5 min**: the cloud state is `ok` only if the last
   successful REST read is ≤ 10 min old. MQTT is best-effort and carries no device data today (the SDK subscribes only
   devices with `set_up=True`, which casa never sets). No cloud fallback for plug commands: a plug that refuses the local

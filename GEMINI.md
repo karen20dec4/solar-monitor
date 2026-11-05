@@ -461,9 +461,9 @@ Container `solar-casa` (Python, gunicorn 1 worker × 8 fire, port 8100, **fără
 de dimineață (lista de mai jos). Release-ul v3.40 se construiește după recenzia finală.**
 
 - **Ce face:** 5 prize comandate local (`tinytuya`, TCP 6668, o conexiune persistentă per priză; IP și protocol implicite
-  în `casa/casa/devices.py`, potrivite după device id: Boiler .244, Living sus .104, Priza cam Georgi .204, Bucatarie .185,
-  Lumina Curte .158; perechea nume↔IP e o **presupunere din scanarea pasivă până după `sync`** și trebuie verificată cu
-  SmartLife). 3 senzori de temperatură/umiditate citiți din cloud-ul Tuya (`tuya-device-sharing-sdk`, sesiune din login QR)
+  în `casa/casa/devices.py`, potrivite după device id: Boiler .204, Living sus .244, Priza cam Georgi .104, Bucatarie .185,
+  Lumina Curte .158 (confirmate de primul `sync` real, 2026-11-05; Bucatarie și Lumina Curte sunt „T34-Smart Plug”,
+  protocol 3.4, fără măsurare, categoria Tuya `tdq`)). 3 senzori de temperatură/umiditate citiți din cloud-ul Tuya (`tuya-device-sharing-sdk`, sesiune din login QR)
   **prin REST la 5 min**: starea cloud e `ok` doar dacă ultima citire REST reușită are ≤ 10 min. MQTT e doar pe cât se
   poate și nu aduce date azi (SDK-ul abonează doar dispozitivele cu `set_up=True`, pe care casa nu îl setează). Fără
   rezervă prin cloud pentru comenzile prizelor: o priză care refuză conexiunea locală apare OFFLINE.

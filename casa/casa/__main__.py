@@ -145,9 +145,9 @@ def _cmd_scan(args, cfg: Config) -> int:
 
 # Pentru CASA_DEMO=1: aceleasi id-uri ca in prizele reale (nume din aplicatia Tuya), fara chei.
 _DEMO_PLUGS = (
-    ("bf5cc0f2db15b9eab2a0zy", "Boiler", True),
-    ("bf3bac46d1a367e845thx2", "Living sus", True),
-    ("bf7b3c62e47bfd15fczfov", "Priza cam Georgi", True),
+    ("bf7b3c62e47bfd15fczfov", "Boiler", True),
+    ("bf5cc0f2db15b9eab2a0zy", "Living sus", True),
+    ("bf3bac46d1a367e845thx2", "Priza cam Georgi", True),
     ("bfc30380ff8a29c0d88wcz", "Bucatarie", False),
     ("bf3897ad46cd66d32cww3j", "Lumina Curte", False),
 )

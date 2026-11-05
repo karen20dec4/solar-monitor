@@ -159,6 +159,20 @@ class SyncTest(Base):
         self.assertEqual(saved["s1"].name, "Temp BECI")
         self.assertEqual(saved["x1"].kind, "other")
 
+    def test_kind_from_codes_when_category_is_not_a_plug(self):
+        # Reale (2026-11-05): "T34-Smart Plug" si senzorii "T & H Sensor" au categoria "tdq".
+        t34 = {1: {"status_code": "switch_1", "config_item": {}}, 9: {"status_code": "countdown_1", "config_item": {}}}
+        th = dev("s2", "Temp Etaj", "tdq")
+        th.product_name = "T & H Sensor"
+        FakeManager.devices = [
+            dev("p4", "Lumina Curte", "tdq", status={"switch_1": False, "countdown_1": 0}, local_strategy=t34),
+            th, dev("s3", "Temp", "tdq", status={"temp_current": 215}), dev("x2", "Necunoscut", "tdq"),
+        ]
+        kinds = {d.id: d.kind for d in self.session().sync()}
+        self.assertEqual(kinds, {"p4": "plug", "s2": "sensor", "s3": "sensor", "x2": "other"})
+        p4 = {d.id: d for d in load_devices(self.dir)}["p4"]
+        self.assertEqual(p4.dps, {"switch": 1, "countdown": 9})
+
     def test_sync_without_strategy_does_not_invent_metering(self):
         FakeManager.devices = [dev("p2", "Perete", "kg", status={"switch_1": True, "countdown_1": 0})]
         self.session().sync()

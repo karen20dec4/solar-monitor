@@ -2098,8 +2098,12 @@ READ-ONLY, nimic din `collector/` sau `bms/` nu s-a schimbat.
   variabile de mediu date explicit în `docker-compose.yml` (nu tot `.env`), volum `./casa/data`). Prize local prin `tinytuya`
   (TCP 6668, conexiune persistentă per priză); senzori din cloud-ul Tuya prin `tuya-device-sharing-sdk` (login QR, citire
   din cloud la 5 min; starea e `ok` doar dacă ultima citire REST are ≤ 10 min; MQTT doar pe cât se poate).
-- Prizele (IP-uri de rezervat în DHCP; perechea nume↔IP e o presupunere din scanarea pasivă până după `sync`): Boiler
-  192.168.1.244 (v3.3), Living sus .104 (3.3), Priza cam Georgi .204 (3.3), Bucatarie .185 (3.4), Lumina Curte .158 (3.4); senzorii: Temp Etaj, Temp afara, Temp BECI.
+- Prizele (IP-uri de rezervat în DHCP; confirmate de primul `sync` real, 2026-11-05): Boiler 192.168.1.204 (v3.3),
+  Living sus .244 (3.3), Priza cam Georgi .104 (3.3), Bucatarie .185 (3.4), Lumina Curte .158 (3.4); senzorii: Temp Etaj,
+  Temp afara, Temp BECI. Primele trei: „WiFi Plug”, categoria `cz`, cu măsurare; Bucatarie și Lumina Curte: „T34-Smart Plug”,
+  categoria **`tdq`** (de aceea tipul se decide și după codurile DP, nu doar după categorie). Senzorii „T & H Sensor” au tot
+  categoria `tdq` și vin **fără stare** prin API-ul de partajare (doar `dp-report-types`: `temp_current`, `humidity_value`).
+  Contul mai are „Boiler Buc” (`bfc40221…`, offline, „Smart Plug” cu măsurare).
 - CLI: `docker exec -it solar-casa python -m casa login | sync | set-password [--stdin] | phones | revoke <id> | demo-devices [--force]`;
   `scan` (IP-urile prizelor din LAN) rulează doar prin `scripts/casa-sync.sh`, cu `--network host`.
 - Prize noi (2026-11-05): userul a aprobat deschiderea în firewalld, zona `public`, a porturilor UDP 6666/6667/7000 **doar

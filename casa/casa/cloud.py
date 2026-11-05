@@ -17,6 +17,7 @@ Clasele SDK se pot injecta (`manager_factory`, `login_control`) ca testele sa nu
 """
 import json
 import logging
+import re
 import os
 import sys
 import threading
@@ -103,8 +104,28 @@ def _battery(device) -> Optional[float]:
     return float(mapped) if mapped is not None else None
 
 
-def _kind(category: str) -> str:
-    return KIND_BY_CATEGORY.get(category or "", "other")
+_SWITCH_CODES = {"switch_1", "switch"}
+_TEMP_CODES = {"va_temperature", "va_humidity", "temp_current", "humidity_value"}
+_SENSOR_PRODUCT = re.compile(r"\bT\s*&\s*H\b|sensor|senzor", re.IGNORECASE)
+
+
+def _kind(dev) -> str:
+    """Tipul dupa categorie; altfel dupa codurile DP si numele produsului.
+
+    Pe dispozitivele reale (2026-11-05) atat priza "T34-Smart Plug" cat si senzorii "T & H Sensor"
+    au categoria "tdq", iar senzorii vin fara nicio stare prin API-ul de partajare.
+    """
+    category = getattr(dev, "category", "") or ""
+    if category in KIND_BY_CATEGORY:
+        return KIND_BY_CATEGORY[category]
+    strategy = getattr(dev, "local_strategy", None) or {}
+    codes = set(getattr(dev, "status", None) or {}) | {
+        v.get("status_code") for v in strategy.values() if isinstance(v, dict)}
+    if codes & _SWITCH_CODES:
+        return "plug"
+    if codes & _TEMP_CODES or _SENSOR_PRODUCT.search(getattr(dev, "product_name", "") or ""):
+        return "sensor"
+    return "other"
 
 
 class _DeviceListener:
@@ -284,7 +305,7 @@ class CloudSession:
         with self._lock:
             self._last_refresh_ok = self._clock()
             for dev in list(mgr.device_map.values()):
-                if _kind(getattr(dev, "category", "")) == "sensor":
+                if _kind(dev) == "sensor":
                     prev = self._sensors.get(dev.id)
                     entry = self._store_sensor(dev, None, from_cache=True)
                     if prev != entry:
@@ -307,7 +328,7 @@ class CloudSession:
         devices = []
         for dev in self._manager.device_map.values():
             category = getattr(dev, "category", "") or ""
-            kind = _kind(category)
+            kind = _kind(dev)
             dps, scales = {}, {}
             if kind == "plug":
                 strategy = getattr(dev, "local_strategy", None) or {}
@@ -353,7 +374,7 @@ class CloudSession:
         return entry
 
     def _on_device_update(self, dev, props, timestamps) -> None:
-        if _kind(getattr(dev, "category", "")) != "sensor":
+        if _kind(dev) != "sensor":
             return
         self._last_msg = self._clock()  # doar mesajele senzorilor (informativ; nu decide starea)
         touched = set(props or ()) & SENSOR_CODES
