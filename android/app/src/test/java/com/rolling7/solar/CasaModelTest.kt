@@ -193,12 +193,43 @@ class CasaModelTest {
         assertEquals(CasaResult.Unauthorized, casaFailure(401, """{"error":"token invalid"}"""))
         assertEquals(CasaResult.Error("PREA MULTE INCERCARI"), casaFailure(429, """{"error":"prea multe incercari","retry_after":30}"""))
         assertEquals(CasaResult.Error("PRIZA NU RASPUNDE"), casaFailure(502, """{"error":"priza nu raspunde","plug":{}}"""))
-        assertEquals(CasaResult.Error("PRIZA NECUNOSCUTA"), casaFailure(404, """{"error":"x"}"""))
-        assertEquals(CasaResult.Error("SERVER INDISPONIBIL"), casaFailure(503, """{"error":"parola nesetata"}"""))
+        assertEquals(CasaResult.Error("X"), casaFailure(404, """{"error":"x"}"""))
         assertEquals(CasaResult.Error("MAXIM 6 INTERVALE"), casaFailure(400, """{"error":"maxim 6 intervale"}"""))
         assertEquals(CasaResult.Error("DURATA INVALIDA"), casaFailure(400, """{"error":"durată invalidă"}"""))
         assertEquals(CasaResult.Error("CERERE INVALIDA"), casaFailure(400, "nu e json"))
         assertEquals(CasaResult.Error("EROARE SERVER"), casaFailure(500, ""))
+    }
+
+    @Test
+    fun `server error text is used for 400 404 and 503`() {
+        assertEquals(CasaResult.Error("PRIZA NECUNOSCUTA"), casaFailure(404, """{"error":"priza necunoscută"}"""))
+        assertEquals(CasaResult.Error("SENZOR NECUNOSCUT"), casaFailure(404, """{"error":"senzor necunoscut"}"""))
+        assertEquals(CasaResult.Error("PRIZA E OCUPATA, REINCEARCA"), casaFailure(503, """{"error":"priza e ocupată, reîncearcă"}"""))
+        assertEquals(CasaResult.Error("PAROLA NESETATA"), casaFailure(503, """{"error":"parola nesetata"}"""))
+        assertEquals(CasaResult.Error("ISTORIC INDISPONIBIL"), casaFailure(503, """{"error":"istoric indisponibil"}"""))
+        assertEquals(CasaResult.Error("MAXIM 6 INTERVALE"), casaFailure(400, """{"error":"maxim 6 intervale"}"""))
+    }
+
+    @Test
+    fun `502 with plug key is plug not answering, without json is server unavailable`() {
+        assertEquals(CasaResult.Error("PRIZA NU RASPUNDE"), casaFailure(502, """{"error":"priza nu raspunde","plug":{"id":"p1"}}"""))
+        assertEquals(CasaResult.Error("SERVER INDISPONIBIL"), casaFailure(502, ""))
+        assertEquals(CasaResult.Error("SERVER INDISPONIBIL"), casaFailure(502, "<html>Bad Gateway</html>"))
+        assertEquals(CasaResult.Error("SERVER INDISPONIBIL"), casaFailure(502, """{"error":"altceva"}"""))
+    }
+
+    @Test
+    fun `503 and 504 without json body are server unavailable`() {
+        assertEquals(CasaResult.Error("SERVER INDISPONIBIL"), casaFailure(503, ""))
+        assertEquals(CasaResult.Error("SERVER INDISPONIBIL"), casaFailure(503, "Service Unavailable"))
+        assertEquals(CasaResult.Error("SERVER INDISPONIBIL"), casaFailure(504, ""))
+        assertEquals(CasaResult.Error("SERVER INDISPONIBIL"), casaFailure(504, """{"error":"timeout"}"""))
+    }
+
+    @Test
+    fun `404 and 400 without json fall back to generic labels`() {
+        assertEquals(CasaResult.Error("NEGASIT"), casaFailure(404, "<html>404</html>"))
+        assertEquals(CasaResult.Error("CERERE INVALIDA"), casaFailure(400, ""))
     }
 
     @Test

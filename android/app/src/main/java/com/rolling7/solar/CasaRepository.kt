@@ -17,23 +17,27 @@ sealed interface CasaResult<out T> {
  * Traduce un raspuns HTTP de eroare in rezultat. Mesajele sunt majuscule fara diacritice (ecran Retro).
  * 401 pe o ruta cu jeton = jeton revocat sau necunoscut -> [CasaResult.Unauthorized]. La inregistrare
  * ([authenticated] = false) un 401 inseamna parola gresita -> `Error("PAROLA GRESITA")`, niciodata
- * Unauthorized (care e rezervat jetonului). 400 = mesajul serverului, transformat cu [retroLabel].
+ * Unauthorized (care e rezervat jetonului). 400/404/503 = textul `error` al serverului, transformat cu
+ * [retroLabel] (400 fara text: "CERERE INVALIDA"). 502 cu cheia `plug` in JSON = priza nu raspunde;
+ * 502/503/504 fara JSON (Caddy, serviciul oprit) = "SERVER INDISPONIBIL".
  */
-internal fun casaFailure(code: Int, body: String, authenticated: Boolean = true): CasaResult<Nothing> = when (code) {
-    401 -> if (authenticated) CasaResult.Unauthorized else CasaResult.Error("PAROLA GRESITA")
-    429 -> CasaResult.Error("PREA MULTE INCERCARI")
-    502 -> CasaResult.Error("PRIZA NU RASPUNDE")
-    404 -> CasaResult.Error("PRIZA NECUNOSCUTA")
-    503 -> CasaResult.Error("SERVER INDISPONIBIL")
-    400 -> {
-        val msg = try {
-            JSONObject(body).stringOrNull("error") ?: ""
-        } catch (e: Exception) {
-            ""
-        }
-        CasaResult.Error(if (msg.isBlank()) "CERERE INVALIDA" else retroLabel(msg))
+internal fun casaFailure(code: Int, body: String, authenticated: Boolean = true): CasaResult<Nothing> {
+    val json = try {
+        JSONObject(body)
+    } catch (e: Exception) {
+        null
     }
-    else -> CasaResult.Error("EROARE SERVER")
+    val msg = json?.stringOrNull("error")?.takeIf { it.isNotBlank() }?.let { retroLabel(it) }
+    return when (code) {
+        401 -> if (authenticated) CasaResult.Unauthorized else CasaResult.Error("PAROLA GRESITA")
+        429 -> CasaResult.Error("PREA MULTE INCERCARI")
+        502 -> CasaResult.Error(if (json != null && json.has("plug")) "PRIZA NU RASPUNDE" else "SERVER INDISPONIBIL")
+        503 -> CasaResult.Error(msg ?: "SERVER INDISPONIBIL")
+        504 -> CasaResult.Error("SERVER INDISPONIBIL")
+        404 -> CasaResult.Error(msg ?: "NEGASIT")
+        400 -> CasaResult.Error(msg ?: "CERERE INVALIDA")
+        else -> CasaResult.Error("EROARE SERVER")
+    }
 }
 
 /**
