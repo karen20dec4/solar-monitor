@@ -1,6 +1,7 @@
 import logging
 import os
 import tempfile
+import threading
 import unittest
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,16 @@ logging.getLogger("casa.controller").setLevel(logging.CRITICAL)
 def loc(h, m=0, s=0, day=5, month=11, year=2026):
     """Ora locala Bucuresti -> UTC aware."""
     return datetime(year, month, day, h, m, s, tzinfo=TZ).astimezone(UTC)
+
+
+class FlakyStore(JsonStore):
+    fail_updates = 0
+
+    def update(self, fn, default):
+        if self.fail_updates > 0:
+            self.fail_updates -= 1
+            raise OSError("disc plin (simulat)")
+        return super().update(fn, default)
 
 
 def device(with_countdown=True, with_power=True):
@@ -51,13 +62,21 @@ class Clock:
 class FakeWorker:
     """Acelasi contract submit() ca PlugWorker, dar sincron, fara thread-uri."""
 
-    def __init__(self, dev, driver, clock):
+    def __init__(self, dev, driver, clock, defer=False):
         self.device = dev
         self.driver = driver
         self.clock = clock
         self.on_reading = lambda *_: None
         self.submitted = []
+        # defer=True: ca PlugWorker real, future-ul se rezolva INAINTE ca citirea sa ajunga
+        self.defer = defer
+        self.pending = []
         driver.connect()
+
+    def flush(self):
+        pending, self.pending = self.pending, []
+        for fn in pending:
+            fn()
 
     def _ts(self):
         return self.clock().timestamp()
@@ -74,19 +93,21 @@ class FakeWorker:
             self.driver.set_dp(dp, value)
         except PlugError as e:
             fut.set_exception(e)
-            self.on_reading(self.device.id, PlugReading(
+            offline = lambda: self.on_reading(self.device.id, PlugReading(  # noqa: E731
                 online=False, on=None, power=None, voltage=None, current=None,
                 countdown_s=None, error=str(e), at=self._ts()))
+            (self.pending.append(offline) if self.defer else offline())
             return fut
         fut.set_result(None)
-        self.poll()
+        (self.pending.append(self.poll) if self.defer else self.poll())
         return fut
 
 
 class Rig:
-    def __init__(self, start, dev=None, dps=None):
+    def __init__(self, start, dev=None, dps=None, defer=False, store_cls=JsonStore):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = os.path.join(self.tmp.name, "state.json")
+        self.store = store_cls(self.path)
         self.clock = Clock(start)
         self.dev = dev or device()
         init = {"1": False}
@@ -94,12 +115,12 @@ class Rig:
             init["9"] = 0
         init.update(dps or {})
         self.driver = FakeDriver(init)
-        self.worker = FakeWorker(self.dev, self.driver, self.clock)
+        self.worker = FakeWorker(self.dev, self.driver, self.clock, defer=defer)
         self.c = self.build()
         self.worker.poll()
 
     def build(self):
-        c = Controller([self.dev], {PID: self.worker}, JsonStore(self.path), TZ, self.clock)
+        c = Controller([self.dev], {PID: self.worker}, self.store, TZ, self.clock)
         self.worker.on_reading = c.on_reading
         return c
 
@@ -117,10 +138,22 @@ class Rig:
     def dp9(self):
         return self.driver.dps.get("9")
 
+    def set_schedules(self, items):
+        """Intervale cu id-uri alese: [(id, start, stop), ...]."""
+        def f(p):
+            p["schedules"] = [{"id": i, "start": a, "stop": b, "enabled": True}
+                              for i, a, b in items]
+        self.c._mut(PID, f)
+
+    def dp_writes_after_last_off(self):
+        idx = max(i for i, x in enumerate(self.worker.submitted) if x == (1, False))
+        return self.worker.submitted[idx + 1:]
+
     def tick_to(self, target, step=timedelta(seconds=30)):
         """Tick-uri la fiecare `step` pana la `target` inclusiv."""
         while self.clock.now < target:
             self.clock.set(min(self.clock.now + step, target))
+            self.worker.flush()  # citirile ajung intre tick-uri
             self.c.tick()
 
     def close(self):
@@ -637,13 +670,22 @@ class IntervalCrudTest(ControllerBase):
         r.tick_to(loc(17))
         self.assertFalse(r.on)
 
-    def test_delete_running_interval_clears_started_by(self):
+    def test_delete_running_interval_keeps_plug_on_until_old_stop(self):
         r = self.rig(loc(9))
         iid = self.schedule(r)
         r.tick_to(loc(10, 30))
         r.c.delete_interval(PID, iid)
-        self.assertIsNone(r.c._get(PID)["started_by"])
-        self.assertIsNone(r.c.plug_view(PID)["off_deadline"])
+        st = r.c._get(PID)
+        self.assertIsNone(st["started_by"])
+        self.assertEqual(st["countdown"], {"action": "off", "at": int(loc(16).timestamp())})
+        v = r.c.plug_view(PID)
+        self.assertEqual(v["off_deadline"]["reason"], "countdown")
+        self.assertEqual(r.dp9, 19800)  # DP-ul ramane armat
+        r.tick_to(loc(15, 59))
+        self.assertTrue(r.on)
+        r.tick_to(loc(16, 1))
+        self.assertFalse(r.on)
+        self.assertIsNone(r.c.plug_view(PID)["countdown"])
 
     def test_bad_inching_and_countdown_values_rejected(self):
         r = self.rig(loc(8))
@@ -728,6 +770,352 @@ class DstTest(ControllerBase):
         r.tick_to(datetime(2026, 10, 25, 3, 0, tzinfo=UTC), step=timedelta(minutes=1))
         self.assertFalse(r.on)  # nu mai porneste a doua oara
         self.assertEqual(len(r.worker.submitted), n + 1)
+
+
+class OffNeverFollowedByArmedDpTest(ControllerBase):
+    """Critical: dupa o oprire reusita nu se scrie niciodata un DP nenul (priza oprita
+    cu countdown armat se poate reporni singura). Workerul real rezolva future-ul inainte
+    de citire, deci aici citirile sunt amanate (defer=True)."""
+
+    def assert_clean_off(self, r):
+        self.assertFalse(r.on)
+        later = r.dp_writes_after_last_off()
+        self.assertEqual([x for x in later if x[0] == 9 and x[1] != 0], [], later)
+        self.assertEqual(r.dp9, 0)
+
+    def test_schedule_stop_with_inching_pending(self):
+        r = self.rig(loc(9), defer=True)
+        r.c.set_inching(PID, True, 720)
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        self.assertTrue(r.on)
+        r.tick_to(loc(16, 0))
+        r.tick_to(loc(16, 2), step=timedelta(seconds=5))
+        self.assert_clean_off(r)
+
+    def test_countdown_off_with_inching_pending(self):
+        r = self.rig(loc(9), defer=True)
+        r.c.set_inching(PID, True, 720)
+        r.driver.dps["1"] = True
+        r.worker.poll()
+        r.c.set_countdown(PID, "off", 30)
+        self.assertEqual(r.dp9, 1800)
+        r.tick_to(loc(9, 31), step=timedelta(seconds=5))
+        self.assert_clean_off(r)
+
+    def test_inching_off_with_countdown_pending(self):
+        r = self.rig(loc(9), defer=True)
+        r.c.set_inching(PID, True, 30)
+        r.driver.dps["1"] = True
+        r.worker.poll()
+        r.c.set_countdown(PID, "off", 60)
+        self.assertEqual(r.dp9, 1800)  # inching e mai aproape
+        r.tick_to(loc(9, 31), step=timedelta(seconds=5))
+        self.assert_clean_off(r)
+        self.assertIsNone(r.c.plug_view(PID)["countdown"])
+
+    def test_manual_off_with_everything_pending(self):
+        r = self.rig(loc(9), defer=True)
+        r.c.set_inching(PID, True, 30)
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        r.c.switch(PID, False)
+        r.tick_to(loc(10, 32), step=timedelta(seconds=5))
+        self.assert_clean_off(r)
+
+    def test_external_off_cancels_armed_dp(self):
+        r = self.rig(loc(9), defer=True)
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        self.assertEqual(r.dp9, 19800)
+        r.driver.dps["1"] = False  # buton fizic
+        r.worker.poll()
+        r.tick_to(loc(10, 31))
+        self.assertEqual(r.dp9, 0)
+
+
+class HolderEditTest(ControllerBase):
+    def running(self):
+        r = self.rig(loc(9))
+        iid = self.schedule(r)
+        r.tick_to(loc(11))
+        self.assertTrue(r.on)
+        return r, iid
+
+    def test_edit_still_containing_now_keeps_holder(self):
+        r, iid = self.running()
+        r.c.update_interval(PID, iid, stop="12:00")
+        self.assertEqual(r.c._get(PID)["started_by"], iid)
+        self.assertEqual(r.dp9, 3600)
+        r.tick_to(loc(12))
+        self.assertFalse(r.on)
+
+    def test_edit_moving_window_past_now_switches_off_now(self):
+        r, iid = self.running()
+        v = r.c.update_interval(PID, iid, stop="10:45")
+        self.assertFalse(r.on)
+        self.assertFalse(v["on"])
+        self.assertIsNone(v["countdown"])
+        self.assertIsNone(r.c._get(PID)["started_by"])
+
+    def test_edit_past_now_with_unreachable_plug_keeps_retrying(self):
+        r, iid = self.running()
+        r.driver.fail_set = 1
+        r.c.update_interval(PID, iid, stop="10:45")  # nu ridica eroarea
+        self.assertTrue(r.on)
+        self.assertEqual(r.c._get(PID)["countdown"]["action"], "off")
+        self.assertIsNotNone(r.c.plug_view(PID)["error"])
+        r.tick_to(loc(11, 1))
+        self.assertFalse(r.on)
+
+    def test_disable_keeps_plug_on_until_old_stop(self):
+        r, iid = self.running()
+        r.c.update_interval(PID, iid, enabled=False)
+        self.assertTrue(r.on)
+        self.assertEqual(r.c._get(PID)["countdown"]["at"], int(loc(16).timestamp()))
+        self.assertEqual(r.dp9, 19800)  # acelasi termen absolut: nu se rescrie
+        r.tick_to(loc(15, 59))
+        self.assertTrue(r.on)
+        r.tick_to(loc(16, 1))
+        self.assertFalse(r.on)
+
+    def test_disable_keeps_earlier_off_countdown(self):
+        r, iid = self.running()
+        r.c.set_countdown(PID, "off", 30)
+        r.c.update_interval(PID, iid, enabled=False)
+        self.assertEqual(r.c._get(PID)["countdown"]["at"], int(loc(11, 30).timestamp()))
+
+    def test_disable_replaces_later_off_countdown(self):
+        r, iid = self.running()
+        r.c.set_countdown(PID, "off", 600)
+        r.c.update_interval(PID, iid, enabled=False)
+        self.assertEqual(r.c._get(PID)["countdown"]["at"], int(loc(16).timestamp()))
+
+    def test_edit_of_other_interval_leaves_holder(self):
+        r, iid = self.running()
+        other = self.schedule(r, "20:00", "21:00")
+        r.c.update_interval(PID, other, enabled=False)
+        self.assertTrue(r.on)
+        self.assertEqual(r.c._get(PID)["started_by"], iid)
+        self.assertIsNone(r.c._get(PID)["countdown"])
+
+
+class PendingStopBookkeepingTest(ControllerBase):
+    def failing_stop(self):
+        r = self.rig(loc(9), dev=device(with_countdown=False))
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        r.driver.fail_set = 10 ** 6
+        r.tick_to(loc(16, 10))
+        self.assertTrue(r.on)
+        return r
+
+    def test_adding_interval_does_not_cancel_pending_stop(self):
+        r = self.failing_stop()
+        r.c.add_interval(PID, "17:00", "18:00")
+        r.tick_to(loc(16, 20))
+        r.driver.fail_set = 0
+        r.tick_to(loc(16, 21))
+        self.assertFalse(r.on)
+
+    def test_editing_other_interval_does_not_cancel_pending_stop(self):
+        r = self.failing_stop()
+        other = r.c.add_interval(PID, "17:00", "18:00")["schedules"][-1]["id"]
+        r.c.update_interval(PID, other, start="17:30")
+        r.driver.fail_set = 0
+        r.tick_to(loc(16, 12))
+        self.assertFalse(r.on)
+
+    def test_later_real_start_cancels_stale_stop(self):
+        r = self.rig(loc(9), dev=device(with_countdown=False))
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        r.driver.fail_set = 10 ** 6
+        r.tick_to(loc(16, 5))
+        r.driver.fail_set = 0
+        r.c._set(PID, next_cmd_try=None)
+        r.restart()
+        r.clock.set(loc(10, 30, day=6))
+        r.c.tick()  # azi porneste (start real, mai nou decat stop-ul de ieri)
+        self.assertTrue(r.on)
+        r.tick_to(loc(10, 40))
+        self.assertTrue(r.on)
+
+
+class AdjacentIntervalsTest(ControllerBase):
+    def back_to_back(self, a_id, b_id):
+        r = self.rig(loc(9))
+        r.set_schedules([(a_id, "10:30", "16:00"), (b_id, "16:00", "18:00")])
+        r.tick_to(loc(15, 59))
+        self.assertEqual(r.c._get(PID)["started_by"], a_id)
+        r.tick_to(loc(16, 0))
+        self.assertTrue(r.on)
+        self.assertEqual(r.c._get(PID)["started_by"], b_id)
+        r.tick_to(loc(17, 59))
+        self.assertTrue(r.on)
+        r.tick_to(loc(18, 0))
+        self.assertFalse(r.on)
+
+    def test_back_to_back_a_id_high(self):
+        self.back_to_back("ffff", "0000")
+
+    def test_back_to_back_a_id_low(self):
+        self.back_to_back("0000", "ffff")
+
+    def test_back_to_back_restart_replay(self):
+        for a, b in (("ffff", "0000"), ("0000", "ffff")):
+            r = self.rig(loc(9))
+            r.set_schedules([(a, "10:30", "16:00"), (b, "16:00", "18:00")])
+            r.clock.set(loc(17))
+            r.restart()
+            r.c.tick()
+            self.assertTrue(r.on)
+            self.assertEqual(r.c._get(PID)["started_by"], b)
+
+    def test_overlap_stop_of_other_interval_is_ignored(self):
+        r = self.rig(loc(9))
+        r.set_schedules([("aaaa", "10:00", "14:00"), ("bbbb", "12:00", "16:00")])
+        r.tick_to(loc(12))
+        self.assertEqual(r.c._get(PID)["started_by"], "bbbb")
+        r.tick_to(loc(14, 1))
+        self.assertTrue(r.on)  # stop-ul lui A nu opreste ce tine B
+        r.tick_to(loc(15, 59))
+        self.assertTrue(r.on)
+        r.tick_to(loc(16))
+        self.assertFalse(r.on)
+
+    def test_overlap_other_order(self):
+        r = self.rig(loc(9))
+        r.set_schedules([("bbbb", "10:00", "14:00"), ("aaaa", "12:00", "16:00")])
+        r.tick_to(loc(14, 1))
+        self.assertTrue(r.on)
+        r.tick_to(loc(16))
+        self.assertFalse(r.on)
+
+
+class FailSafeResyncTest(ControllerBase):
+    def test_dp_rewritten_after_plug_reconnect(self):
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        self.assertEqual(r.dp9, 19800)
+        r.worker.on_reading(PID, PlugReading(False, None, None, None, None, None, "wifi", 0))
+        r.driver.dps["9"] = 0  # priza a repornit si a pierdut countdown-ul
+        r.clock.advance(minutes=10)
+        r.worker.poll()
+        r.c.tick()
+        self.assertEqual(r.dp9, 19800 - 600)
+
+    def test_dp_rewritten_when_cleared_from_outside(self):
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        r.driver.dps["9"] = 0  # sters din SmartLife
+        r.clock.advance(minutes=5)
+        r.worker.poll()
+        r.c.tick()
+        self.assertEqual(r.dp9, 19800 - 300)
+
+    def test_small_difference_is_not_a_resync(self):
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.tick_to(loc(10, 30))
+        n = len(r.worker.submitted)
+        r.clock.advance(seconds=30)
+        r.worker.poll()  # fake-ul nu numara in jos: 30 s diferenta, sub prag
+        r.c.tick()
+        self.assertEqual(len(r.worker.submitted), n)
+
+
+class RetryRobustnessTest(ControllerBase):
+    def test_store_error_during_edge_does_not_lose_the_retry(self):
+        r = self.rig(loc(9), store_cls=FlakyStore, defer=True)
+        iid = self.schedule(r)
+        r.tick_to(loc(15, 59))
+        self.assertTrue(r.on)
+        r.store.fail_updates = 1
+        r.tick_to(loc(16, 0))  # stop reusit, dar scrierea starii esueaza
+        self.assertFalse(r.on)
+        r.tick_to(loc(16, 1))
+        done = r.c._get(PID)["last_done"][iid]
+        self.assertEqual(done["stop"], loc(16).isoformat())
+
+    def test_pending_start_does_not_override_later_manual_command(self):
+        r = self.rig(loc(9))
+        self.schedule(r)
+        r.driver.fail_set = 1
+        r.tick_to(loc(10, 30))
+        self.assertFalse(r.on)
+        r.clock.advance(seconds=10)
+        r.c.switch(PID, False)
+        r.tick_to(loc(10, 33))
+        self.assertFalse(r.on)
+
+    def test_first_reading_with_plug_on_starts_inching(self):
+        r = self.rig(loc(9))
+        r.c.set_inching(PID, True, 20)
+        r.driver.dps["1"] = True
+        r.restart()  # prima citire dupa repornire: priza e deja pornita
+        r.c.tick()
+        self.assertEqual(r.dp9, 20 * 60)
+        self.assertEqual(r.c.plug_view(PID)["off_deadline"]["reason"], "inching")
+
+
+class ThrottleAndLocksTest(ControllerBase):
+    def test_offline_plug_gets_one_automatic_attempt_per_30s(self):
+        r = self.rig(loc(9))
+        r.c.set_inching(PID, True, 30)
+        iid = self.schedule(r, "15:30", "16:00")
+        r.tick_to(loc(15, 30))
+        r.c.set_countdown(PID, "off", 30)  # si countdown-ul scade la 16:00
+        self.assertTrue(r.on)
+        r.driver.fail_set = 10 ** 6
+        r.clock.set(loc(16, 0))
+        offs = lambda: len([x for x in r.worker.submitted if x == (1, False)])  # noqa: E731
+        r.c.tick()
+        self.assertEqual(offs(), 1)
+        for sec in range(5, 30, 5):
+            r.clock.set(loc(16, 0, sec))
+            r.c.tick()
+        self.assertEqual(offs(), 1)
+        r.clock.set(loc(16, 0, 30))
+        r.c.tick()
+        self.assertEqual(offs(), 2)
+        r.clock.set(loc(16, 0, 45))
+        r.c.tick()
+        self.assertEqual(offs(), 2)
+        r.clock.set(loc(16, 1, 0))
+        r.c.tick()
+        self.assertEqual(offs(), 3)
+        self.assertIsNotNone(iid)
+
+    def test_stuck_plug_does_not_block_commands_to_other_plugs(self):
+        da, db = device(), device()
+        db.id, db.name = "p2", "Lumina"
+        clock = Clock(loc(9))
+        drv_a, drv_b = FakeDriver({"1": False, "9": 0}), FakeDriver({"1": False, "9": 0})
+        wa, wb = FakeWorker(da, drv_a, clock), FakeWorker(db, drv_b, clock)
+        with tempfile.TemporaryDirectory() as tmp:
+            c = Controller([da, db], {PID: wa, "p2": wb},
+                           JsonStore(os.path.join(tmp, "s.json")), TZ, clock)
+            wa.on_reading = wb.on_reading = c.on_reading
+            held, release = threading.Event(), threading.Event()
+
+            def hold():
+                with c._plock[PID]:
+                    held.set()
+                    release.wait(10)
+            t = threading.Thread(target=hold)
+            t.start()
+            held.wait(5)
+            done = []
+            u = threading.Thread(target=lambda: done.append(c.switch("p2", True)))
+            u.start()
+            u.join(3)
+            release.set()
+            t.join(5)
+            self.assertTrue(done and done[0]["on"])
+            self.assertTrue(drv_b.dps["1"])
 
 
 if __name__ == "__main__":
