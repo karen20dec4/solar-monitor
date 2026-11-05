@@ -60,7 +60,7 @@ object SolarRepository {
      * telefoanelor si a versiunilor (Grafana, tabelul „Telefoane si aplicatie"). Fara diacritice sau alte
      * caractere care n-au ce cauta intr-un antet HTTP.
      */
-    private val userAgent: String by lazy {
+    internal val userAgent: String by lazy {
         fun clean(v: String?) = (v ?: "").replace(Regex("[^\\w .\\-+]"), "").trim().ifEmpty { "necunoscut" }
         "SolarMonitor/${clean(BuildConfig.VERSION_NAME)} (${BuildConfig.VERSION_CODE}; " +
             "Android ${clean(Build.VERSION.RELEASE)}; ${clean(Build.MODEL)})"

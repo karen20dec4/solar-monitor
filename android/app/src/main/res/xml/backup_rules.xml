@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API <= 30: jetonul CASA al telefonului nu se pune in backup. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="casa_access.xml" />
+</full-backup-content>

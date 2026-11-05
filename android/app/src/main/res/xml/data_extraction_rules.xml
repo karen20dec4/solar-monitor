@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 31+: jetonul CASA al telefonului nu se pune in backup cloud si nu trece la alt telefon. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="casa_access.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="casa_access.xml" />
+    </device-transfer>
+</data-extraction-rules>
