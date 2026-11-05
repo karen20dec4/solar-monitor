@@ -68,7 +68,8 @@ class FakeManager:
         self.device_listeners.append(listener)
 
     def refresh_mq(self):
-        self.mq = SimpleNamespace(client=FakeClient(self.mq_connected))
+        self.mq = SimpleNamespace(client=FakeClient(self.mq_connected), stopped=False)
+        self.mq.stop = lambda: setattr(self.mq, "stopped", True)
 
     def report(self, device_id, status, timestamps_ms=None):
         d = self.device_map[device_id]
@@ -344,6 +345,179 @@ class StateTest(Base):
         self.assertEqual(cs.state(), "disconnected")
 
 
+class RelogginTest(Base):
+    def test_new_login_on_disk_rebuilds_manager(self):
+        cs, old = self.started()
+        self.assertEqual(len(FakeManager.created), 1)
+        new = dict(SESSION, terminal_id="TERM2",
+                   token_info=dict(SESSION["token_info"], access_token="AT-NOU", refresh_token="RT-NOU"))
+        cs._store.save(new)  # `python -m casa login` din alt proces
+        cs._tick()
+        self.assertEqual(len(FakeManager.created), 2)
+        mgr = FakeManager.created[-1]
+        self.assertEqual(mgr.args[2], "TERM2")
+        self.assertEqual(mgr.args[4]["access_token"], "AT-NOU")
+        self.assertTrue(old.mq.stopped)
+        self.assertIsNotNone(mgr.mq)  # MQTT repornit pe managerul nou
+        self.assertEqual(cs.state(), "ok")
+
+    def test_own_token_refresh_does_not_rebuild(self):
+        cs, mgr = self.started()
+        mgr.args[5].update_token({"t": 5, "uid": "u", "expire_time": 7200,
+                                  "access_token": "AT2", "refresh_token": "RT2"})
+        cs._tick()
+        self.assertEqual(len(FakeManager.created), 1)
+
+    def test_failure_with_dead_mqtt_rebuilds_on_next_tick(self):
+        cs, mgr = self.started()
+        mgr.mq.client.connected = False
+        self.clock.t += 400
+        mgr.update_device_cache = mock.Mock(side_effect=OSError("SECRET"))
+        with self.assertLogs("casa.cloud", level="WARNING"):
+            cs._tick()
+        cs._tick()
+        self.assertEqual(len(FakeManager.created), 2)
+
+    def test_failure_with_live_mqtt_keeps_manager(self):
+        cs, mgr = self.started()
+        self.clock.t += 400
+        mgr.update_device_cache = mock.Mock(side_effect=OSError("retea"))
+        with self.assertLogs("casa.cloud", level="WARNING"):
+            cs._tick()
+        self.assertEqual(len(FakeManager.created), 1)
+
+    def test_state_does_not_reparse_file_while_unchanged(self):
+        cs, _ = self.started()
+        with mock.patch.object(cs._store, "load", wraps=cs._store.load) as load:
+            for _ in range(5):
+                cs.state()
+        self.assertEqual(load.call_count, 0)
+        cs._store.save(dict(SESSION, terminal_id="T3"))
+        with mock.patch.object(cs._store, "load", wraps=cs._store.load) as load:
+            cs.state()
+            cs.state()
+        self.assertEqual(load.call_count, 1)
+
+
+class PollingHookTest(Base):
+    def test_values_found_by_cache_polling_reach_hook(self):
+        FakeManager.devices = [sensor(update_time=int(self.clock.t - 100))]
+        cs = self.session()
+        seen = []
+        cs.on_sensor_update = seen.append
+        cs._start_once()
+        self.assertEqual(len(seen), 1)  # la pornire
+        self.assertEqual(seen[0]["temperature"], 21.5)
+        self.clock.t += 301
+        cs._tick()  # nimic schimbat -> fara apel
+        self.assertEqual(len(seen), 1)
+        FakeManager.devices = [sensor(status={"va_temperature": 240, "va_humidity": 55,
+                                              "battery_state": "middle"},
+                                      update_time=int(self.clock.t - 5))]
+        self.clock.t += 301
+        cs._tick()
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[1]["temperature"], 24.0)
+        self.assertEqual(seen[1]["updated"], int(self.clock.t - 306))
+
+    def test_hook_failure_is_logged_without_exception_text(self):
+        FakeManager.devices = [sensor()]
+        cs = self.session()
+
+        def boom(entry):
+            raise RuntimeError("SECRET-influx-token")
+        cs.on_sensor_update = boom
+        with self.assertLogs("casa.cloud", level="WARNING") as cm:
+            cs._start_once()
+        self.assertNotIn("SECRET", "\n".join(cm.output))
+
+    def test_sensor_with_none_name_sorts(self):
+        cs, _ = self.started([sensor("s1", None), sensor("s2", "Alfa")])
+        self.assertEqual({s["id"] for s in cs.sensors()}, {"s1", "s2"})
+
+
+class _Capture:
+    def __enter__(self):
+        import logging
+        self.records = []
+        self.handler = logging.Handler()
+        self.handler.emit = lambda r: self.records.append(self.handler.format(r))
+        logging.getLogger().addHandler(self.handler)
+        self._old = logging.getLogger().level
+        logging.getLogger().setLevel(logging.DEBUG)
+        return self
+
+    def __exit__(self, *a):
+        import logging
+        logging.getLogger().removeHandler(self.handler)
+        logging.getLogger().setLevel(self._old)
+
+
+class SecretsTest(Base):
+    def test_cli_login_failure_prints_no_exception_text(self):
+        class Boom(FakeLogin):
+            def qr_code(self, *a):
+                raise RuntimeError("https://x/?token=SECRET&usercode=UC")
+        cs = self.session(with_session=False, login_control=Boom([]))
+        out, err = io.StringIO(), io.StringIO()
+        cfg = SimpleNamespace(data_dir=self.dir, ntfy_url="")
+        with _Capture() as cap, mock.patch.object(cli, "_cloud", return_value=cs), \
+                mock.patch.object(cli.Config, "from_env", return_value=cfg), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(cli.main(["login", "UC"]), 1)
+        everything = out.getvalue() + err.getvalue() + "\n".join(cap.records)
+        self.assertNotIn("SECRET", everything)
+        self.assertIn("RuntimeError", err.getvalue())
+
+    def test_cli_sync_failure_prints_no_exception_text(self):
+        FakeManager.devices = []
+        cs = self.session()
+        cs._ensure_manager().update_device_cache = mock.Mock(side_effect=OSError("url?token=SECRET"))
+        out, err = io.StringIO(), io.StringIO()
+        cfg = SimpleNamespace(data_dir=self.dir, ntfy_url="")
+        with _Capture() as cap, mock.patch.object(cli, "_cloud", return_value=cs), \
+                mock.patch.object(cli.Config, "from_env", return_value=cfg), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(cli.main(["sync"]), 1)
+        self.assertNotIn("SECRET", out.getvalue() + err.getvalue() + "\n".join(cap.records))
+
+    def test_login_result_error_is_logged_by_type_only(self):
+        class Boom(FakeLogin):
+            def login_result(self, *a):
+                self.polls += 1
+                raise RuntimeError("get https://x/tokens/SECRET")
+        cs = self.session(with_session=False, login_control=Boom([]))
+        with _Capture() as cap:
+            with self.assertRaises(LoginFailed):
+                cs.login_interactive("UC", out=io.StringIO())
+        self.assertTrue(cap.records)
+        self.assertNotIn("SECRET", "\n".join(cap.records))
+
+    def test_tick_failure_is_logged_by_type_only(self):
+        cs, mgr = self.started()
+        mgr.mq.client.connected = False
+        self.clock.t += 400
+        mgr.update_device_cache = mock.Mock(side_effect=OSError("url SECRET"))
+        with _Capture() as cap:
+            cs._tick()
+        self.assertTrue(cap.records)
+        self.assertNotIn("SECRET", "\n".join(cap.records))
+
+    def test_notify_failure_is_logged_by_type_only(self):
+        def boom(*a):
+            raise RuntimeError("SECRET")
+        cs, mgr = self.started()
+        cs._notify = boom
+        mgr.mq.client.connected = False
+        self.clock.t += 700
+        cs.check_health()
+        self.clock.t += 1900
+        with _Capture() as cap:
+            cs.check_health()
+        self.assertTrue(cap.records)
+        self.assertNotIn("SECRET", "\n".join(cap.records))
+
+
 class LoginTest(Base):
     def test_login_saves_session_600_and_syncs(self):
         FakeManager.devices = [sensor()]
@@ -397,6 +571,34 @@ class LoginTest(Base):
 
 
 class DemoTest(unittest.TestCase):
+    def _run(self, d, *args):
+        out, err = io.StringIO(), io.StringIO()
+        cfg = SimpleNamespace(data_dir=d, ntfy_url="")
+        with mock.patch.object(cli.Config, "from_env", return_value=cfg), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            return cli.main(["demo-devices", *args]), err.getvalue()
+
+    def test_demo_refuses_to_overwrite_real_keys_without_force(self):
+        from casa.devices import DeviceInfo, save_devices
+        with tempfile.TemporaryDirectory() as d:
+            save_devices(d, [DeviceInfo(id="p1", name="Boiler", kind="plug", local_key=KEY,
+                                        ip=None, version=None)])
+            rc, err = self._run(d)
+            self.assertEqual(rc, 1)
+            self.assertIn("--force", err)
+            self.assertEqual(load_devices(d)[0].local_key, KEY)
+            rc, _ = self._run(d, "--force")
+            self.assertEqual(rc, 0)
+            self.assertEqual(len(load_devices(d)), 8)
+
+    def test_demo_overwrites_file_without_keys_and_refuses_corrupt(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._run(d)[0], 0)
+            self.assertEqual(self._run(d)[0], 0)  # fara chei: se poate repeta
+            with open(os.path.join(d, "devices.json"), "w") as f:
+                f.write("{corupt")
+            self.assertEqual(self._run(d)[0], 1)
+
     def test_demo_devices_writes_five_plugs_and_three_sensors_without_keys(self):
         with tempfile.TemporaryDirectory() as d:
             out = io.StringIO()

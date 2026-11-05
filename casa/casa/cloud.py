@@ -144,6 +144,8 @@ class CloudSession:
         self._manager_factory = manager_factory
         self._login = login_control
         self._store = JsonStore(os.path.join(data_dir, SESSION_FILE))
+        self._session_cache: tuple = (None, None)   # (semnatura fisier, continut parsat)
+        self._built_sig = None                      # semnatura fisierului cand s-a construit managerul
         self._manager = None
         self._listening = False
         self._mq_started = False
@@ -157,21 +159,59 @@ class CloudSession:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self.on_sensor_update: Optional[Callable[[dict], None]] = None
+        # SDK-ul isi logheaza singur erorile de retea (pot contine URL-uri cu tokenul QR / codul de
+        # utilizator): le tacem, ca si Home Assistant. Starea o spune `state()`.
+        logging.getLogger("tuya_sharing").setLevel(logging.CRITICAL)
 
     # ------------------------------------------------------------------ sesiune --
+    def _file_sig(self):
+        """Identitatea fisierului de sesiune (os.replace schimba inode-ul la fiecare scriere)."""
+        try:
+            st = os.stat(self._store.path)
+        except OSError:
+            return None
+        return (st.st_ino, st.st_mtime_ns, st.st_size)
+
     def _load_session(self) -> Optional[dict]:
+        sig = self._file_sig()
+        if sig is None:
+            return None
+        cached_sig, cached = self._session_cache
+        if sig == cached_sig:
+            return cached
         try:
             data = self._store.load({})
         except ValueError:
             log.error("cloud_session.json corupt")
-            return None
+            data = None
         need = ("user_code", "terminal_id", "endpoint", "token_info")
-        return data if all(data.get(k) for k in need) else None
+        if data is not None and not all(data.get(k) for k in need):
+            data = None
+        self._session_cache = (sig, data)
+        return data
 
     def _save_token(self, token_info: dict) -> None:
         def put(data):
             data["token_info"] = dict(token_info)
-        self._store.update(put, {})
+        with self._lock:
+            unchanged = self._file_sig() == self._built_sig
+            self._store.update(put, {})
+            if unchanged:  # scrierea e a noastra; un login nou facut intre timp ramane vizibil
+                self._built_sig = self._file_sig()
+
+    def _reset_manager(self) -> None:
+        """Uita managerul curent (si MQTT-ul lui): urmatorul ciclu citeste din nou fisierul de sesiune."""
+        with self._lock:
+            mgr, self._manager = self._manager, None
+            self._listening = False
+            self._mq_started = False
+            self._built_sig = None
+        mq = getattr(mgr, "mq", None)
+        if mq is not None:
+            try:
+                mq.stop()
+            except Exception:  # noqa: BLE001
+                pass
 
     # -------------------------------------------------------------------- login --
     def login_interactive(self, user_code: str, out=sys.stdout) -> None:
@@ -194,7 +234,7 @@ class CloudSession:
             try:
                 ok, result = login.login_result(token, CLIENT_ID, user_code)
             except Exception as exc:  # noqa: BLE001 - retea intrerupta: mai incercam
-                log.warning("login_result esuat: %s", exc)
+                log.warning("login_result esuat: %s", type(exc).__name__)
                 ok, result = False, {}
             if ok:
                 info = result
@@ -209,9 +249,7 @@ class CloudSession:
             "token_info": {k: info.get(k) for k in ("t", "uid", "expire_time", "access_token", "refresh_token")},
         }
         self._store.save(session, mode=0o600)
-        self._manager = None
-        self._listening = False
-        self._mq_started = False
+        self._reset_manager()
         print("Autentificare reusita. Sincronizez dispozitivele...", file=out)
         self.sync()
 
@@ -226,6 +264,7 @@ class CloudSession:
         with self._lock:
             if self._manager is not None:
                 return self._manager
+            sig = self._file_sig()
             s = self._load_session()
             if s is None:
                 raise LoginFailed("Nu exista sesiune Tuya. Ruleaza: python -m casa login")
@@ -234,17 +273,32 @@ class CloudSession:
                 from tuya_sharing import Manager as factory
             self._manager = factory(CLIENT_ID, s["user_code"], s["terminal_id"], s["endpoint"],
                                     s["token_info"], _TokenListener(self))
+            self._built_sig = sig
             return self._manager
 
     def _refresh_cache(self) -> None:
         mgr = self._ensure_manager()
         self._last_refresh_try = self._clock()
         mgr.update_device_cache()
+        changed = []
         with self._lock:
             self._last_refresh_ok = self._clock()
             for dev in list(mgr.device_map.values()):
                 if _kind(getattr(dev, "category", "")) == "sensor":
-                    self._store_sensor(dev, None, from_cache=True)
+                    prev = self._sensors.get(dev.id)
+                    entry = self._store_sensor(dev, None, from_cache=True)
+                    if prev != entry:
+                        changed.append(dict(entry))
+        for entry in changed:  # valorile gasite prin polling ajung si ele in Influx
+            self._emit(entry)
+
+    def _emit(self, entry: dict) -> None:
+        hook = self.on_sensor_update
+        if hook is not None:
+            try:
+                hook(entry)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("on_sensor_update a esuat: %s", type(exc).__name__)
 
     # --------------------------------------------------------------------- sync --
     def sync(self) -> list:
@@ -312,12 +366,7 @@ class CloudSession:
                     prev["name"] = clean_name(dev.name or "") or dev.name  # nameUpdate / online / offline
                 return
             entry = dict(self._store_sensor(dev, timestamps, touched=touched))
-        hook = self.on_sensor_update
-        if hook is not None:
-            try:
-                hook(entry)
-            except Exception:  # noqa: BLE001
-                log.exception("on_sensor_update a esuat")
+        self._emit(entry)
 
     def _drop_sensor(self, device_id: str) -> None:
         with self._lock:
@@ -325,7 +374,7 @@ class CloudSession:
 
     def sensors(self) -> list:
         with self._lock:
-            return sorted((dict(s) for s in self._sensors.values()), key=lambda s: s["name"])
+            return sorted((dict(s) for s in self._sensors.values()), key=lambda s: s["name"] or "")
 
     # ------------------------------------------------------------------- stare --
     def _mqtt_connected(self) -> bool:
@@ -362,8 +411,8 @@ class CloudSession:
             try:
                 self._notify("CASA: cloud Tuya deconectat",
                              "Senzorii nu mai primesc date. Refa login: python -m casa login", "high")
-            except Exception:  # noqa: BLE001
-                log.exception("notificarea a esuat")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("notificarea a esuat: %s", type(exc).__name__)
 
     # --------------------------------------------------------------- pornire MQTT --
     def _start_once(self) -> None:
@@ -378,6 +427,9 @@ class CloudSession:
 
     def _tick(self) -> None:
         try:
+            if self._manager is not None and self._file_sig() != self._built_sig:
+                log.info("sesiunea Tuya s-a schimbat pe disc (login nou): reconstruiesc managerul")
+                self._reset_manager()
             if self._load_session() is None:
                 pass
             elif not self._mq_started:
@@ -388,7 +440,10 @@ class CloudSession:
                         and (self._last_refresh_try is None or now - self._last_refresh_try >= QUIET_MQTT_S)):
                     self._refresh_cache()
         except Exception as exc:  # noqa: BLE001
-            log.warning("ciclu cloud esuat: %s", exc)
+            # nu logam textul exceptiei: poate contine URL-uri cu tokeni
+            log.warning("ciclu cloud esuat: %s", type(exc).__name__)
+            if not self._mqtt_connected():
+                self._reset_manager()  # data viitoare reciteste sesiunea si reconstruieste
         self.check_health()
 
     def start(self) -> None:

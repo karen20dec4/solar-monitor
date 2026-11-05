@@ -79,6 +79,10 @@ def _cmd_login(args, cfg: Config) -> int:
     except LoginFailed as e:
         print(f"Eroare: {e}", file=sys.stderr)
         return 1
+    except Exception as e:  # noqa: BLE001 - textul exceptiei poate contine URL cu tokenul QR
+        print(f"Eroare: login esuat ({type(e).__name__}). Verifica reteaua si codul de utilizator.",
+              file=sys.stderr)
+        return 1
     _print_devices(cfg)
     return 0
 
@@ -88,6 +92,10 @@ def _cmd_sync(args, cfg: Config) -> int:
         _cloud(cfg).sync()
     except LoginFailed as e:
         print(f"Eroare: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001
+        print(f"Eroare: sincronizare esuata ({type(e).__name__}). Verifica reteaua si sesiunea.",
+              file=sys.stderr)
         return 1
     _print_devices(cfg)
     return 0
@@ -108,7 +116,19 @@ _DEMO_SENSORS = (
 )
 
 
+def _has_local_keys(cfg: Config) -> bool:
+    try:
+        data = JsonStore(os.path.join(cfg.data_dir, "devices.json")).load({"devices": []})
+    except ValueError:
+        return True  # fisier ilizibil: nu stim ce contine, nu-l suprascriem
+    return any(d.get("local_key") for d in data.get("devices", []))
+
+
 def _cmd_demo_devices(args, cfg: Config) -> int:
+    if _has_local_keys(cfg) and not args.force:
+        print("devices.json contine chei locale reale (sau nu poate fi citit): nu il suprascriu. "
+              "Foloseste --force daca vrei sa-l inlocuiesti cu cel de demonstratie.", file=sys.stderr)
+        return 1
     devices = []
     for dev_id, name, metered in _DEMO_PLUGS:
         dps = {"switch": 1, "countdown": 9}
@@ -143,6 +163,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("sync", help="descarca dispozitivele si cheile locale in devices.json")
     p.set_defaults(fn=_cmd_sync)
     p = sub.add_parser("demo-devices", help="scrie devices.json de demonstratie (CASA_DEMO=1), fara chei")
+    p.add_argument("--force", action="store_true", help="suprascrie si un devices.json cu chei locale")
     p.set_defaults(fn=_cmd_demo_devices)
     args = parser.parse_args(argv)
     return args.fn(args, Config.from_env())
