@@ -43,8 +43,8 @@ internal fun casaFailure(code: Int, body: String, authenticated: Boolean = true)
 object CasaRepository {
     private const val BASE = "https://vyra.go.ro:31443/solar/casa"
     private const val READ_MS = 8000
-    // Serverul asteapta raspunsul prizei pana la 10 s.
-    private const val COMMAND_READ_MS = 15000
+    // Cel mai rau caz teoretic pe server e ~45 s (coada prizei); Caddy asteapta 60 s.
+    private const val COMMAND_READ_MS = 50000
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 

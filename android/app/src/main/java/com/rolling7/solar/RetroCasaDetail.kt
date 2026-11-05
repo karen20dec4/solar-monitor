@@ -1,0 +1,1307 @@
+package com.rolling7.solar
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Text
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerDefaults
+import androidx.compose.material3.rememberTimePickerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.time.DayOfWeek
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.roundToInt
+
+// ---------------------------------------------------------------------------------------------
+// Ajutoare pure (testate in CasaDetailTest)
+// ---------------------------------------------------------------------------------------------
+
+internal const val InchingMinMinutes = 5
+internal const val InchingMaxMinutes = 720
+internal const val InchingStepMinutes = 5
+internal const val MaxIntervals = 6
+internal const val CountdownMaxMinutes = 1440
+private const val InchingDebounceMs = 600L
+private val BucharestZone: ZoneId = ZoneId.of("Europe/Bucharest")
+
+/** Valoarea inchingului dupa un pas (-1 / +1): multiplu de 5, intre 5 si 720 minute. */
+internal fun casaInchingStep(current: Int, direction: Int): Int {
+    val base = (current.toDouble() / InchingStepMinutes).roundToInt() * InchingStepMinutes
+    return (base + direction * InchingStepMinutes).coerceIn(InchingMinMinutes, InchingMaxMinutes)
+}
+
+/** Valoarea afisata / trimisa cand serverul spune 0 sau o valoare in afara intervalului. */
+internal fun casaInchingClamp(minutes: Int): Int =
+    if (minutes <= 0) 30 else minutes.coerceIn(InchingMinMinutes, InchingMaxMinutes)
+
+/** Actiunea implicita a countdown-ului: opusul starii curente (pornita -> OPRESTE). */
+internal fun casaCountdownDefaultAction(on: Boolean): String = if (on) "off" else "on"
+
+internal fun casaCountdownTotal(hours: Int, minutes: Int): Int = hours * 60 + minutes
+
+internal fun casaCountdownValid(hours: Int, minutes: Int): Boolean =
+    casaCountdownTotal(hours, minutes) in 1..CountdownMaxMinutes
+
+/** Ore si minute (rotunjite in sus) dintr-un numar de secunde ramase. */
+internal fun casaDurationParts(seconds: Long): Pair<Int, Int> {
+    val total = ceil(seconds.coerceAtLeast(0) / 60.0).toInt()
+    return total / 60 to total % 60
+}
+
+/** "OPRIRE IN 23 MIN" / "OPRIRE IN 1 H 05 MIN". */
+internal fun casaDeadlineText(seconds: Long): String {
+    val (h, m) = casaDurationParts(seconds)
+    return if (h > 0) "OPRIRE IN $h H ${m.toString().padStart(2, '0')} MIN" else "OPRIRE IN $m MIN"
+}
+
+internal fun casaHm(h: Int, m: Int): String = "%02d:%02d".format(Locale.US, h, m)
+
+/** Mesajul de eroare al unui interval nou, sau null daca e bun. Doua ore egale nu sunt un interval. */
+internal fun casaIntervalError(start: String, stop: String): String? =
+    if (start == stop) "INTERVAL INVALID" else null
+
+internal fun casaCanAddInterval(count: Int): Boolean = count < MaxIntervals
+
+internal fun casaScheduleSub(s: CasaSchedule): String =
+    "ZILNIC · PORNESTE ${s.start}, OPRESTE ${s.stop}"
+
+internal fun casaBatteryText(b: Double?): String =
+    if (b == null) "BATERIE ?" else "BATERIE ${b.roundToInt()}%"
+
+internal fun casaRangeSeconds(range: String): Long = when (range) {
+    "2h" -> 7_200L
+    "7d" -> 604_800L
+    else -> 86_400L
+}
+
+internal fun casaRangeTitle(range: String): String = when (range) {
+    "2h" -> "ULTIMELE 2 ORE"
+    "7d" -> "ULTIMELE 7 ZILE"
+    else -> "ULTIMELE 24H"
+}
+
+private val DayAbbrev = mapOf(
+    DayOfWeek.MONDAY to "LU", DayOfWeek.TUESDAY to "MA", DayOfWeek.WEDNESDAY to "MI",
+    DayOfWeek.THURSDAY to "JO", DayOfWeek.FRIDAY to "VI", DayOfWeek.SATURDAY to "SA",
+    DayOfWeek.SUNDAY to "DU"
+)
+
+internal fun casaDayAbbrev(d: DayOfWeek): String = DayAbbrev.getValue(d)
+
+internal data class CasaTick(val t: Long, val label: String)
+
+private val HmFormat = DateTimeFormatter.ofPattern("HH:mm")
+
+/**
+ * Reperele de timp ale axei X pentru fereastra [now - interval, now]: 2h din 20 in 20 de minute, 1d din 4 in
+ * 4 ore (HH:MM, ora Bucurestiului), 7d cate unul la fiecare miezul noptii (LU..DU). Cele lipite de margine
+ * se omit, ca etichetele sa nu iasa din grafic.
+ */
+internal fun casaTimeTicks(range: String, nowSec: Long, zone: ZoneId = BucharestZone): List<CasaTick> {
+    val span = casaRangeSeconds(range)
+    val t0 = nowSec - span
+    val margin = span * 0.03
+    val out = ArrayList<CasaTick>()
+    if (range == "7d") {
+        var d = Instant.ofEpochSecond(t0).atZone(zone).toLocalDate().plusDays(1)
+        while (true) {
+            val t = d.atStartOfDay(zone).toEpochSecond()
+            if (t > nowSec) break
+            if (t - t0 >= margin && nowSec - t >= margin) out += CasaTick(t, casaDayAbbrev(d.dayOfWeek))
+            d = d.plusDays(1)
+        }
+    } else {
+        val step = if (range == "2h") 1_200L else 14_400L
+        val offset = zone.rules.getOffset(Instant.ofEpochSecond(t0)).totalSeconds
+        var t = Math.floorDiv(t0 + offset, step) * step + step - offset
+        while (t < nowSec) {
+            if (t - t0 >= margin && nowSec - t >= margin) {
+                out += CasaTick(t, Instant.ofEpochSecond(t).atZone(zone).format(HmFormat))
+            }
+            t += step
+        }
+    }
+    return out
+}
+
+/** Momentul unui minim / maxim: "HH:MM" (2h, 1d) sau "LU 14:20" (7d). */
+internal fun casaStatTime(range: String, epoch: Long, zone: ZoneId = BucharestZone): String {
+    val z = Instant.ofEpochSecond(epoch).atZone(zone)
+    val hm = z.format(HmFormat)
+    return if (range == "7d") "${casaDayAbbrev(z.dayOfWeek)} $hm" else hm
+}
+
+/** Axa verticala: `divisions` intervale egale de `step` intre [lo] si [hi]. */
+internal data class CasaAxis(val lo: Double, val hi: Double, val step: Double)
+
+private val NiceSteps = listOf(0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0)
+
+/**
+ * Cea mai mica axa "rotunda" care cuprinde [minV]..[maxV] in [divisions] intervale. [minStep] opreste
+ * zgomotul sa fie mărit pe tot graficul; [cap] limiteaza capatul de sus (100 % la umiditate).
+ */
+internal fun casaNiceAxis(
+    minV: Double,
+    maxV: Double,
+    divisions: Int = 4,
+    minStep: Double = 1.0,
+    cap: Double? = null
+): CasaAxis {
+    val raw = maxOf((maxV - minV) / divisions, minStep)
+    val candidates = NiceSteps.filter { it >= raw - 1e-9 }.ifEmpty { listOf(raw) }
+    var chosen = candidates.last()
+    var lo = floor(minV / chosen) * chosen
+    for (step in candidates) {
+        val l = floor(minV / step) * step
+        if (l + divisions * step >= maxV - 1e-9) {
+            chosen = step
+            lo = l
+            break
+        }
+    }
+    var hi = lo + divisions * chosen
+    if (cap != null && hi > cap) {
+        hi = cap
+        lo = cap - divisions * chosen
+    }
+    return CasaAxis(lo, hi, chosen)
+}
+
+internal fun casaAxisLabel(v: Double, step: Double, unit: String): String {
+    val txt = if (step % 1.0 == 0.0) String.format(Locale.US, "%.0f", v) else String.format(Locale.US, "%.1f", v)
+    return txt + unit
+}
+
+/** Pozitia (0..1) a unui moment in fereastra [t0, t1]. */
+internal fun casaChartFraction(t: Long, t0: Long, t1: Long): Float =
+    if (t1 <= t0) 0f else ((t - t0).toFloat() / (t1 - t0)).coerceIn(0f, 1f)
+
+// ---------------------------------------------------------------------------------------------
+// Componente comune
+// ---------------------------------------------------------------------------------------------
+
+private val BrassEdge = Color(0xFF8A6A2E)
+private val CasaBlue = Color(0xFF8FC8F0)
+private val CasaGreenText = Color(0xFF7FBF4A)
+private val CasaRedFillTop = Color(0xFF7A2418)
+private val CasaRedFillBottom = Color(0xFF3E120C)
+
+@Composable
+private fun CasaText(
+    text: String,
+    size: Float,
+    color: Color = RetroText,
+    modifier: Modifier = Modifier,
+    bold: Boolean = false,
+    spacing: Float = 0.5f,
+    align: TextAlign? = null,
+    maxLines: Int = 1
+) {
+    Text(
+        text = text,
+        color = color,
+        fontFamily = RetroMono,
+        fontSize = fixedSp(size),
+        fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+        letterSpacing = fixedSp(spacing),
+        textAlign = align,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier
+    )
+}
+
+/** Buton metalic cu text; [fill] umple fata butonului (verde pentru alegerea activa, rosu pentru ANULEAZA). */
+@Composable
+private fun CasaKey(
+    text: String,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    accent: Color = RetroYellow,
+    fill: Pair<Color, Color>? = null,
+    enabled: Boolean = true,
+    size: Float = 12f,
+    description: String = text,
+    onClick: () -> Unit
+) {
+    RetroMetalButton(
+        modifier = modifier.alpha(if (enabled) 1f else 0.4f),
+        selected = selected,
+        accent = accent,
+        description = description,
+        onClick = { if (enabled) onClick() }
+    ) {
+        val f = fill ?: if (selected) CasaGreenLit to CasaGreenDark else null
+        if (f != null) {
+            Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(f.first.copy(alpha = 0.80f), f.second.copy(alpha = 0.90f)))))
+        }
+        CasaText(
+            text, size, if (f != null) Color(0xFFF2FFD0) else RetroText, Modifier.align(Alignment.Center),
+            bold = true, spacing = 1f, align = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun CasaCloseButton(onClose: () -> Unit) {
+    Box(
+        Modifier
+            .size(48.dp)
+            .semantics { contentDescription = "Inchide" }
+            .clickable(onClick = onClose),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.size(38.dp)) {
+            drawCircle(Color(0xFF1B170B))
+            drawCircle(BrassEdge, style = Stroke(2.dp.toPx()))
+            drawCircle(RetroBrassLight.copy(alpha = 0.35f), radius = size.minDimension / 2f - 3.dp.toPx(), style = Stroke(0.8.dp.toPx()))
+            val a = size.minDimension * 0.30f
+            val c = center
+            val w = 3.dp.toPx()
+            drawLine(RetroText, Offset(c.x - a, c.y - a), Offset(c.x + a, c.y + a), w, StrokeCap.Round)
+            drawLine(RetroText, Offset(c.x - a, c.y + a), Offset(c.x + a, c.y - a), w, StrokeCap.Round)
+        }
+    }
+}
+
+/** Titlul ecranului de detaliu + subtitlul (verde, sau rosu cand e o eroare) + butonul X. */
+@Composable
+private fun CasaDetailHeader(
+    title: String,
+    subtitle: String,
+    subtitleColor: Color,
+    onClose: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    RetroPanelSurface(contentPadding = PaddingValues(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 10.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                CasaText(title, 24f, RetroText, bold = true, spacing = 3f)
+                CasaText(subtitle, 10f, subtitleColor, spacing = 1f)
+            }
+            CasaCloseButton(onClose)
+        }
+        Spacer(Modifier.height(4.dp))
+        content()
+    }
+}
+
+@Composable
+private fun CasaDetailFrame(content: @Composable ColumnScope.() -> Unit) {
+    CasaTextStyle {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(start = 7.dp, top = 10.dp, end = 7.dp, bottom = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            content = content
+        )
+    }
+}
+
+@Composable
+private fun CasaDialog(title: String, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        CasaTextStyle {
+            RetroPanelSurface(
+                modifier = Modifier.padding(horizontal = 18.dp),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                CasaText(title, 14f, RetroText, Modifier.fillMaxWidth(), bold = true, spacing = 2f, align = TextAlign.Center)
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+private fun CasaDialogButtons(
+    okText: String,
+    okEnabled: Boolean = true,
+    onCancel: () -> Unit,
+    onOk: () -> Unit
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        CasaKey("RENUNTA", Modifier.weight(1f).height(44.dp), onClick = onCancel)
+        CasaKey(okText, Modifier.weight(1f).height(44.dp), selected = true, enabled = okEnabled, onClick = onOk)
+    }
+}
+
+@Composable
+private fun CasaStepper(label: String, value: String, onMinus: () -> Unit, onPlus: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        CasaText(label, 12f, RetroMuted, Modifier.width(70.dp), spacing = 1f)
+        CasaKey("−", Modifier.size(48.dp), size = 18f, description = "Mai putin $label", onClick = onMinus)
+        RetroInsetSurface(Modifier.weight(1f).height(48.dp)) {
+            CasaText(value, 20f, RetroSage, Modifier.align(Alignment.Center), bold = true, spacing = 1f)
+        }
+        CasaKey("+", Modifier.size(48.dp), size = 18f, description = "Mai mult $label", onClick = onPlus)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CasaTimeDialog(title: String, initial: String, onCancel: () -> Unit, onOk: (String) -> Unit) {
+    val state = rememberTimePickerState(
+        initialHour = initial.substringBefore(':').toIntOrNull() ?: 8,
+        initialMinute = initial.substringAfter(':', "0").toIntOrNull() ?: 0,
+        is24Hour = true
+    )
+    CasaDialog(title, onCancel) {
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            TimePicker(
+                state = state,
+                colors = TimePickerDefaults.colors(
+                    containerColor = Color.Transparent,
+                    clockDialColor = RetroInstrument,
+                    clockDialSelectedContentColor = Color(0xFF1B1707),
+                    clockDialUnselectedContentColor = RetroText,
+                    selectorColor = CasaOrange,
+                    timeSelectorSelectedContainerColor = CasaOrange,
+                    timeSelectorUnselectedContainerColor = RetroInstrument,
+                    timeSelectorSelectedContentColor = Color(0xFF1B1707),
+                    timeSelectorUnselectedContentColor = RetroText
+                )
+            )
+        }
+        CasaDialogButtons("OK", onCancel = onCancel, onOk = { onOk(casaHm(state.hour, state.minute)) })
+    }
+}
+
+/** Ofera numai `RetroSettingsAnimatedToggle` cu dimensiuni potrivite pentru ecranul de detaliu. */
+@Composable
+private fun CasaToggle(
+    checked: Boolean,
+    description: String,
+    modifier: Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    RetroSettingsAnimatedToggle(
+        checked = checked,
+        description = description,
+        modifier = modifier.alpha(if (enabled) 1f else 0.5f),
+        onClick = { if (enabled) onClick() }
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
+// D: detaliul prizei
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val access = remember { casaAccess(context) }
+    val token = remember { access.token }
+    if (token == null) {
+        androidx.compose.runtime.LaunchedEffect(Unit) { onClose() }
+        return
+    }
+    BackHandler(onBack = onClose)
+    val scope = rememberCoroutineScope()
+    val clock = rememberCasaClock()
+    val lock = remember { Mutex() }
+
+    var plug by remember { mutableStateOf<CasaPlug?>(null) }
+    var position by remember { mutableStateOf(0 to 0) }
+    var missing by remember { mutableStateOf(false) }
+    var recvMs by remember { mutableLongStateOf(0L) }
+    var lastGoodMs by remember { mutableLongStateOf(0L) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var messageStamp by remember { mutableLongStateOf(0L) }
+    var pendingOn by remember { mutableStateOf<Boolean?>(null) }
+    var pendingEnabled by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var pendingInching by remember { mutableStateOf<Int?>(null) }
+    var inchingJob by remember { mutableStateOf<Job?>(null) }
+    var action by remember { mutableStateOf<String?>(null) }
+    var showDuration by remember { mutableStateOf(false) }
+    var addStage by remember { mutableIntStateOf(0) }
+    var addStart by remember { mutableStateOf("08:00") }
+    var deleteTarget by remember { mutableStateOf<CasaSchedule?>(null) }
+    val stale by remember { derivedStateOf { clock.value - lastGoodMs > PlugsStaleMs } }
+
+    fun lose(r: CasaResult<*>) {
+        access.onResult(token, r)
+        onClose()
+    }
+
+    fun show(text: String) {
+        val stamp = System.currentTimeMillis()
+        message = text
+        messageStamp = stamp
+        scope.launch {
+            delay(ErrorShownMs)
+            if (messageStamp == stamp) message = null
+        }
+    }
+
+    fun accept(p: CasaPlug) {
+        // Raspunsul unei comenzi nu are energia de azi (vine doar la `GET /plugs`): pastram ultima valoare.
+        plug = if (p.energyToday == null) p.copy(energyToday = plug?.energyToday) else p
+        recvMs = System.currentTimeMillis()
+        lastGoodMs = recvMs
+    }
+
+    WhileVisibleEffect(token) {
+        while (true) {
+            val r = withContext(Dispatchers.IO) { CasaRepository.plugs(token) }
+            when (r) {
+                is CasaResult.Ok -> {
+                    val i = r.value.indexOfFirst { it.id == plugId }
+                    if (i < 0) {
+                        missing = true
+                    } else {
+                        missing = false
+                        position = (i + 1) to r.value.size
+                        // Nu suprascriem vederea proaspata primita ca raspuns la o comanda aflata in zbor.
+                        if (!lock.isLocked) accept(r.value[i])
+                    }
+                }
+                is CasaResult.Unauthorized -> {
+                    lose(r)
+                    return@WhileVisibleEffect
+                }
+                is CasaResult.Error -> Unit
+            }
+            delay(PlugsPollMs)
+        }
+    }
+
+    /** Trimite o comanda; comenzile unei prize se succed una dupa alta (serverul limiteaza ~1/s). */
+    fun command(onDone: () -> Unit = {}, call: (String) -> CasaResult<CasaPlug>) {
+        scope.launch {
+            val r = lock.withLock { withContext(Dispatchers.IO) { call(token) } }
+            onDone()
+            when (r) {
+                is CasaResult.Ok -> accept(r.value)
+                is CasaResult.Unauthorized -> lose(r)
+                is CasaResult.Error -> show(r.message)
+            }
+        }
+    }
+
+    fun sendInching(enabled: Boolean, minutes: Int) {
+        command(onDone = { pendingInching = null }) { CasaRepository.setInching(it, plugId, enabled, minutes) }
+    }
+
+    val p = plug
+    CasaDetailFrame {
+        if (p == null) {
+            CasaDetailHeader(
+                title = "PRIZA",
+                subtitle = if (missing) "PRIZA NECUNOSCUTA" else if (stale) "ASTEPT DATE" else "SE INCARCA...",
+                subtitleColor = if (missing) RetroRed else RetroYellow,
+                onClose = onClose
+            ) {}
+            return@CasaDetailFrame
+        }
+        val on = pendingOn ?: p.on
+        val usable = p.online && !stale
+        val elapsed = ((clock.value - recvMs) / 1000).coerceAtLeast(0)
+        val inchingMinutes = pendingInching ?: casaInchingClamp(p.inchingMinutes)
+        val sub = when {
+            message != null -> message!!
+            stale -> "FARA LEGATURA"
+            !p.online -> "PRIZA ${position.first}/${position.second} · WIFI OFFLINE"
+            else -> "PRIZA ${position.first}/${position.second} · " +
+                (if (p.metered) "CONTORIZATA" else "FARA CONTOR") + " · WIFI OK"
+        }
+        val subColor = if (message != null || stale || !p.online) RetroRed else CasaGreenText
+
+        CasaDetailHeader(retroLabel(p.name), sub, subColor, onClose) {
+            PlugPowerRow(
+                plug = p,
+                on = on,
+                usable = usable,
+                busy = pendingOn != null,
+                deadlineSeconds = p.offDeadline?.let { it.secondsLeft - elapsed },
+                onToggle = {
+                    val target = !on
+                    pendingOn = target
+                    command(onDone = { pendingOn = null }) { CasaRepository.switch(it, plugId, target) }
+                }
+            )
+        }
+        PlugCountdownCard(
+            plug = p,
+            usable = usable,
+            action = action ?: casaCountdownDefaultAction(p.on),
+            onAction = { action = it },
+            remaining = p.countdown?.let { it.secondsLeft - elapsed },
+            onMinutes = { m ->
+                val a = action ?: casaCountdownDefaultAction(p.on)
+                command { CasaRepository.setCountdown(it, plugId, a, m) }
+            },
+            onMore = { showDuration = true },
+            onCancel = { command { CasaRepository.cancelCountdown(it, plugId) } }
+        )
+        PlugSchedulesCard(
+            plug = p,
+            usable = usable,
+            pendingEnabled = pendingEnabled,
+            onToggle = { s ->
+                val target = !(pendingEnabled[s.id] ?: s.enabled)
+                pendingEnabled = pendingEnabled + (s.id to target)
+                command(onDone = { pendingEnabled = pendingEnabled - s.id }) {
+                    CasaRepository.updateInterval(it, plugId, s.id, enabled = target)
+                }
+            },
+            onDelete = { deleteTarget = it },
+            onAdd = { addStage = 1 },
+            modifier = Modifier.weight(1f)
+        )
+        PlugInchingCard(
+            enabled = p.inchingEnabled,
+            minutes = inchingMinutes,
+            usable = usable,
+            onToggle = { sendInching(!p.inchingEnabled, inchingMinutes) },
+            onStep = { dir ->
+                val next = casaInchingStep(inchingMinutes, dir)
+                if (next != inchingMinutes) {
+                    pendingInching = next
+                    inchingJob?.cancel()
+                    inchingJob = scope.launch {
+                        delay(InchingDebounceMs)
+                        sendInching(p.inchingEnabled, next)
+                    }
+                }
+            }
+        )
+    }
+
+    if (showDuration) {
+        var hours by remember { mutableIntStateOf(1) }
+        var minutes by remember { mutableIntStateOf(0) }
+        CasaDialog("ALTA DURATA", onDismiss = { showDuration = false }) {
+            CasaStepper("ORE", hours.toString(), { hours = (hours - 1).coerceAtLeast(0) }, {
+                hours = (hours + 1).coerceAtMost(24)
+                if (hours == 24) minutes = 0
+            })
+            CasaStepper("MINUTE", minutes.toString().padStart(2, '0'), {
+                minutes = (minutes - 5).coerceAtLeast(0)
+            }, {
+                if (hours < 24) minutes = (minutes + 5).coerceAtMost(55)
+            })
+            val a = action ?: casaCountdownDefaultAction(plug?.on ?: false)
+            CasaText(
+                "${if (a == "on") "PORNESTE" else "OPRESTE"} DUPA ${casaCountdownTotal(hours, minutes)} MIN",
+                11f, RetroMuted, Modifier.fillMaxWidth(), align = TextAlign.Center
+            )
+            CasaDialogButtons(
+                okText = if (a == "on") "PORNESTE" else "OPRESTE",
+                okEnabled = casaCountdownValid(hours, minutes),
+                onCancel = { showDuration = false },
+                onOk = {
+                    showDuration = false
+                    val total = casaCountdownTotal(hours, minutes)
+                    command { CasaRepository.setCountdown(it, plugId, a, total) }
+                }
+            )
+        }
+    }
+    if (addStage == 1) {
+        CasaTimeDialog("INTERVAL: PORNESTE LA", addStart, onCancel = { addStage = 0 }, onOk = {
+            addStart = it
+            addStage = 2
+        })
+    }
+    if (addStage == 2) {
+        val initialStop = remember(addStart) {
+            val h = addStart.substringBefore(':').toInt()
+            val m = addStart.substringAfter(':').toInt()
+            val t = (h * 60 + m + 30) % 1440
+            casaHm(t / 60, t % 60)
+        }
+        CasaTimeDialog("INTERVAL: OPRESTE LA", initialStop, onCancel = { addStage = 0 }, onOk = { stop ->
+            addStage = 0
+            val err = casaIntervalError(addStart, stop)
+            if (err != null) {
+                show(err)
+            } else {
+                val start = addStart
+                command { CasaRepository.addInterval(it, plugId, start, stop) }
+            }
+        })
+    }
+    deleteTarget?.let { s ->
+        CasaDialog("STERGI INTERVALUL?", onDismiss = { deleteTarget = null }) {
+            CasaText("${s.start} → ${s.stop} ZILNIC", 16f, CasaOrange, Modifier.fillMaxWidth(), bold = true, align = TextAlign.Center)
+            CasaDialogButtons(okText = "STERGE", onCancel = { deleteTarget = null }, onOk = {
+                deleteTarget = null
+                command { CasaRepository.deleteInterval(it, plugId, s.id) }
+            })
+        }
+    }
+}
+
+@Composable
+private fun PlugPowerRow(
+    plug: CasaPlug,
+    on: Boolean,
+    usable: Boolean,
+    busy: Boolean,
+    deadlineSeconds: Long?,
+    onToggle: () -> Unit
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+        Column(Modifier.width(118.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            CasaToggle(
+                checked = on,
+                description = "${retroLabel(plug.name)}: ${if (on) "opreste" else "porneste"}",
+                modifier = Modifier.width(112.dp).height(44.dp),
+                enabled = usable && !busy,
+                onClick = onToggle
+            )
+            CasaText(
+                if (on) "PORNIT" else "OPRIT", 12f, if (on) RetroSage else RetroMuted,
+                bold = true, spacing = 2f, align = TextAlign.Center
+            )
+            if (on && deadlineSeconds != null) {
+                CasaText(casaDeadlineText(deadlineSeconds), 9f, CasaBlue, align = TextAlign.Center, spacing = 0.2f)
+            }
+        }
+        Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+            if (plug.metered) {
+                val power = plug.power
+                val watts = if (usable && power != null) power.roundToInt().toString() else "---"
+                val color = when {
+                    watts == "---" -> RetroSage.copy(alpha = 0.35f)
+                    on && power != null && power > 0.5 -> CasaOrange
+                    else -> RetroSage.copy(alpha = 0.55f)
+                }
+                CasaWattsPlate(watts, color, Modifier.fillMaxWidth().height(58.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CasaText("AZI", 11f, RetroMuted, spacing = 1.5f)
+                    val kwh = plug.energyToday?.let { String.format(Locale.US, "%.1f", it) } ?: "---"
+                    CasaKwhPlate(kwh, Modifier.width(92.dp).height(32.dp))
+                }
+            } else {
+                Box(Modifier.fillMaxWidth().height(58.dp), contentAlignment = Alignment.Center) {
+                    CasaText("PRIZA FARA CONTOR", 11f, RetroMuted, bold = true, spacing = 1.5f)
+                }
+            }
+        }
+    }
+}
+
+/** kWh de azi: cifre VFD pe placa `dial_blank`, ca la wati. */
+@Composable
+private fun CasaKwhPlate(value: String, modifier: Modifier) {
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier.semantics { contentDescription = "$value kWh azi" }) {
+        androidx.compose.foundation.Image(
+            painter = androidx.compose.ui.res.painterResource(R.drawable.retro_dashboard_dial_blank),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = androidx.compose.ui.layout.ContentScale.FillBounds
+        )
+        RetroVfdDisplay(
+            value = value,
+            unit = "kWh",
+            color = RetroSage,
+            embedded = true,
+            horizontalPadding = 3.dp,
+            modifier = Modifier
+                .padding(start = maxWidth * 0.11f, top = maxHeight * 0.16f)
+                .width(maxWidth * 0.78f)
+                .height(maxHeight * 0.70f),
+            description = ""
+        )
+    }
+}
+
+@Composable
+private fun PlugCountdownCard(
+    plug: CasaPlug,
+    usable: Boolean,
+    action: String,
+    onAction: (String) -> Unit,
+    remaining: Long?,
+    onMinutes: (Int) -> Unit,
+    onMore: () -> Unit,
+    onCancel: () -> Unit
+) {
+    RetroPanelSurface(
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        CasaSectionTitle("COUNTDOWN", "", RetroMuted, 12f)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            listOf("30M" to 30, "1H" to 60, "2H" to 120, "6H" to 360).forEach { (label, min) ->
+                CasaKey(label, Modifier.weight(1f).height(40.dp), enabled = usable, size = 13f,
+                    description = "Countdown $label", onClick = { onMinutes(min) })
+            }
+            CasaKey("ALTA DURATA", Modifier.weight(1.45f).height(40.dp), enabled = usable, size = 10f,
+                onClick = onMore)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CasaKey("PORNESTE", Modifier.weight(1f).height(38.dp), selected = action == "on", enabled = usable,
+                size = 13f, onClick = { onAction("on") })
+            CasaKey("OPRESTE", Modifier.weight(1f).height(38.dp), selected = action == "off", enabled = usable,
+                size = 13f, onClick = { onAction("off") })
+        }
+        val cd = plug.countdown
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(46.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF0C0F07).copy(alpha = 0.75f))
+                .border(1.dp, RetroBrassLight.copy(alpha = 0.30f), RoundedCornerShape(8.dp))
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (cd == null || remaining == null) {
+                CasaText("NICIUN COUNTDOWN ACTIV", 11f, RetroMuted, Modifier.weight(1f), spacing = 1f)
+            } else {
+                val (h, m) = casaDurationParts(remaining)
+                Column(Modifier.weight(1f)) {
+                    CasaText("COUNTDOWN ACTIV", 8f, RetroMuted, spacing = 1.5f)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        CasaText(if (cd.action == "on") "PORNIRE IN" else "OPRIRE IN", 11f, CasaBlue, bold = true, spacing = 0.8f)
+                        if (h > 0) {
+                            RetroVfdDisplay(h.toString(), "", CasaBlue, Modifier.width(24.dp).height(26.dp), embedded = true,
+                                horizontalPadding = 0.dp, description = "")
+                            CasaText("H", 10f, CasaBlue, bold = true)
+                        }
+                        RetroVfdDisplay(m.toString().padStart(2, '0'), "", CasaBlue, Modifier.width(34.dp).height(26.dp),
+                            embedded = true, horizontalPadding = 0.dp, description = "")
+                        CasaText("MIN", 10f, CasaBlue, bold = true)
+                    }
+                }
+                CasaKey("ANULEAZA", Modifier.width(104.dp).height(36.dp), accent = RetroRed,
+                    fill = CasaRedFillTop to CasaRedFillBottom, enabled = usable, size = 11f, onClick = onCancel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlugSchedulesCard(
+    plug: CasaPlug,
+    usable: Boolean,
+    pendingEnabled: Map<String, Boolean>,
+    onToggle: (CasaSchedule) -> Unit,
+    onDelete: (CasaSchedule) -> Unit,
+    onAdd: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    RetroPanelSurface(
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+        fillContent = true,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        CasaSectionTitle("PROGRAMARI", "ZILNIC", RetroMuted, 12f)
+        val scrolls = plug.schedules.size > 2 // pe Note 9 incap ~2,7 randuri
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .then(if (scrolls) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+        ) {
+            if (plug.schedules.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CasaText("NICIUN INTERVAL", 11f, RetroMuted, spacing = 1.5f)
+                }
+            }
+            plug.schedules.forEachIndexed { i, s ->
+                if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(RetroBrassLight.copy(alpha = 0.25f)))
+                val enabled = pendingEnabled[s.id] ?: s.enabled
+                ScheduleRow(s, enabled, usable, onToggle = { onToggle(s) }, onDelete = { onDelete(s) })
+            }
+        }
+        if (casaCanAddInterval(plug.schedules.size)) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
+                    .alpha(if (usable) 1f else 0.4f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF2A2412).copy(alpha = 0.8f))
+                    .border(1.dp, RetroBrassLight.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                    .semantics { contentDescription = "Adauga interval" }
+                    .clickable(enabled = usable, onClick = onAdd),
+                contentAlignment = Alignment.Center
+            ) {
+                CasaText("+ ADAUGA INTERVAL", 12f, RetroText, bold = true, spacing = 1.5f)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScheduleRow(s: CasaSchedule, enabled: Boolean, usable: Boolean, onToggle: () -> Unit, onDelete: () -> Unit) {
+    val timeColor = if (enabled) CasaOrange else RetroSage.copy(alpha = 0.55f)
+    Row(
+        Modifier.fillMaxWidth().height(54.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        RetroLed(color = RetroSage, active = enabled, modifier = Modifier.size(24.dp))
+        Column(Modifier.weight(1f)) {
+            CasaText("${s.start} → ${s.stop}", 17f, timeColor, bold = true, spacing = 1f)
+            CasaText(casaScheduleSub(s), 8f, RetroMuted, spacing = 0.2f)
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CasaText(if (enabled) "ACTIV" else "INACTIV", 9f, if (enabled) RetroSage else RetroMuted, bold = true, spacing = 1f)
+            CasaToggle(
+                checked = enabled,
+                description = "Interval ${s.start}-${s.stop}: ${if (enabled) "dezactiveaza" else "activeaza"}",
+                modifier = Modifier.width(60.dp).height(30.dp),
+                enabled = usable,
+                onClick = onToggle
+            )
+        }
+        Box(
+            Modifier
+                .size(44.dp)
+                .semantics { contentDescription = "Sterge intervalul ${s.start}-${s.stop}" }
+                .clickable(enabled = usable, onClick = onDelete),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(Modifier.size(24.dp)) {
+                drawCircle(RetroBrassLight.copy(alpha = 0.5f), style = Stroke(1.dp.toPx()))
+                val a = size.minDimension * 0.22f
+                val w = 1.8.dp.toPx()
+                drawLine(RetroMuted, Offset(center.x - a, center.y - a), Offset(center.x + a, center.y + a), w, StrokeCap.Round)
+                drawLine(RetroMuted, Offset(center.x - a, center.y + a), Offset(center.x + a, center.y - a), w, StrokeCap.Round)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlugInchingCard(
+    enabled: Boolean,
+    minutes: Int,
+    usable: Boolean,
+    onToggle: () -> Unit,
+    onStep: (Int) -> Unit
+) {
+    RetroPanelSurface(
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        CasaSectionTitle("INCHING", "OPRIRE AUTOMATA", RetroMuted, 12f)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CasaText(
+                "Dupa fiecare pornire, priza se stinge singura dupa durata aleasa.", 9f, RetroMuted,
+                Modifier.weight(1f), maxLines = 3, spacing = 0.1f
+            )
+            CasaToggle(
+                checked = enabled,
+                description = "Inching: ${if (enabled) "dezactiveaza" else "activeaza"}",
+                modifier = Modifier.width(76.dp).height(36.dp),
+                enabled = usable,
+                onClick = onToggle
+            )
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CasaText("DURATA", 11f, RetroMuted, Modifier.weight(1f), spacing = 1.5f)
+            CasaKey("−", Modifier.width(52.dp).height(40.dp), enabled = usable, size = 18f,
+                description = "Inching mai putin", onClick = { onStep(-1) })
+            RetroInsetSurface(Modifier.width(96.dp).height(40.dp)) {
+                Row(Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    RetroVfdDisplay(minutes.toString(), "", RetroSage, Modifier.width(46.dp).height(30.dp), embedded = true,
+                        horizontalPadding = 0.dp, description = "$minutes minute")
+                    CasaText("MIN", 10f, RetroSage, bold = true)
+                }
+            }
+            CasaKey("+", Modifier.width(52.dp).height(40.dp), enabled = usable, size = 18f,
+                description = "Inching mai mult", onClick = { onStep(1) })
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// E: detaliul senzorului
+// ---------------------------------------------------------------------------------------------
+
+private sealed interface HistoryState {
+    object Loading : HistoryState
+    object Failed : HistoryState
+    class Ready(val data: CasaSensorHistory, val nowSec: Long) : HistoryState
+}
+
+private val Ranges = listOf("2h" to "2H", "1d" to "1D", "7d" to "7D")
+
+@Composable
+internal fun RetroSensorDetail(sensorId: String, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val access = remember { casaAccess(context) }
+    val token = remember { access.token }
+    if (token == null) {
+        androidx.compose.runtime.LaunchedEffect(Unit) { onClose() }
+        return
+    }
+    BackHandler(onBack = onClose)
+    val clock = rememberCasaClock()
+    var sensors by remember { mutableStateOf<CasaSensors?>(null) }
+    var range by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("1d") }
+    var history by remember { mutableStateOf<HistoryState>(HistoryState.Loading) }
+
+    fun lose(r: CasaResult<*>) {
+        access.onResult(token, r)
+        onClose()
+    }
+
+    // Valorile curente: ca pe pagina CASA, o data pe minut.
+    WhileVisibleEffect(token) {
+        while (true) {
+            val r = withContext(Dispatchers.IO) { CasaRepository.sensors(token) }
+            when (r) {
+                is CasaResult.Ok -> sensors = r.value
+                is CasaResult.Unauthorized -> {
+                    lose(r)
+                    return@WhileVisibleEffect
+                }
+                is CasaResult.Error -> Unit
+            }
+            delay(60_000)
+        }
+    }
+    // Istoricul: o singura cerere la deschidere si la fiecare schimbare de perioada.
+    WhileVisibleEffect(token, range) {
+        history = HistoryState.Loading
+        val r = withContext(Dispatchers.IO) { CasaRepository.sensorHistory(token, sensorId, range) }
+        when (r) {
+            is CasaResult.Ok -> history = HistoryState.Ready(r.value, System.currentTimeMillis() / 1000)
+            is CasaResult.Unauthorized -> lose(r)
+            is CasaResult.Error -> history = HistoryState.Failed
+        }
+    }
+
+    val s = sensors?.sensors?.firstOrNull { it.id == sensorId }
+    val cloudOk = sensors?.cloudOk == true
+    val nowSec = clock.value / 1000
+    val stale = s == null || isStale(nowSec, s.updated)
+    CasaDetailFrame {
+        val sub = when {
+            sensors == null -> "SE INCARCA..."
+            s == null -> "SENZOR NECUNOSCUT"
+            !cloudOk -> "CLOUD DECONECTAT · ${formatAge(nowSec, s.updated)}"
+            else -> "ACTUALIZAT ${formatAge(nowSec, s.updated)} · ${casaBatteryText(s.battery)}"
+        }
+        CasaDetailHeader(
+            title = s?.let { casaSensorTitle(it.name) } ?: "SENZOR",
+            subtitle = sub,
+            subtitleColor = if (sensors != null && (s == null || !cloudOk || stale)) RetroRed else CasaGreenText,
+            onClose = onClose
+        ) {
+            Row(Modifier.fillMaxWidth().height(78.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SensorValuePlate(
+                    label = "TEMPERATURA",
+                    value = casaTemperatureText(s?.temperature),
+                    unit = "°C",
+                    color = CasaOrange,
+                    dim = stale,
+                    isTemp = true,
+                    modifier = Modifier.weight(1f).fillMaxHeight()
+                )
+                SensorValuePlate(
+                    label = "UMIDITATE",
+                    value = s?.humidity?.roundToInt()?.toString() ?: "—",
+                    unit = "%",
+                    color = CasaBlue,
+                    dim = stale,
+                    isTemp = false,
+                    modifier = Modifier.weight(1f).fillMaxHeight()
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            CasaText("PERIOADA", 11f, RetroMuted, Modifier.padding(start = 8.dp).width(86.dp), spacing = 1.2f)
+            Ranges.forEach { (key, label) ->
+                CasaKey(label, Modifier.weight(1f).fillMaxHeight(), selected = key == range, size = 14f,
+                    description = "Perioada $label", onClick = { range = key })
+            }
+        }
+        SensorChartCard(range, history, Modifier.weight(1f))
+        SensorStatsCard(range, (history as? HistoryState.Ready)?.data)
+    }
+}
+
+@Composable
+private fun SensorValuePlate(
+    label: String,
+    value: String,
+    unit: String,
+    color: Color,
+    dim: Boolean,
+    isTemp: Boolean,
+    modifier: Modifier
+) {
+    CasaPlateFrame(modifier) {
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.height(13.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Canvas(Modifier.size(9.dp)) {
+                    if (isTemp) drawThermometer(color) else drawDrop(color)
+                }
+                CasaText(label, 9f, color.copy(alpha = 0.9f), spacing = 1f)
+            }
+            Row(Modifier.fillMaxWidth().weight(1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.Center) {
+                RetroVfdDisplay(
+                    value = value,
+                    unit = "",
+                    color = if (dim) color.copy(alpha = 0.45f) else color,
+                    embedded = true,
+                    horizontalPadding = 0.dp,
+                    modifier = Modifier.width(78.dp).fillMaxHeight(),
+                    description = "$label $value $unit"
+                )
+                CasaText(unit, 13f, color.copy(alpha = 0.85f), Modifier.padding(start = 2.dp, bottom = 4.dp), bold = true)
+            }
+        }
+    }
+}
+
+private fun DrawScope.drawThermometer(color: Color) {
+    val s = size.minDimension
+    val w = s * 0.16f
+    drawLine(color, Offset(s * 0.5f, s * 0.08f), Offset(s * 0.5f, s * 0.68f), w, StrokeCap.Round)
+    drawCircle(color, s * 0.24f, Offset(s * 0.5f, s * 0.78f))
+}
+
+@Composable
+private fun SensorChartCard(range: String, state: HistoryState, modifier: Modifier) {
+    RetroInsetSurface(modifier.fillMaxWidth()) {
+        when (state) {
+            is HistoryState.Ready -> {
+                val d = state.data
+                if (d.temperature.size + d.humidity.size < 2) {
+                    CasaText("ISTORIC INDISPONIBIL", 12f, RetroYellow, Modifier.align(Alignment.Center), bold = true, spacing = 1.5f)
+                } else {
+                    Column(Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 6.dp)) {
+                        Row(Modifier.fillMaxWidth().height(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            CasaText("— TEMP °C", 9f, CasaOrange, Modifier.weight(1f), spacing = 0.8f)
+                            CasaText(casaRangeTitle(range), 9f, RetroText, spacing = 1f, align = TextAlign.Center)
+                            CasaText("— UMID %", 9f, CasaBlue, Modifier.weight(1f), spacing = 0.8f, align = TextAlign.End)
+                        }
+                        SensorChart(range, d, state.nowSec, Modifier.weight(1f).fillMaxWidth())
+                    }
+                }
+            }
+            HistoryState.Loading -> CasaText("SE INCARCA...", 12f, RetroMuted, Modifier.align(Alignment.Center), bold = true, spacing = 1.5f)
+            HistoryState.Failed -> CasaText("ISTORIC INDISPONIBIL", 12f, RetroYellow, Modifier.align(Alignment.Center), bold = true, spacing = 1.5f)
+        }
+    }
+}
+
+@Composable
+private fun SensorChart(range: String, d: CasaSensorHistory, nowSec: Long, modifier: Modifier) {
+    val measurer = rememberTextMeasurer()
+    val label = TextStyle(fontFamily = RetroMono, fontWeight = FontWeight.Normal)
+    Canvas(modifier) {
+        val t1 = nowSec
+        val t0 = nowSec - casaRangeSeconds(range)
+        val leftW = 34.dp.toPx()
+        val rightW = 40.dp.toPx()
+        val bottomH = 16.dp.toPx()
+        val topPad = 8.dp.toPx()
+        val plotL = leftW
+        val plotR = size.width - rightW
+        val plotT = topPad
+        val plotB = size.height - bottomH
+        val w = plotR - plotL
+        val h = plotB - plotT
+        val fs = 9.dp.toSp()
+
+        val tAxis = if (d.temperature.isNotEmpty()) {
+            val lo = minOf(d.temperature.minOf { it.second }, d.tempMin?.first ?: Double.MAX_VALUE)
+            val hi = maxOf(d.temperature.maxOf { it.second }, d.tempMax?.first ?: -Double.MAX_VALUE)
+            casaNiceAxis(lo, hi, 4, 1.0)
+        } else null
+        val hAxis = if (d.humidity.isNotEmpty()) {
+            val lo = minOf(d.humidity.minOf { it.second }, d.humMin?.first ?: Double.MAX_VALUE)
+            val hi = maxOf(d.humidity.maxOf { it.second }, d.humMax?.first ?: -Double.MAX_VALUE)
+            casaNiceAxis(lo, hi, 4, 5.0, cap = 100.0)
+        } else null
+
+        // grila
+        for (i in 0..4) {
+            val y = plotB - h * i / 4f
+            drawLine(Color(0xFF9BC3CF).copy(alpha = 0.10f), Offset(plotL, y), Offset(plotR, y), 1.dp.toPx())
+            tAxis?.let {
+                val txt = casaAxisLabel(it.lo + it.step * i, it.step, "°")
+                drawAxisText(measurer, txt, label, fs, CasaOrange.copy(alpha = 0.85f), Offset(plotL - 4.dp.toPx(), y), alignRight = true)
+            }
+            hAxis?.let {
+                val txt = casaAxisLabel(it.lo + it.step * i, it.step, "%")
+                drawAxisText(measurer, txt, label, fs, CasaBlue.copy(alpha = 0.85f), Offset(plotR + 4.dp.toPx(), y), alignRight = false)
+            }
+        }
+        for (tick in casaTimeTicks(range, nowSec)) {
+            val x = plotL + w * casaChartFraction(tick.t, t0, t1)
+            drawLine(Color(0xFF9BC3CF).copy(alpha = 0.10f), Offset(x, plotT), Offset(x, plotB), 1.dp.toPx())
+            val m = measurer.measure(tick.label, label.copy(color = RetroMuted, fontSize = fs))
+            val tx = (x - m.size.width / 2f).coerceIn(0f, size.width - m.size.width)
+            drawText(m, topLeft = Offset(tx, plotB + 3.dp.toPx()))
+        }
+
+        fun px(t: Long) = plotL + w * casaChartFraction(t, t0, t1)
+        fun series(points: List<Pair<Long, Double>>, axis: CasaAxis, color: Color, core: Float) {
+            if (points.isEmpty()) return
+            val path = Path()
+            points.forEachIndexed { i, (t, v) ->
+                val x = px(t)
+                val y = plotB - h * ((v - axis.lo) / (axis.hi - axis.lo)).toFloat().coerceIn(0f, 1f)
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            drawPath(path, color.copy(alpha = 0.25f), style = Stroke(5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawPath(path, color, style = Stroke(core.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+        fun marker(t: Long, v: Double, axis: CasaAxis, color: Color) {
+            val x = px(t)
+            val y = plotB - h * ((v - axis.lo) / (axis.hi - axis.lo)).toFloat().coerceIn(0f, 1f)
+            drawCircle(Color(0xFF0C0F07), 5.dp.toPx(), Offset(x, y))
+            drawCircle(color, 5.dp.toPx(), Offset(x, y), style = Stroke(1.6.dp.toPx()))
+            drawCircle(Color.White.copy(alpha = 0.85f), 1.6.dp.toPx(), Offset(x, y))
+        }
+        hAxis?.let { series(d.humidity, it, CasaBlue, 1.5f) }
+        tAxis?.let { series(d.temperature, it, CasaOrange, 2f) }
+        if (hAxis != null) {
+            d.humMin?.let { marker(it.second, it.first, hAxis, CasaBlue) }
+            d.humMax?.let { marker(it.second, it.first, hAxis, CasaBlue) }
+        }
+        if (tAxis != null) {
+            d.tempMin?.let { marker(it.second, it.first, tAxis, CasaOrange) }
+            d.tempMax?.let { marker(it.second, it.first, tAxis, CasaOrange) }
+            d.temperature.lastOrNull()?.let { (t, v) ->
+                val y = plotB - h * ((v - tAxis.lo) / (tAxis.hi - tAxis.lo)).toFloat().coerceIn(0f, 1f)
+                drawCircle(CasaOrange, 4.dp.toPx(), Offset(px(t), y))
+            }
+        }
+    }
+}
+
+private fun DrawScope.drawAxisText(
+    measurer: TextMeasurer,
+    text: String,
+    style: TextStyle,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    color: Color,
+    anchor: Offset,
+    alignRight: Boolean
+) {
+    val m = measurer.measure(text, style.copy(color = color, fontSize = fontSize))
+    val x = if (alignRight) anchor.x - m.size.width else anchor.x
+    drawText(m, topLeft = Offset(x, anchor.y - m.size.height / 2f))
+}
+
+@Composable
+private fun SensorStatsCard(range: String, d: CasaSensorHistory?) {
+    RetroPanelSurface(contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 10.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            StatBlock("TEMPERATURA", CasaOrange, d?.tempMin?.let { statValue(it.first, "°") },
+                d?.tempMax?.let { statValue(it.first, "°") }, d?.tempMin?.let { casaStatTime(range, it.second) },
+                d?.tempMax?.let { casaStatTime(range, it.second) }, Modifier.weight(1f))
+            Box(Modifier.padding(horizontal = 8.dp).width(1.dp).height(52.dp).background(RetroBrassLight.copy(alpha = 0.3f)))
+            StatBlock("UMIDITATE", CasaBlue, d?.humMin?.let { "${it.first.roundToInt()}%" },
+                d?.humMax?.let { "${it.first.roundToInt()}%" }, d?.humMin?.let { casaStatTime(range, it.second) },
+                d?.humMax?.let { casaStatTime(range, it.second) }, Modifier.weight(1f))
+        }
+    }
+}
+
+private fun statValue(v: Double, unit: String) = String.format(Locale.US, "%.1f", v) + unit
+
+@Composable
+private fun StatBlock(
+    title: String,
+    color: Color,
+    min: String?,
+    max: String?,
+    minAt: String?,
+    maxAt: String?,
+    modifier: Modifier
+) {
+    Column(modifier) {
+        CasaText(title, 9f, RetroMuted, spacing = 1f)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    CasaText("MIN", 11f, RetroText, bold = true)
+                    CasaText(min ?: "—", 11f, color, bold = true)
+                }
+                CasaText(minAt ?: "", 9f, RetroMuted)
+            }
+            Column(Modifier.weight(1f)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    CasaText("MAX", 11f, RetroText, bold = true)
+                    CasaText(max ?: "—", 11f, color, bold = true)
+                }
+                CasaText(maxAt ?: "", 9f, RetroMuted)
+            }
+        }
+    }
+}

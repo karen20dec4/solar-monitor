@@ -91,15 +91,15 @@ import kotlin.math.roundToInt
 internal const val RetroSubSystem = "SISTEM"
 internal const val RetroSubCasa = "CASA"
 
-private val CasaOrange = Color(0xFFF5A640)
-private val CasaGreenLit = Color(0xFF6F9A28)
-private val CasaGreenDark = Color(0xFF2C3E0D)
+internal val CasaOrange = Color(0xFFF5A640)
+internal val CasaGreenLit = Color(0xFF6F9A28)
+internal val CasaGreenDark = Color(0xFF2C3E0D)
 
 /** Peste 20 s fara un raspuns bun la `/plugs` valorile devin liniute. */
-private const val PlugsStaleMs = 20_000L
-private const val PlugsPollMs = 3_000L
+internal const val PlugsStaleMs = 20_000L
+internal const val PlugsPollMs = 3_000L
 private const val SensorsPollMs = 60_000L
-private const val ErrorShownMs = 4_000L
+internal const val ErrorShownMs = 4_000L
 private const val MaxBadgeLines = 3
 
 // ---------------------------------------------------------------------------------------------
@@ -164,7 +164,7 @@ internal fun casaClockText(epochMs: Long): String =
         .format(DateTimeFormatter.ofPattern("HH:mm:ss"))
 
 @Composable
-private fun fixedSp(v: Float): TextUnit = with(LocalDensity.current) { v.dp.toSp() }
+internal fun fixedSp(v: Float): TextUnit = with(LocalDensity.current) { v.dp.toSp() }
 
 /**
  * Material3 `Text` mosteneste din tema un `lineHeight` de 20-24 sp (x1.3 la fontul de 130 %), care umfla
@@ -172,7 +172,7 @@ private fun fixedSp(v: Float): TextUnit = with(LocalDensity.current) { v.dp.toSp
  * ia inaltimea fontului.
  */
 @Composable
-private fun CasaTextStyle(content: @Composable () -> Unit) {
+internal fun CasaTextStyle(content: @Composable () -> Unit) {
     CompositionLocalProvider(
         LocalTextStyle provides LocalTextStyle.current.copy(lineHeight = TextUnit.Unspecified),
         content = content
@@ -184,8 +184,8 @@ private fun CasaTextStyle(content: @Composable () -> Unit) {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Fila SISTEM: pagina veche sau pagina CASA, dupa [sub]. Gazda tine si prizele / senzorii deschisi
- * (detaliul lor vine in Task 12, ca ecran peste pagina; pana atunci doar se retin).
+ * Fila SISTEM: pagina veche sau pagina CASA, dupa [sub]. Gazda tine si priza / senzorul deschis
+ * (ecranele de detaliu din RetroCasaDetail.kt).
  */
 @Composable
 internal fun RetroSystemHost(
@@ -197,15 +197,19 @@ internal fun RetroSystemHost(
 ) {
     var openPlugId by rememberSaveable { mutableStateOf<String?>(null) }
     var openSensorId by rememberSaveable { mutableStateOf<String?>(null) }
-    if (sub == RetroSubCasa) {
-        RetroCasaPage(
+    val plugId = openPlugId
+    val sensorId = openSensorId
+    when {
+        // Detaliul acopera pagina (bara de jos ramane); pagina nu mai ruleaza cat e deschis.
+        sub == RetroSubCasa && plugId != null -> RetroPlugDetail(plugId) { openPlugId = null }
+        sub == RetroSubCasa && sensorId != null -> RetroSensorDetail(sensorId) { openSensorId = null }
+        sub == RetroSubCasa -> RetroCasaPage(
             sub = sub,
             onSubChange = onSubChange,
             onOpenPlug = { openPlugId = it },
             onOpenSensor = { openSensorId = it }
         )
-    } else {
-        RetroSystemPage(
+        else -> RetroSystemPage(
             data = data,
             bms = bms,
             onEnergyFieldClick = onEnergyFieldClick,
@@ -285,7 +289,7 @@ internal fun RetroCasaSelector(
 
 /** Ceasul de perete (Europe/Bucharest) al paginii; se reciteste doar in frunze, ca sa nu refaca pagina. */
 @Composable
-private fun rememberCasaClock(): State<Long> {
+internal fun rememberCasaClock(): State<Long> {
     val now = remember { mutableLongStateOf(System.currentTimeMillis()) }
     WhileVisibleEffect {
         while (true) {
@@ -478,7 +482,7 @@ private fun CasaContent(
 }
 
 @Composable
-private fun CasaSectionTitle(
+internal fun CasaSectionTitle(
     title: String,
     sub: String,
     subColor: Color,
@@ -681,7 +685,7 @@ private fun DrawScope.drawBadgeIcon(kind: CasaBadgeKind, color: Color) {
 
 /** Placa metalica a wattilor: fereastra VFD (fotografia `dial_blank`) cu cifrele desenate nativ. */
 @Composable
-private fun CasaWattsPlate(value: String, color: Color, modifier: Modifier = Modifier) {
+internal fun CasaWattsPlate(value: String, color: Color, modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier.clearAndSetSemantics { contentDescription = "$value W" }) {
         Image(
             painter = painterResource(R.drawable.retro_dashboard_dial_blank),
@@ -756,7 +760,7 @@ private fun CasaSensorsSection(
  * centrul se intind. Fara asta placa, intinsa de la 2.5:1 la ~1.3:1, are suruburile ovale.
  */
 @Composable
-private fun CasaPlateFrame(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+internal fun CasaPlateFrame(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
     val bmp: ImageBitmap = ImageBitmap.imageResource(R.drawable.retro_dashboard_dial_blank)
     Box(modifier) {
         Canvas(Modifier.matchParentSize()) {
@@ -872,7 +876,7 @@ private fun CasaSensorPlate(
     }
 }
 
-private fun DrawScope.drawDrop(color: Color) {
+internal fun DrawScope.drawDrop(color: Color) {
     val s = size.minDimension
     val p = Path().apply {
         moveTo(s * 0.5f, 0f)
