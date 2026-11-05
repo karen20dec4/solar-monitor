@@ -102,6 +102,53 @@ internal fun casaInchingStep(current: Int, direction: Int): Int {
 internal fun casaInchingClamp(minutes: Int): Int =
     if (minutes <= 0) 30 else minutes.coerceIn(InchingMinMinutes, InchingMaxMinutes)
 
+/**
+ * Amana trimiterea inchingului ([delayMs]) ca apasarile rapide pe -/+ sa produca o singura cerere.
+ * [flush] trimite acum valoarea in asteptare (la inchiderea ecranului, ca sa nu se piarda); [cancel] o arunca
+ * (cand alta comanda o preia). [send] primeste doar minutele: starea ramasa (pornit/oprit) se citeste de
+ * apelant in momentul trimiterii, nu cand s-a apasat.
+ */
+internal class CasaInchingDebounce(
+    private val scope: kotlinx.coroutines.CoroutineScope,
+    private val delayMs: Long,
+    private val send: (Int) -> Unit
+) {
+    @Volatile
+    var pending: Int? = null
+        private set
+    private var job: Job? = null
+
+    fun set(minutes: Int) {
+        pending = minutes
+        job?.cancel()
+        job = scope.launch {
+            delay(delayMs)
+            fire()
+        }
+    }
+
+    private fun fire() {
+        val m = pending ?: return
+        pending = null
+        job = null
+        send(m)
+    }
+
+    fun flush() {
+        job?.cancel()
+        fire()
+    }
+
+    fun cancel() {
+        job?.cancel()
+        job = null
+        pending = null
+    }
+}
+
+/** Scope care nu se opreste odata cu ecranul: trimite ultima valoare de inching la inchidere. */
+private val CasaDetachedScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+
 /** Actiunea implicita a countdown-ului: opusul starii curente (pornita -> OPRESTE). */
 internal fun casaCountdownDefaultAction(on: Boolean): String = if (on) "off" else "on"
 
@@ -482,7 +529,8 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
     var pendingOn by remember { mutableStateOf<Boolean?>(null) }
     var pendingEnabled by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var pendingInching by remember { mutableStateOf<Int?>(null) }
-    var inchingJob by remember { mutableStateOf<Job?>(null) }
+    // Grupurile de comenzi aflate in zbor: "power", "countdown", "inching" (atingerile lor se ignora).
+    var busy by remember { mutableStateOf<Set<String>>(emptySet()) }
     var action by remember { mutableStateOf<String?>(null) }
     var showDuration by remember { mutableStateOf(false) }
     var addStage by remember { mutableIntStateOf(0) }
@@ -517,6 +565,8 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
             val r = withContext(Dispatchers.IO) { CasaRepository.plugs(token) }
             when (r) {
                 is CasaResult.Ok -> {
+                    // Orice raspuns bun dovedeste legatura, si cat tine o comanda lunga.
+                    lastGoodMs = System.currentTimeMillis()
                     val i = r.value.indexOfFirst { it.id == plugId }
                     if (i < 0) {
                         missing = true
@@ -538,9 +588,11 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
     }
 
     /** Trimite o comanda; comenzile unei prize se succed una dupa alta (serverul limiteaza ~1/s). */
-    fun command(onDone: () -> Unit = {}, call: (String) -> CasaResult<CasaPlug>) {
+    fun command(group: String? = null, onDone: () -> Unit = {}, call: (String) -> CasaResult<CasaPlug>) {
+        if (group != null) busy = busy + group
         scope.launch {
             val r = lock.withLock { withContext(Dispatchers.IO) { call(token) } }
+            if (group != null) busy = busy - group
             onDone()
             when (r) {
                 is CasaResult.Ok -> accept(r.value)
@@ -551,7 +603,33 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
     }
 
     fun sendInching(enabled: Boolean, minutes: Int) {
-        command(onDone = { pendingInching = null }) { CasaRepository.setInching(it, plugId, enabled, minutes) }
+        command(
+            group = "inching",
+            // O comanda mai veche nu sterge o valoare mai noua, inca neexpediata.
+            onDone = { if (pendingInching == minutes) pendingInching = null }
+        ) { CasaRepository.setInching(it, plugId, enabled, minutes) }
+    }
+
+    // Starea de pornit/oprit a inchingului se citeste cand pleaca cererea, nu cand s-a apasat.
+    val latestPlug by androidx.compose.runtime.rememberUpdatedState(plug)
+    val debounce = remember {
+        CasaInchingDebounce(scope, InchingDebounceMs) { minutes ->
+            sendInching(latestPlug?.inchingEnabled ?: false, minutes)
+        }
+    }
+    // La inchiderea ecranului (X / Back) valoarea in asteptare pleaca pe un scope care nu se opreste.
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            val m = debounce.pending
+            debounce.cancel()
+            if (m != null) {
+                val enabled = latestPlug?.inchingEnabled ?: false
+                CasaDetachedScope.launch {
+                    val r = lock.withLock { CasaRepository.setInching(token, plugId, enabled, m) }
+                    access.onResult(token, r)
+                }
+            }
+        }
     }
 
     val p = plug
@@ -566,7 +644,10 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
             return@CasaDetailFrame
         }
         val on = pendingOn ?: p.on
-        val usable = p.online && !stale
+        // Comenzile merg si cand priza pare offline (serverul incearca oricum); doar datele vechi le opresc.
+        val usable = !stale
+        val reading = p.online && !stale
+        val defaultAction = casaCountdownDefaultAction(on)
         val elapsed = ((clock.value - recvMs) / 1000).coerceAtLeast(0)
         val inchingMinutes = pendingInching ?: casaInchingClamp(p.inchingMinutes)
         val sub = when {
@@ -583,27 +664,28 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
                 plug = p,
                 on = on,
                 usable = usable,
-                busy = pendingOn != null,
+                reading = reading,
+                busy = "power" in busy,
                 deadlineSeconds = p.offDeadline?.let { it.secondsLeft - elapsed },
                 onToggle = {
                     val target = !on
                     pendingOn = target
-                    command(onDone = { pendingOn = null }) { CasaRepository.switch(it, plugId, target) }
+                    command("power", onDone = { pendingOn = null }) { CasaRepository.switch(it, plugId, target) }
                 }
             )
         }
         PlugCountdownCard(
             plug = p,
-            usable = usable,
-            action = action ?: casaCountdownDefaultAction(p.on),
+            usable = usable && "countdown" !in busy,
+            action = action ?: defaultAction,
             onAction = { action = it },
             remaining = p.countdown?.let { it.secondsLeft - elapsed },
             onMinutes = { m ->
-                val a = action ?: casaCountdownDefaultAction(p.on)
-                command { CasaRepository.setCountdown(it, plugId, a, m) }
+                val a = action ?: defaultAction
+                command("countdown") { CasaRepository.setCountdown(it, plugId, a, m) }
             },
             onMore = { showDuration = true },
-            onCancel = { command { CasaRepository.cancelCountdown(it, plugId) } }
+            onCancel = { command("countdown") { CasaRepository.cancelCountdown(it, plugId) } }
         )
         PlugSchedulesCard(
             plug = p,
@@ -623,17 +705,19 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
         PlugInchingCard(
             enabled = p.inchingEnabled,
             minutes = inchingMinutes,
-            usable = usable,
-            onToggle = { sendInching(!p.inchingEnabled, inchingMinutes) },
+            usable = usable && "inching" !in busy,
+            onToggle = {
+                // Valoarea in asteptare pleaca impreuna cu comutarea, intr-o singura cerere.
+                val minutes = pendingInching ?: casaInchingClamp(p.inchingMinutes)
+                pendingInching = minutes
+                debounce.cancel()
+                sendInching(!p.inchingEnabled, minutes)
+            },
             onStep = { dir ->
                 val next = casaInchingStep(inchingMinutes, dir)
                 if (next != inchingMinutes) {
                     pendingInching = next
-                    inchingJob?.cancel()
-                    inchingJob = scope.launch {
-                        delay(InchingDebounceMs)
-                        sendInching(p.inchingEnabled, next)
-                    }
+                    debounce.set(next)
                 }
             }
         )
@@ -652,7 +736,7 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
             }, {
                 if (hours < 24) minutes = (minutes + 5).coerceAtMost(55)
             })
-            val a = action ?: casaCountdownDefaultAction(plug?.on ?: false)
+            val a = action ?: casaCountdownDefaultAction(pendingOn ?: plug?.on ?: false)
             CasaText(
                 "${if (a == "on") "PORNESTE" else "OPRESTE"} DUPA ${casaCountdownTotal(hours, minutes)} MIN",
                 11f, RetroMuted, Modifier.fillMaxWidth(), align = TextAlign.Center
@@ -664,7 +748,7 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
                 onOk = {
                     showDuration = false
                     val total = casaCountdownTotal(hours, minutes)
-                    command { CasaRepository.setCountdown(it, plugId, a, total) }
+                    command("countdown") { CasaRepository.setCountdown(it, plugId, a, total) }
                 }
             )
         }
@@ -709,6 +793,7 @@ private fun PlugPowerRow(
     plug: CasaPlug,
     on: Boolean,
     usable: Boolean,
+    reading: Boolean,
     busy: Boolean,
     deadlineSeconds: Long?,
     onToggle: () -> Unit
@@ -733,7 +818,7 @@ private fun PlugPowerRow(
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
             if (plug.metered) {
                 val power = plug.power
-                val watts = if (usable && power != null) power.roundToInt().toString() else "---"
+                val watts = if (reading && power != null) power.roundToInt().toString() else "---"
                 val color = when {
                     watts == "---" -> RetroSage.copy(alpha = 0.35f)
                     on && power != null && power > 0.5 -> CasaOrange

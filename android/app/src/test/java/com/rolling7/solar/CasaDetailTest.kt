@@ -115,4 +115,47 @@ class CasaDetailTest {
         assertEquals("BATERIE 87%", casaBatteryText(87.0))
         assertEquals("BATERIE ?", casaBatteryText(null))
     }
+
+    // --- debounce-ul inchingului ---
+
+    private fun withDebounce(block: suspend (CasaInchingDebounce, MutableList<Int>, kotlinx.coroutines.CoroutineScope) -> Unit) {
+        val sent = java.util.Collections.synchronizedList(ArrayList<Int>())
+        kotlinx.coroutines.runBlocking {
+            val d = CasaInchingDebounce(this, 80L) { sent += it }
+            block(d, sent, this)
+        }
+    }
+
+    @Test
+    fun `debounce sends only the last value of a burst`() = withDebounce { d, sent, _ ->
+        d.set(35); d.set(40); d.set(45)
+        assertEquals(45, d.pending)
+        kotlinx.coroutines.delay(200)
+        assertEquals(listOf(45), sent.toList())
+        assertNull(d.pending)
+    }
+
+    @Test
+    fun `flush sends the pending value at once and the timer does not send it again`() = withDebounce { d, sent, _ ->
+        d.set(50)
+        d.flush()
+        assertEquals(listOf(50), sent.toList())
+        kotlinx.coroutines.delay(200)
+        assertEquals(listOf(50), sent.toList())
+    }
+
+    @Test
+    fun `flush with nothing pending sends nothing`() = withDebounce { d, sent, _ ->
+        d.flush()
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun `cancel drops the pending value`() = withDebounce { d, sent, _ ->
+        d.set(60)
+        d.cancel()
+        kotlinx.coroutines.delay(200)
+        assertTrue(sent.isEmpty())
+        assertNull(d.pending)
+    }
 }

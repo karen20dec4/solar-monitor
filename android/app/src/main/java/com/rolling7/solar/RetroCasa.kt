@@ -615,8 +615,9 @@ private fun CasaPlugRow(
             modifier = Modifier
                 .width(64.dp)
                 .height(48.dp)
-                .alpha(if (usable && !busy) 1f else 0.5f),
-            onClick = { if (usable && !busy) onToggle() }
+                .alpha(if (!stale && !busy) 1f else 0.5f),
+            // Si o priza raportata offline primeste comanda: serverul incearca oricum sa se conecteze.
+            onClick = { if (!stale && !busy) onToggle() }
         )
     }
 }
