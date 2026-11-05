@@ -1256,5 +1256,73 @@ class DpCountdownRealismTest(ControllerBase):
         self.assertEqual(r.dp9, 19800 - 5)  # rescris la primul tick dupa stergere
 
 
+class StaleReleaseTest(ControllerBase):
+    """N1: release_off_at ramas nu supravietuieste repornirii si nu opreste urmatoarea pornire."""
+
+    def scenario(self, dev):
+        r = self.rig(loc(9), dev=dev)
+        iid = self.schedule(r)
+        r.tick_to(loc(10, 30))
+        r.tick_to(loc(12))
+        r.c.delete_interval(PID, iid)
+        self.assertEqual(r.c._get(PID)["release_off_at"], int(loc(16).timestamp()))
+        r.c.add_interval(PID, "08:00", "09:00")      # programarea de a doua zi
+        r.driver.dps["1"] = False                    # oprita de DP-ul ei / cu mana, serverul era cazut
+        r.clock.set(loc(17))
+        r.restart()
+        r.c.tick()
+        return r
+
+    def check(self, dev):
+        r = self.scenario(dev)
+        self.assertIsNone(r.c._get(PID)["release_off_at"])
+        n = len([x for x in r.worker.submitted if x == (1, False)])
+        r.tick_to(loc(6, day=6), step=timedelta(minutes=5))
+        r.driver.dps["1"] = True                     # buton fizic
+        r.worker.poll()
+        r.tick_to(loc(7, 30, day=6), step=timedelta(seconds=30))
+        self.assertTrue(r.on)                        # nu e oprita pe loc
+        self.assertEqual(len([x for x in r.worker.submitted if x == (1, False)]), n)
+        # (b) programarea 08:00-09:00 ruleaza normal a doua zi
+        r.c.switch(PID, False)
+        r.tick_to(loc(8, 0, day=6), step=timedelta(seconds=30))
+        self.assertTrue(r.on)
+        sw = [x for x in r.worker.submitted if x[0] == 1]
+        self.assertEqual(sw[-1], (1, True))          # nu (1,True) urmat de (1,False)
+        r.tick_to(loc(8, 59, day=6), step=timedelta(seconds=30))
+        self.assertTrue(r.on)
+        r.tick_to(loc(9, 0, day=6), step=timedelta(seconds=30))
+        self.assertFalse(r.on)
+
+    def test_restart_with_plug_off_dp_plug(self):
+        self.check(device())
+
+    def test_restart_with_plug_off_no_dp_plug(self):
+        self.check(device(with_countdown=False))
+
+    def test_real_off_on_transition_clears_leftover(self):
+        r = self.rig(loc(9))
+        r.c._mut(PID, lambda p: p.__setitem__("release_off_at", int(loc(8).timestamp())))
+        r.driver.dps["1"] = True  # pornire reala observata inainte de orice tick
+        r.worker.poll()
+        self.assertIsNone(r.c._get(PID)["release_off_at"])
+        r.tick_to(loc(9, 5))
+        self.assertTrue(r.on)
+
+    def test_known_off_clears_stale_inching_deadline(self):
+        r = self.rig(loc(9))
+        r.c._mut(PID, lambda p: p.__setitem__("inching_off_at", int(loc(8).timestamp())))
+        r.c.tick()
+        self.assertIsNone(r.c._get(PID)["inching_off_at"])
+
+    def test_first_reading_on_keeps_release_deadline(self):
+        r = self.rig(loc(9), dps={"1": True})
+        r.c._mut(PID, lambda p: p.__setitem__("release_off_at", int(loc(10).timestamp())))
+        r.restart()  # prima citire: priza pornita, termenul de eliberare e inca valabil
+        self.assertEqual(r.c._get(PID)["release_off_at"], int(loc(10).timestamp()))
+        r.tick_to(loc(10, 1))
+        self.assertFalse(r.on)
+
+
 if __name__ == "__main__":
     unittest.main()

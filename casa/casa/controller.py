@@ -307,6 +307,8 @@ class Controller:
         self._set(pid, cd_written=None)
         def f(p):
             inch = p["inching"]
+            if not only_if_unset:
+                p["release_off_at"] = None   # o pornire reala invalideaza un termen de eliberare vechi
             if only_if_unset and (p["inching_off_at"] is not None or not inch["enabled"]):
                 return
             p["inching_off_at"] = (_epoch(now) + inch["minutes"] * 60) if inch["enabled"] else None
@@ -387,6 +389,9 @@ class Controller:
 
     # ------------------------------------------------------------------ comenzi publice
     def switch(self, pid: str, on: bool) -> dict:
+        # O comanda manuala e decizia utilizatorului: o pornire manuala dupa ce intervalul
+        # care tinea priza a fost sters/dezactivat ramane fara termen (daca nu se aplica
+        # inching), la fel ca o pornire manuala in afara oricarui interval.
         self._dev(pid)
         with self._plock[pid]:
             now = self.clock()
@@ -610,7 +615,12 @@ class Controller:
         """Termen de oprire scadent din starea persistenta (`inching_off_at`/`release_off_at`)."""
         off_at = self._get(pid)[key]
         rt = self._rt[pid]
-        if off_at is None or rt.on is False:
+        if off_at is None:
+            return
+        if rt.on is False:
+            # Priza sigur oprita: un termen ramas (repornire a serverului, oprire cu mana sau
+            # de DP-ul prizei) nu are voie sa supravietuiasca si sa opreasca urmatoarea pornire.
+            self._mut(pid, lambda p: p.__setitem__(key, None))
             return
         if now < _from_epoch(off_at) + (timedelta(0) if force else self._grace(pid)):
             return
