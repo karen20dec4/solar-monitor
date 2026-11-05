@@ -22,6 +22,7 @@ ceva ce API-ul refuză, sau API care servește ceva ce nimeni nu afișează.
 | 7 | Desen UI | `android/.../RetroDashboard.kt` (Retro) / `MainActivity.kt` (Simple) | zone tactile, etichete, grafice |
 | 8 | Fotografie | `android/app/src/main/res/drawable-nodpi/*.webp` | **textul desenat pe șasiu** (vezi §3) |
 | 9 | Grafana | `grafana/dashboards/solar.json` | opțional, dashboard-ul de pe desktop |
+| 10 | CASA (prize/senzori Tuya) | `casa/casa/*.py` (container `solar-casa`; `web.py` rutele, `controller.py` programări/countdown/inching, `plugs.py` driver local, `cloud.py` senzori, `influx.py` măsurătorile `casa_plug`/`casa_sensor`, `auth.py` parola și token-urile), `casa/tests/`; Caddy `handle_path /solar/casa/*`; Android `CasaModel.kt`, `CasaRepository.kt`, `CasaAccess.kt`, `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt` | un câmp nou de priză/senzor trece prin `PlugView` din `controller.py`/`web.py` → `CasaModel.kt` → ecranele; **nu trece prin `api/app.py`** (alt serviciu, altă autentificare). Teste: comanda din §„Contractul CASA" |
 
 **Regula de aur:** un câmp nou trebuie adăugat *și* în `FIELDS` din `api/app.py`, altfel
 `/solar/latest` nu îl returnează niciodată, oricât de corect l-ar scrie collector-ul.
@@ -37,6 +38,26 @@ GET /solar/grid-month                      -> { month: "2026-10", since, kwh }  
 GET /solar/grid-outage                     -> { down, outages: [{start, end, seconds}], timestamp }  (pene Enel, 24 h)
 (toate)  User-Agent: SolarMonitor/3.38 (42; Android 13; SM-G781B)  -> numărat în `app_client` (Grafana, „Telefoane")
 ```
+
+### Contractul CASA (serviciul `solar-casa`, prefix `/solar/casa`, tăiat de Caddy)
+
+```
+POST   /solar/casa/register               {password, device} -> {token, phone_id}   (singura rută fără token în afară de /health; 401 parola greșită, 429 + retry_after, 503 parola nesetată)
+GET    /solar/casa/me                     -> {phone_id, device}
+GET    /solar/casa/plugs                  -> {plugs:[{id,name,online,on,metered,power,voltage,current,energy_today,
+                                              schedules[{id,start,stop,enabled}],countdown,inching,off_deadline,error}], timestamp}
+POST   /solar/casa/plugs/<id>/switch      {on}
+PUT    /solar/casa/plugs/<id>/countdown   {action:"on"|"off", minutes}   DELETE: anulează
+POST   /solar/casa/plugs/<id>/schedules   {start:"HH:MM", stop:"HH:MM", enabled?}   PUT/DELETE .../schedules/<sid>
+PUT    /solar/casa/plugs/<id>/inching     {enabled, minutes}      (fiecare întoarce priza actualizată; 502 {error, plug} dacă nu răspunde)
+GET    /solar/casa/sensors                -> {cloud:"ok"|"disconnected"|"no_session", sensors:[{id,name,temperature,humidity,battery,updated,spark}]}
+GET    /solar/casa/sensors/<id>/history?range=2h|1d|7d   -> {temperature[],humidity[],stats{...}}
+(toate, în afară de /register și /health)  Authorization: Bearer <token>; corp ≤ 16 KB; comenzile ≤ ~1/s per token
+```
+
+Forma exactă a câmpurilor e în `casa/casa/web.py` și `casa/casa/controller.py` (sursa de adevăr). Testele serviciului:
+`docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python solar-monitor-casa -m unittest discover -s tests -v`
+(după orice modificare în `casa/`). Reguli de semantică (fronturi, termen de oprire, DST): `CLAUDE.md` §„CASA".
 
 `/history` face **validare strictă cu listă albă**: dacă `field` nu e cheie în `HISTORY_FIELDS`
 sau `range` nu e cheie în `HISTORY_FIELDS[field]["ranges"]`, răspunde **400** cu lista permisă.
@@ -426,6 +447,8 @@ decizii deja luate, nu scăpări.
   fără „încarcă bateria acum". Subiect închis; vezi `GEMINI.md`.
 - **Nicio scriere către BMS.** Cititorul `bms/jk_bms_reader.py` trimite doar cererile de date
   `0x96`/`0x97`; fără comenzi JK de setări (praguri, balansare, MOSFET-uri, parolă).
+- **Singurul lucru comandat de sistem sunt prizele Tuya** (`solar-casa`). Invertorul și BMS-ul rămân READ-ONLY; nu muta
+  logica de control în `collector` sau `bms`. Programările din SmartLife se șterg după ce merg ale noastre (altfel se bat).
 - Fără cloud Growatt / ShineServer, fără MQTT, fără dongle ShineWiFi, fără Modbus TCP.
 - Fără derulare verticală în UI-ul Retro.
 - Fără valori „coapte" în bitmap — datele rămân dinamice, Compose nativ.

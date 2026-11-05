@@ -50,6 +50,10 @@ asks and accepts the risk.
 > ~0.5V). Final: no button, no writes, READ-ONLY stands. Full research in `COPILOT_CONTEXT.md` §13.17.
 > Do not reopen without new information (e.g. new firmware with documented charge-control registers).
 >
+> **CASA (2026-11-05):** the new `solar-casa` service **does command** things: the user's five Tuya smart plugs
+> (switch, countdown, schedules, inching) over the LAN. That is the only thing the system commands. It does not
+> touch the inverter or the BMS, which stay READ-ONLY; the rule above is unchanged for them. Details in "CASA" below.
+>
 > **BMS reader (2026-10-22):** the battery's JK BMS is read over Bluetooth LE by `bms/jk_bms_reader.py`
 > (see "BMS reader" below). It is **READ-ONLY** too: the only thing it may send are the data requests
 > `0x96`/`0x97`. The JK protocol also has write commands (thresholds, balancer, charge/discharge MOSFETs,
@@ -65,11 +69,11 @@ Inverter --USB (/dev/growatt)--> collector.py (minimalmodbus, FC04, polls every 
    `-> Grafana dashboard `solar-main` (live 1s + 30-day history)
 ```
 
-Six containers (`docker-compose.yml`): `solar-collector`, `solar-influxdb`, `solar-grafana`,
-`solar-ntfy`, plus `solar-api` (JSON micro-API for the Android app, read-only towards the data — its only write
+Seven containers (`docker-compose.yml`): `solar-collector`, `solar-influxdb`, `solar-grafana`,
+`solar-ntfy`, `solar-casa` (Tuya plugs and sensors, see "CASA" below; internal port 8100, no published port), plus `solar-api` (JSON micro-API for the Android app, read-only towards the data — its only write
 is the `app_client` phone log, see "Phones and app versions"; no published port,
 reached internally at `api:8000`) and `solar-caddy` (HTTPS reverse proxy, `tls internal`, routes
-`/solar/*` → api and everything else → Grafana). All `restart: unless-stopped`, start on boot.
+`/solar/casa/*` → casa, `/solar/*` → api and everything else → Grafana). All `restart: unless-stopped`, start on boot.
 
 They share one bridge network whose interface name is **pinned to `br-solar`** via
 `driver_opts: com.docker.network.bridge.name`. Do not remove that — the firewalld rule that keeps
@@ -114,6 +118,7 @@ docker compose up -d --build collector      # after editing collector.py
 docker compose up -d collector              # after editing only .env (no rebuild)
 
 docker compose ps                           # status
+docker compose up -d --build casa           # after editing casa/ (CASA_* env changes: up -d casa)
 docker compose logs -f collector            # collector logs (also: docker logs -f solar-collector)
 docker compose down                         # stop
 
@@ -353,6 +358,69 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
 - Tests (no Bluetooth needed): `python3 -I -m unittest discover -s /opt/solar-monitor/bms`.
   One-shot read for debugging: `python3 -I bms/jk_bms_reader.py --once` (stop the service first).
   Logs: `journalctl -u solar-bms`.
+
+## CASA (Tuya plugs and sensors, `casa/`)
+
+Container `solar-casa` (Python, gunicorn 1 worker x 8 threads, port 8100, **no published port**). Spec:
+`docs/superpowers/specs/2026-11-05-casa-prize-senzori-design.md`; log of the build: `COPILOT_CONTEXT.md` §13.78.
+**Status: built and deployed in demo mode; real keys, DHCP reservations, password and phones are still the user's
+morning steps (list below). Release v3.40 is built after the final review.**
+
+- **What it does:** 5 plugs controlled locally (`tinytuya`, TCP 6668, one persistent connection per plug; IPs/protocol
+  defaults in `casa/casa/devices.py`, matched by device id: Boiler .244, Living sus .104, Priza cam Georgi .204,
+  Bucatarie .185, Lumina Curte .158). 3 temperature/humidity sensors read from the Tuya cloud
+  (`tuya-device-sharing-sdk`, MQTT push + poll every ≤ 5 min, session from a QR login). No cloud fallback for
+  plug commands: a plug that refuses the local connection shows OFFLINE.
+- **Route:** Caddy `handle_path /solar/casa/*` → `casa:8100`, placed **before** `/solar/*`. `request_body max_size 16KB`,
+  `request_buffers 20KB` (must stay larger than max_size; Flask `MAX_BODY_BYTES` 16000 must stay ≤ max_size),
+  read/write timeouts 60 s (worst command ≈ 25 s; the app waits 50 s), `header_up X-Forwarded-For {remote_host}`
+  (client IP for the password limit). Only the casa block of `caddy/Caddyfile` is ours; the rest belongs to beci-cloud
+  and is committed apart (`git add -p`), the `Caddyfile.bak-*` files are ignored.
+- **Auth:** one shared password, set on the server; `POST /solar/casa/register` `{password, device}` returns a long
+  token per phone (server keeps only hashes). Every other route needs `Authorization: Bearer`. Limit: 5 wrong tries /
+  15 min per IP and 20 / h overall (so anyone can block new registrations for an hour); commands ≤ ~1/s per token.
+  401 on a stored token (revoked) brings the password plate back in the app.
+- **CLI** (run in the container): `docker exec -it solar-casa python -m casa <cmd>`:
+  `login [user_code]` (QR login with Smart Life: Eu > Setari > Cont si securitate > User Code, then scan the QR in the
+  terminal), `sync` (refresh devices + local keys into `devices.json`), `set-password [--stdin]` (asked twice, never in
+  argv; changing it does not log phones out), `phones` (registered phones), `revoke <phone_id>`,
+  `demo-devices [--force]` (fake `devices.json` for `CASA_DEMO=1`; refuses to overwrite real keys without `--force`).
+- **Data dir `casa/data/`** (gitignored, mounted at `/data`, files mode 600): `devices.json` (**local keys**),
+  `cloud_session.json` (**cloud session**), `auth.json` (password hash + token hashes), `state.json` (schedules,
+  countdowns, inching; real mode) / `state.demo.json` (demo mode, carries a demo marker; real mode **refuses** a
+  demo-marked state, so test schedules can never run on the real boiler). Secrets never go to git, logs, ntfy or
+  Telegram (no exception text with QR token / user code is logged).
+- **Demo mode:** `CASA_DEMO=1` in `.env` (**ON right now on the server**): fake plugs from `casa/casa/demo.py`, no
+  InfluxDB writes, no cloud. Remove it (and restart `casa`) for real operation.
+- **Semantics** (spec §4.4 + the rulings of the build): times in Europe/Bucharest. A schedule is a daily interval
+  `start → stop`; it acts **on edges only** (a manual off mid-interval stays off until the next edge). After a
+  restart/reconnect a missed **stop is always executed**, however late; a missed **start is recovered only inside the
+  window**. At the same instant **stops run before starts**, and only the interval that started the plug can stop it
+  (back-to-back windows work). Spring DST gap (03:00–04:00 does not exist): start and stop land on 04:00; a collapsed
+  window makes no edges. While a plug is on, the **nearest off deadline** (end of the interval that started it, inching,
+  countdown "off") is written to the plug's own countdown DP (dp 9, seconds), so it switches off even if the server is
+  down; the app shows "OPRIRE IN …". Editing the interval that holds the plug: still contains now → new end; no longer
+  contains now → off now; **disable/delete → the plug stays on until the OLD stop** (countdown-off). A manual "on" after
+  the holder was deleted is unbounded unless inching applies (the user's decision). A manual command cancels a running
+  countdown. Per-plug locks and throttle: one dead plug never delays another's stop; a dead plug ties one thread ≤ 10 s.
+- **InfluxDB:** `casa_plug` (tags `device_id`, `name`; fields `on`, `online`, `power`, `voltage`, `current` in A) and
+  `casa_sensor` (fields `temperature`, `humidity`, `battery`) in `live` and `history` (60 s mean). Written by one flusher
+  thread, so a down InfluxDB never delays plug commands. The API energy today = integral of `power` since local midnight.
+  Grafana: row "🏠 Casa: prize si senzori" (panels 142–147: plug power, plugs on, sensor temperature/humidity, sensors now).
+- **App (v3.40, versionCode 44):** Retro SISTEM page has a SISTEM | CASA selector; CASA = 5 plug plates + sensors, tap
+  opens plug detail (switch, countdown 30M/1H/2H/6H/other, schedules, inching) or sensor detail (2h/1d/7d charts). Simple
+  theme: a CASA card. SETARI: row "ACCES CASA" with "UITA TELEFONUL" (deletes only the local token; the server keeps the phone until `revoke`). The password plate shows on first open.
+  Command timeout 50 s; commands stay enabled when a plug looks offline. Files: `CasaModel.kt`, `CasaRepository.kt`,
+  `CasaAccess.kt`, `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt`.
+- **Tests:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
+  solar-monitor-casa -m unittest discover -s tests -v` (258 tests, run it after any change in `casa/`; run the full
+  suite more than once, a non-reproducible failure was seen once during edits).
+- **Morning steps (user):** (1) DHCP reservations on the router for the 5 plug IPs; (2) `python -m casa login` (QR) and
+  `sync`; (3) remove `CASA_DEMO=1`, `docker compose up -d casa`, check every plug online and the power readings against
+  SmartLife (current is Tuya mA / 1000; confirm the unit); (4) `python -m casa set-password` (replace the temporary
+  one left by testing); (5) register the phones (Note 9, S20 FE, S26) from the app and check `phones`; (6) live tests of
+  switch, countdown, schedule, inching on a plug (boiler last); (7) **delete the equivalent SmartLife schedules** once
+  ours work, or the two will fight.
 
 ## Conventions
 

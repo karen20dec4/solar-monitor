@@ -2082,3 +2082,58 @@ Copie completă pe HDD, `/data/backup-nvme-2026-11-02/` (`rootfs/`, `efi/`, `rsy
 toate containerele oprite la 15:58 (`ROOTFS_EXIT 0`), ~57 GB, fără `bad-sector-quarantine/`. Kernelul n-a raportat nicio eroare de
 citire în timpul ei, deci fișierele folosite se citesc; spațiul liber rămâne nescanat. Containerele au stat ~27 s la 15:22 și la 15:58.
 
+
+### 13.78 CASA: prize și senzori Tuya în aplicație, serviciul `solar-casa`, v3.40 (2026-11-05)
+
+Cerere: comanda și programarea celor 5 prize inteligente (SmartLife) din aplicația proprie, plus cei 3 senzori de
+temperatură/umiditate, fără să depindem de aplicația Tuya. Specificația: `docs/superpowers/specs/2026-11-05-casa-prize-senzori-design.md`;
+planul: `docs/superpowers/plans/2026-11-05-casa-prize-senzori.md`. Construit într-o noapte, pe ramura `feat/casa-prize`
+(nemergeuită în `main`), cu recenzii la fiecare pas. **Release-ul (APK v3.40, versionCode 44) NU e construit încă:** se face
+după recenzia finală a ramurei; utilizatorul îl vede dimineață.
+
+**Invariantul READ-ONLY:** prizele Tuya sunt singurul lucru pe care îl comandă sistemul. Invertorul și BMS-ul rămân
+READ-ONLY, nimic din `collector/` sau `bms/` nu s-a schimbat.
+
+**Ce s-a construit**
+- Container nou `solar-casa` (7 containere acum): `casa/` (Python, gunicorn 1×8 fire, port intern 8100, fără port publicat,
+  `env_file: .env`, volum `./casa/data`). Prize local prin `tinytuya` (TCP 6668, conexiune persistentă per priză); senzori din
+  cloud-ul Tuya prin `tuya-device-sharing-sdk` (login QR, MQTT + citire la ≤ 5 min).
+- Prizele (IP-uri de rezervat în DHCP): Boiler 192.168.1.244 (v3.3), Living sus .104 (3.3), Priza cam Georgi .204 (3.3),
+  Bucatarie .185 (3.4), Lumina Curte .158 (3.4); senzorii: Temp Etaj, Temp afara, Temp BECI.
+- CLI: `docker exec -it solar-casa python -m casa login | sync | set-password [--stdin] | phones | revoke <id> | demo-devices [--force]`.
+- Date în `casa/data/` (gitignored, mod 600): `devices.json` (chei locale), `cloud_session.json`, `auth.json` (hash parolă +
+  hash-uri token), `state.json` / `state.demo.json`. Nimic secret în git, log-uri sau Telegram.
+- Caddy: `handle_path /solar/casa/*` înaintea lui `/solar/*`, `request_body max_size 16KB`, `request_buffers 20KB`, timeout 60 s,
+  `header_up X-Forwarded-For {remote_host}`. Autentificare: o parolă comună, token per telefon; 5 greșeli / 15 min per IP,
+  20 / oră total.
+- InfluxDB: `casa_plug` (`on`, `online`, `power`, `voltage`, `current` în A) și `casa_sensor` (`temperature`, `humidity`,
+  `battery`), în `live` și `history`. Grafana: rândul „🏠 Casa: prize si senzori" (panourile 142–147).
+- Aplicația v3.40: selector SISTEM | CASA în Retro, card CASA în Simple, rândul „ACCES CASA" în SETARI, placa de parolă la
+  prima deschidere, detaliu priză (comutator, countdown, programări, inching) și detaliu senzor (2h/1d/7d). Timeout comandă 50 s.
+
+**Decizii luate pe parcurs (relevante pentru utilizator)**
+- Programările acționează pe fronturi; un stop ratat se execută oricând, un start ratat doar în fereastră; stop-urile rulează
+  înaintea start-urilor la același moment; golul de primăvară (03:00–04:00) mută start/stop la 04:00.
+- Cel mai apropiat termen de oprire se scrie în DP-ul de countdown al prizei (se stinge și dacă serverul cade).
+- Ștergerea/dezactivarea intervalului care ține priza pornită o lasă pornită până la VECHIUL stop; „pornit" manual după
+  ștergere e nelimitat, dacă nu se aplică inching.
+- Stare demo separată (`state.demo.json`, marcaj); modul real refuză o stare demo. Influx scris dintr-un fir separat. Comenzile
+  rămân active și când priza pare offline (conexiune imediată la comandă). Limita globală de 20 înregistrări/oră înseamnă că
+  cineva poate bloca noi înregistrări o oră (compromis asumat).
+- Curentul prizei se citește ca mA Tuya / 1000 → A; **de verificat pe prize reale** (un model care raportează direct A ar
+  arăta de 1000 ori prea mic).
+
+**Verificat**
+- Suita `casa`: 258 teste OK (container `solar-monitor-casa`, rețea oprită). Teste Android pe logica CASA (model, acces, detaliu,
+  Retro). Serviciul rulează în **mod demo** (`CASA_DEMO=1` în `.env`, prize false, fără cloud): `/health` 200, rutele cer token,
+  `/solar/latest` și Grafana neatinse, `/beci-cloud/` neschimbat. Capturi pe emulator pentru pagina CASA și detalii (Retro), Simple.
+- **Neverificat pe hardware real:** conexiunea la prizele reale, chei/QR, senzorii din cloud (SDK-ul abonează MQTT doar
+  dispozitivele „set_up"), unitatea curentului, DP-ul de countdown (dp 9) pe fiecare model, comportamentul real al programărilor.
+- Parcat pentru recenzia finală: `inching_off_at` vechi după repornire dacă priza a fost ciclată cât controlerul era oprit
+  (greșește spre oprire); un singur OFF fals șterge termenele; client deconectat în timpul corpului → 500 „eroare de stocare".
+
+**Pașii de dimineață (Task 15, cu utilizatorul):** (1) rezervări DHCP pentru cele 5 IP-uri; (2) `python -m casa login` (QR) și
+`sync`; (3) scos `CASA_DEMO=1`, `docker compose up -d casa`, toate prizele online, puteri vs SmartLife; (4) `python -m casa
+set-password` (parola de test rămasă pe server se înlocuiește); (5) telefoane înregistrate: Note 9, S20 FE, S26; (6) teste live
+(comutare, countdown, programare, inching; boilerul la urmă); (7) **ștergerea programărilor echivalente din SmartLife**.
+Apoi merge în `main` și livrare APK pe Telegram.
