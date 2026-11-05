@@ -243,7 +243,9 @@ internal fun RetroDashboard(
     onTabSelected: (RetroTab) -> Unit,
     onEnergyFieldClick: (String) -> Unit,
     energyContent: @Composable () -> Unit,
-    settingsContent: @Composable () -> Unit
+    settingsContent: @Composable () -> Unit,
+    systemSub: String = RetroSubSystem,
+    onSystemSubChange: (String) -> Unit = {}
 ) {
     Box(Modifier.fillMaxSize()) {
         Image(
@@ -296,10 +298,12 @@ internal fun RetroDashboard(
                             onBmsClick = { onTabSelected(RetroTab.SYSTEM) }
                         )
                         RetroTab.ENERGY -> energyContent()
-                        RetroTab.SYSTEM -> RetroSystemPage(
+                        RetroTab.SYSTEM -> RetroSystemHost(
                             data = data,
                             bms = bms,
-                            onEnergyFieldClick = onEnergyFieldClick
+                            onEnergyFieldClick = onEnergyFieldClick,
+                            sub = systemSub,
+                            onSubChange = onSystemSubChange
                         )
                         RetroTab.SETTINGS -> settingsContent()
                     }
@@ -1156,7 +1160,12 @@ private fun RetroEnergyTodayArtwork(
 }
 
 @Composable
-private fun RetroSystemPage(data: SolarData?, bms: BmsState?, onEnergyFieldClick: (String) -> Unit) {
+internal fun RetroSystemPage(
+    data: SolarData?,
+    bms: BmsState?,
+    onEnergyFieldClick: (String) -> Unit,
+    onSubChange: (String) -> Unit
+) {
     var batteryHistory by remember { mutableStateOf<List<HistoryPoint>>(emptyList()) }
     var temperatureHistory by remember { mutableStateOf<List<HistoryPoint>>(emptyList()) }
 
@@ -1205,6 +1214,7 @@ private fun RetroSystemPage(data: SolarData?, bms: BmsState?, onEnergyFieldClick
         ) {
             RetroSystemTopArtwork(
                 data = data,
+                onSubChange = onSubChange,
                 modifier = Modifier
                     .fillMaxWidth(0.95f)
                     .aspectRatio(1_024f / 301f)
@@ -1236,6 +1246,7 @@ private fun RetroSystemPage(data: SolarData?, bms: BmsState?, onEnergyFieldClick
 @Composable
 private fun RetroSystemTopArtwork(
     data: SolarData?,
+    onSubChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val connected = data != null
@@ -1269,6 +1280,16 @@ private fun RetroSystemTopArtwork(
             modifier = Modifier
                 .offset(x = scaleX * 930f, y = scaleY * 294f)
                 .width(scaleX * 300f)
+        )
+        // Comutatorul SISTEM | CASA sta pe zona goala a placii, intre titlul pictat si LED
+        // (unitati de asset 1024 x 301: x 432..796, y 22..148 = ~48 dp inaltime de atingere).
+        RetroCasaSelector(
+            sub = RetroSubSystem,
+            onSubChange = onSubChange,
+            modifier = Modifier
+                .offset(x = maxWidth * (432f / 1_024f), y = maxHeight * (22f / 301f))
+                .width(maxWidth * (364f / 1_024f))
+                .height(maxHeight * (126f / 301f))
         )
     }
 }

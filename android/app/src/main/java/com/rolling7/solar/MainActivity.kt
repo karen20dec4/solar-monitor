@@ -234,6 +234,8 @@ fun App() {
     var showHistoryMenu by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var retroTabName by rememberSaveable { mutableStateOf(RetroTab.DASHBOARD.name) }
+    // Fila SISTEM are doua pagini: "SISTEM" (instrumente) si "CASA" (prize si senzori).
+    var systemSub by rememberSaveable { mutableStateOf(RetroSubSystem) }
     var selectedEnergyField by rememberSaveable { mutableStateOf("energy_pv_today") }
     // Intervalul ramane acelasi cand schimbi graficul si e comun ambelor teme.
     var energyRange by rememberSaveable { mutableStateOf(RetroEnergyDefaultRange) }
@@ -483,7 +485,9 @@ fun App() {
                             onRangeSelected = { energyRange = it }
                         )
                     },
-                    settingsContent = simpleSettingsContent
+                    settingsContent = simpleSettingsContent,
+                    systemSub = systemSub,
+                    onSystemSubChange = { systemSub = it }
                 )
                 DashboardStyle.SIMPLE -> SimpleDashboard(
                     data = data,
