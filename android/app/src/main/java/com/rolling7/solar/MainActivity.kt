@@ -236,6 +236,11 @@ fun App() {
     var retroTabName by rememberSaveable { mutableStateOf(RetroTab.DASHBOARD.name) }
     // Fila SISTEM are doua pagini: "SISTEM" (instrumente) si "CASA" (prize si senzori).
     var systemSub by rememberSaveable { mutableStateOf(RetroSubSystem) }
+    // Priza / senzorul CASA deschis pe tema Simple (ecranul Retro de detaliu, in dialog). Aici, ca bara de sistem
+    // sa se poata decide dintr-un singur loc si sa supravietuiasca recrearii activitatii.
+    var casaPlugId by rememberSaveable { mutableStateOf<String?>(null) }
+    var casaSensorId by rememberSaveable { mutableStateOf<String?>(null) }
+    val casaDetailOpen = casaPlugId != null || casaSensorId != null
     var selectedEnergyField by rememberSaveable { mutableStateOf("energy_pv_today") }
     // Intervalul ramane acelasi cand schimbi graficul si e comun ambelor teme.
     var energyRange by rememberSaveable { mutableStateOf(RetroEnergyDefaultRange) }
@@ -252,14 +257,18 @@ fun App() {
 
     // Tema Simple e deschisa la culoare, Retro e inchisa. Bara de stare si cea de
     // navigare trebuie sa urmeze fundalul temei, altfel raman negre peste un ecran
-    // luminos. `isAppearanceLight*` intoarce iconitele de sistem pe inchis.
-    LaunchedEffect(retro) {
+    // luminos. `isAppearanceLight*` intoarce iconitele de sistem pe inchis. Detaliul CASA
+    // (dialog Retro pe tema Simple) le face inchise cat e deschis; culoarea se deriva mereu
+    // din (tema, detaliu deschis), nu se salveaza si nu se restaureaza.
+    val darkBars = retro || (dashboardStyle == DashboardStyle.SIMPLE && casaDetailOpen)
+    LaunchedEffect(darkBars) {
         val window = (view.context as? Activity)?.window ?: return@LaunchedEffect
-        window.statusBarColor = chrome.background.toArgb()
-        window.navigationBarColor = chrome.background.toArgb()
+        val barColor = if (darkBars) RetroBackground else dashboardChrome(false).background
+        window.statusBarColor = barColor.toArgb()
+        window.navigationBarColor = barColor.toArgb()
         WindowCompat.getInsetsController(window, view).apply {
-            isAppearanceLightStatusBars = !retro
-            isAppearanceLightNavigationBars = !retro
+            isAppearanceLightStatusBars = !darkBars
+            isAppearanceLightNavigationBars = !darkBars
         }
     }
 
@@ -411,8 +420,6 @@ fun App() {
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                var casaPlugId by rememberSaveable { mutableStateOf<String?>(null) }
-                var casaSensorId by rememberSaveable { mutableStateOf<String?>(null) }
                 SimpleCasaCard(
                     onOpenPlug = { casaPlugId = it },
                     onOpenSensor = { casaSensorId = it },

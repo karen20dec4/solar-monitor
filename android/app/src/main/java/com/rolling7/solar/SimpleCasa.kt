@@ -1,6 +1,5 @@
 package com.rolling7.solar
 
-import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
 import android.view.ViewGroup
@@ -31,7 +30,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -44,7 +42,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
@@ -58,7 +55,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import androidx.core.view.WindowCompat
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import kotlinx.coroutines.Dispatchers
@@ -109,12 +105,6 @@ internal fun CasaForgetDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     )
 }
 
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is android.content.ContextWrapper -> baseContext.findActivity()
-    else -> null
-}
-
 /**
  * Detaliul unei prize sau al unui senzor pe tema Simple: aceleasi ecrane Retro, pe tot ecranul, intr-un dialog.
  * Cat timp e deschis, cardul din spate nu mai interogheaza serverul.
@@ -122,34 +112,13 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 @Composable
 internal fun SimpleCasaDetailDialog(plugId: String?, sensorId: String?, onClose: () -> Unit) {
     if (plugId == null && sensorId == null) return
-    // Barele de sistem apartin ferestrei aplicatiei, nu dialogului: cat e deschis detaliul le facem de culoarea
-    // fundalului Retro (altfel se vede pagina Simple, deschisa la culoare, prin ele) si le readucem la inchidere.
-    val activityWindow = LocalContext.current.findActivity()?.window
-    val activityView = LocalView.current
-    DisposableEffect(activityWindow) {
-        if (activityWindow == null) return@DisposableEffect onDispose { }
-        val controller = WindowCompat.getInsetsController(activityWindow, activityView)
-        val oldStatus = activityWindow.statusBarColor
-        val oldNav = activityWindow.navigationBarColor
-        val oldLightStatus = controller.isAppearanceLightStatusBars
-        val oldLightNav = controller.isAppearanceLightNavigationBars
-        activityWindow.statusBarColor = RetroBackground.toArgb()
-        activityWindow.navigationBarColor = RetroBackground.toArgb()
-        controller.isAppearanceLightStatusBars = false
-        controller.isAppearanceLightNavigationBars = false
-        onDispose {
-            activityWindow.statusBarColor = oldStatus
-            activityWindow.navigationBarColor = oldNav
-            controller.isAppearanceLightStatusBars = oldLightStatus
-            controller.isAppearanceLightNavigationBars = oldLightNav
-        }
-    }
+    // Culoarea barelor de sistem o hotaraste MainActivity (tema + detaliu CASA deschis), nu acest dialog.
     Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
-        SideEffect {
+        LaunchedEffect(Unit) {
             window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             window?.setDimAmount(0f)
         }
