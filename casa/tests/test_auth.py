@@ -3,6 +3,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -138,6 +139,55 @@ class AuthTest(AuthBase):
         p = self.auth.phones()[0]
         self.assertEqual(set(p), {"phone_id", "device", "created", "last_used"})
         self.assertEqual(p["phone_id"], phone_id)
+
+    def test_revoke_from_other_process_is_not_undone_by_last_used_write(self):
+        self.auth.set_password("parola-buna-1")
+        token, phone_id = self.auth.register("parola-buna-1", "tel", "10.0.0.1")
+        # al doilea Auth/JsonStore pe acelasi fisier = CLI-ul intr-un alt proces
+        cli = Auth(JsonStore(self.path), clock=self.clock)
+        server_store = self.auth._store
+        real_save = server_store.save
+        in_save = threading.Event()
+
+        def slow_save(data, mode=0o600):
+            in_save.set()
+            threading.Event().wait(0.4)  # fereastra in care CLI-ul ar revoca
+            real_save(data, mode)
+
+        server_store.save = slow_save
+        self.clock.t += 120  # last_used vechi -> check() va scrie
+        t = threading.Thread(target=lambda: self.auth.check(token))
+        t.start()
+        self.assertTrue(in_save.wait(5))
+        self.assertTrue(cli.revoke(phone_id))  # asteapta lock-ul serverului
+        t.join(5)
+        server_store.save = real_save
+        self.assertIsNone(self.auth.check(token))
+        self.assertEqual(cli.phones(), [])
+
+    def test_set_password_during_register_is_not_lost(self):
+        self.auth.set_password("parola-buna-1")
+        cli = Auth(JsonStore(self.path), clock=self.clock)
+        server_store = self.auth._store
+        real_save = server_store.save
+        in_save = threading.Event()
+
+        def slow_save(data, mode=0o600):
+            in_save.set()
+            threading.Event().wait(0.4)
+            real_save(data, mode)
+
+        server_store.save = slow_save
+        t = threading.Thread(target=lambda: self.auth.register("parola-buna-1", "tel", "10.0.0.1"))
+        t.start()
+        self.assertTrue(in_save.wait(5))
+        cli.set_password("parola-noua-22")
+        t.join(5)
+        server_store.save = real_save
+        self.assertEqual(len(cli.phones()), 1)
+        with self.assertRaises(BadPassword):
+            cli.register("parola-buna-1", "x", "10.0.0.2")
+        cli.register("parola-noua-22", "x", "10.0.0.2")
 
 
 class RateLimiterTest(unittest.TestCase):

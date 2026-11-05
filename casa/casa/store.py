@@ -1,5 +1,6 @@
 """Stocare JSON atomica (fisier temporar + fsync + os.replace), mod 600."""
 import copy
+import fcntl
 import json
 import os
 import tempfile
@@ -40,8 +41,17 @@ class JsonStore:
             raise
 
     def update(self, fn: Callable[[dict], None], default: dict) -> dict:
+        # threading.Lock: fire din acelasi proces; flock pe <path>.lock: procese diferite
+        # (serverul si `docker exec python -m casa ...`). Fisierul de lock e separat de
+        # fisierul de date, fiindca os.replace ii schimba inode-ul.
         with self._lock:
-            data = self.load(default)
-            fn(data)
-            self.save(data)
-            return data
+            fd = os.open(self.path + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                data = self.load(default)
+                fn(data)
+                self.save(data)
+                return data
+            finally:
+                os.close(fd)  # inchiderea elibereaza si flock
