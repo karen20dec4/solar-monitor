@@ -1,0 +1,420 @@
+import contextlib
+import io
+import json
+import os
+import stat
+import tempfile
+import unittest
+from types import SimpleNamespace
+from unittest import mock
+
+from casa import __main__ as cli
+from casa.cloud import CLIENT_ID, SCHEMA, CloudSession, LoginFailed
+from casa.devices import load_devices
+
+KEY = "SECRETKEY1234567"
+STRATEGY = {
+    1: {"status_code": "switch_1", "config_item": {"valueDesc": "{}"}},
+    9: {"status_code": "countdown_1", "config_item": {"valueDesc": "{\"scale\":0}"}},
+    18: {"status_code": "cur_current", "config_item": {"valueDesc": "{\"scale\":0}"}},
+    19: {"status_code": "cur_power", "config_item": {"valueDesc": "{\"scale\":1}"}},
+    20: {"status_code": "cur_voltage", "config_item": {"valueDesc": "{\"scale\":1}"}},
+}
+
+
+def dev(dev_id, name, category, status=None, local_strategy=None, status_range=None,
+        update_time=None):
+    return SimpleNamespace(
+        id=dev_id, name=name, category=category, local_key=KEY, online=True,
+        status=dict(status or {}), local_strategy=local_strategy or {},
+        status_range=status_range or {}, update_time=update_time, support_local=False)
+
+
+def rng(scale):
+    return SimpleNamespace(values=json.dumps({"unit": "", "min": -400, "max": 1000, "scale": scale}))
+
+
+def sensor(dev_id="s1", name="Temp BECI", status=None, **kw):
+    status = {"va_temperature": 215, "va_humidity": 55, "battery_state": "middle"} if status is None else status
+    return dev(dev_id, name, "wsdcg", status=status, status_range={"va_temperature": rng(1)}, **kw)
+
+
+class FakeClient:
+    def __init__(self, connected):
+        self.connected = connected
+
+    def is_connected(self):
+        return self.connected
+
+
+class FakeManager:
+    devices = []
+    created = []
+
+    def __init__(self, client_id, user_code, terminal_id, endpoint, token_response, listener):
+        self.args = (client_id, user_code, terminal_id, endpoint, token_response, listener)
+        self.device_map = {}
+        self.device_listeners = []
+        self.cache_updates = 0
+        self.mq = None
+        self.mq_connected = True
+        FakeManager.created.append(self)
+
+    def update_device_cache(self):
+        self.cache_updates += 1
+        self.device_map = {d.id: d for d in FakeManager.devices}
+
+    def add_device_listener(self, listener):
+        self.device_listeners.append(listener)
+
+    def refresh_mq(self):
+        self.mq = SimpleNamespace(client=FakeClient(self.mq_connected))
+
+    def report(self, device_id, status, timestamps_ms=None):
+        d = self.device_map[device_id]
+        d.status.update(status)
+        for lst in self.device_listeners:
+            lst.update_device(d, list(status), timestamps_ms or {})
+
+
+class FakeLogin:
+    def __init__(self, results):
+        self.results = list(results)
+        self.qr_calls = []
+        self.polls = 0
+
+    def qr_code(self, client_id, schema, user_code):
+        self.qr_calls.append((client_id, schema, user_code))
+        return {"success": True, "result": {"qrcode": "QRTOKEN123"}}
+
+    def login_result(self, token, client_id, user_code):
+        self.polls += 1
+        assert token == "QRTOKEN123" and client_id == CLIENT_ID
+        return self.results.pop(0) if self.results else (False, {"msg": "wait"})
+
+
+class Clock:
+    def __init__(self, t=1_800_000_000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+SESSION = {"user_code": "UC", "terminal_id": "TERM", "endpoint": "https://ep",
+           "token_info": {"t": 1, "uid": "u", "expire_time": 7200,
+                          "access_token": "AT", "refresh_token": "RT"}}
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = self._tmp.name
+        self.clock = Clock()
+        self.notes = []
+        FakeManager.devices = []
+        FakeManager.created = []
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def session(self, with_session=True, **kw):
+        cs = CloudSession(self.dir, lambda t, m, p: self.notes.append((t, m, p)), clock=self.clock,
+                          manager_factory=FakeManager, sleep=self.clock.sleep, **kw)
+        if with_session:
+            cs._store.save(SESSION)
+        return cs
+
+    def started(self, devices=None):
+        FakeManager.devices = devices if devices is not None else [sensor()]
+        cs = self.session()
+        cs._start_once()
+        return cs, FakeManager.created[-1]
+
+
+class SyncTest(Base):
+    def test_sync_writes_devices_json_mode_600_and_classifies_kinds(self):
+        FakeManager.devices = [
+            dev("p1", "Boiler 10.30 - 16.00", "cz", status={"cur_power": 5}, local_strategy=STRATEGY),
+            dev("p2", "Perete", "kg"), dev("p3", "Cam", "pc"),
+            sensor(), dev("x1", "Bec", "dj"),
+        ]
+        cs = self.session()
+        result = cs.sync()
+        path = os.path.join(self.dir, "devices.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        kinds = {d.id: d.kind for d in result}
+        self.assertEqual(kinds, {"p1": "plug", "p2": "plug", "p3": "plug", "s1": "sensor", "x1": "other"})
+        saved = {d.id: d for d in load_devices(self.dir)}
+        self.assertEqual(saved["p1"].name, "Boiler")
+        self.assertEqual(saved["p1"].raw_name, "Boiler 10.30 - 16.00")
+        self.assertEqual(saved["p1"].category, "cz")
+        self.assertEqual(saved["p1"].local_key, KEY)
+        self.assertEqual(saved["p1"].dps["power"], 19)
+        self.assertEqual(saved["p1"].scales["power"], 1)
+        self.assertEqual(saved["s1"].name, "Temp BECI")
+        self.assertEqual(saved["x1"].kind, "other")
+
+    def test_sync_without_strategy_does_not_invent_metering(self):
+        FakeManager.devices = [dev("p2", "Perete", "kg", status={"switch_1": True, "countdown_1": 0})]
+        self.session().sync()
+        d = load_devices(self.dir)[0]
+        self.assertIn("switch", d.dps)
+        self.assertNotIn("power", d.dps)
+
+    def test_sync_without_session_raises(self):
+        with self.assertRaises(LoginFailed):
+            self.session(with_session=False).sync()
+
+    def test_sync_cli_output_never_contains_local_key(self):
+        FakeManager.devices = [
+            dev("bf5cc0f2db15b9eab2a0zy", "Boiler", "cz", status={"cur_power": 5}, local_strategy=STRATEGY),
+            sensor(),
+        ]
+        cs = self.session()
+        out = io.StringIO()
+        cfg = SimpleNamespace(data_dir=self.dir, ntfy_url="")
+        with mock.patch.object(cli, "_cloud", return_value=cs), \
+                mock.patch.object(cli.Config, "from_env", return_value=cfg), contextlib.redirect_stdout(out):
+            self.assertEqual(cli.main(["sync"]), 0)
+        text = out.getvalue()
+        self.assertNotIn(KEY, text)
+        self.assertIn("Boiler", text)
+        self.assertIn("bf5cc0f2db15b9eab2a0zy", text)
+        self.assertIn("Temp BECI", text)
+        with open(os.path.join(self.dir, "devices.json")) as f:
+            self.assertIn(KEY, f.read())  # cheia e in fisier, dar nu pe ecran
+
+
+class SensorTest(Base):
+    def test_sensor_values_scaled_and_battery_mapped(self):
+        cs, _ = self.started([
+            sensor("s1", "A", {"va_temperature": 215, "va_humidity": 55, "battery_state": "middle"}),
+            sensor("s2", "B", {"va_temperature": -35, "va_humidity": 80, "battery_percentage": 87}),
+            sensor("s3", "C", {"va_temperature": 200, "va_humidity": 10, "battery_state": "low"}),
+            sensor("s4", "D", {"va_temperature": 190, "va_humidity": 40, "battery_state": "high"}),
+            sensor("s5", "E", {}),
+        ])
+        by = {s["id"]: s for s in cs.sensors()}
+        self.assertEqual(by["s1"]["temperature"], 21.5)
+        self.assertEqual(by["s1"]["humidity"], 55)
+        self.assertEqual(by["s1"]["battery"], 50)
+        self.assertEqual(by["s1"]["name"], "A")
+        self.assertEqual(by["s2"]["temperature"], -3.5)
+        self.assertEqual(by["s2"]["battery"], 87)
+        self.assertEqual(by["s3"]["battery"], 10)
+        self.assertEqual(by["s4"]["battery"], 100)
+        self.assertIsNone(by["s5"]["temperature"])
+        self.assertIsNone(by["s5"]["battery"])
+
+    def test_scale_zero_from_status_range_and_default_one(self):
+        d0 = dev("s1", "A", "wsdcg", status={"va_temperature": 21, "va_humidity": 50},
+                 status_range={"va_temperature": rng(0)})
+        d1 = dev("s2", "B", "wsdcg", status={"va_temperature": 215, "va_humidity": 50})
+        cs, _ = self.started([d0, d1])
+        by = {s["id"]: s for s in cs.sensors()}
+        self.assertEqual(by["s1"]["temperature"], 21.0)
+        self.assertEqual(by["s2"]["temperature"], 21.5)
+
+    def test_plugs_are_not_sensors(self):
+        cs, _ = self.started([dev("p1", "Boiler", "cz"), sensor()])
+        self.assertEqual([s["id"] for s in cs.sensors()], ["s1"])
+
+    def test_mqtt_update_changes_value_and_calls_hook(self):
+        cs, mgr = self.started()
+        seen = []
+        cs.on_sensor_update = seen.append
+        self.clock.t += 10
+        mgr.report("s1", {"va_temperature": 230}, {"va_temperature": int((self.clock.t - 3) * 1000)})
+        self.assertEqual(cs.sensors()[0]["temperature"], 23.0)
+        self.assertEqual(cs.sensors()[0]["updated"], self.clock.t - 3)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["id"], "s1")
+        self.assertEqual(seen[0]["temperature"], 23.0)
+
+    def test_online_event_without_status_does_not_touch_updated(self):
+        cs, mgr = self.started()
+        before = cs.sensors()[0]["updated"]
+        self.clock.t += 600
+        mgr.device_listeners[0].update_device(mgr.device_map["s1"], [], {})
+        self.assertEqual(cs.sensors()[0]["updated"], before)
+
+    def test_sensors_report_updated_epoch_not_now(self):
+        cs, mgr = self.started()
+        t0 = self.clock.t
+        mgr.report("s1", {"va_temperature": 210})  # fara timestamp DP: ora primirii
+        self.assertEqual(cs.sensors()[0]["updated"], t0)
+        self.clock.t += 6 * 3600
+        self.assertEqual(cs.sensors()[0]["updated"], t0)
+        self.assertEqual(cs.sensors()[0]["updated"], t0)
+        # timestamp DP din SDK (milisecunde) are prioritate
+        mgr.report("s1", {"va_humidity": 51}, {"va_humidity": int((t0 + 5) * 1000)})
+        self.assertEqual(cs.sensors()[0]["updated"], t0 + 5)
+
+    def test_cache_refresh_uses_device_update_time_and_never_now(self):
+        t0 = self.clock.t - 6 * 3600
+        cs, _ = self.started([sensor(update_time=int(t0))])
+        self.assertEqual(cs.sensors()[0]["updated"], t0)
+
+    def test_cache_refresh_unknown_time_is_none_not_now(self):
+        cs, _ = self.started([sensor()])
+        self.assertIsNone(cs.sensors()[0]["updated"])
+
+
+class StateTest(Base):
+    def test_no_session(self):
+        cs = self.session(with_session=False)
+        self.assertEqual(cs.state(), "no_session")
+        cs.check_health()
+        self.clock.t += 7200
+        cs.check_health()
+        self.assertEqual(self.notes, [])
+
+    def test_ok_when_mqtt_connected(self):
+        cs, mgr = self.started()
+        self.assertEqual(cs.state(), "ok")
+
+    def test_disconnected_without_mqtt_and_old_refresh_ok_with_recent_refresh(self):
+        cs, mgr = self.started()
+        mgr.mq.client.connected = False
+        self.assertEqual(cs.state(), "ok")  # refresh reusit acum 0 s
+        self.clock.t += 601
+        self.assertEqual(cs.state(), "disconnected")
+
+    def test_state_disconnected_notifies_once_after_30_min_and_again_after_recovery(self):
+        cs, mgr = self.started()
+        mgr.mq.client.connected = False
+        self.clock.t += 700
+        self.assertEqual(cs.state(), "disconnected")
+        cs.check_health()
+        self.clock.t += 1700  # ~40 min de la ultimul ok, dar doar 28 min de cand e vazut cazut
+        cs.check_health()
+        self.assertEqual(self.notes, [])
+        self.clock.t += 200
+        cs.check_health()
+        self.assertEqual(self.notes, [("CASA: cloud Tuya deconectat",
+                                       "Senzorii nu mai primesc date. Refa login: python -m casa login",
+                                       "high")])
+        self.clock.t += 3600
+        cs.check_health()
+        self.assertEqual(len(self.notes), 1)  # o singura data
+        mgr.mq.client.connected = True
+        cs.check_health()  # revenire
+        mgr.mq.client.connected = False
+        self.clock.t += 700
+        cs.check_health()
+        self.clock.t += 1900
+        cs.check_health()
+        self.assertEqual(len(self.notes), 2)
+
+    def test_quiet_mqtt_refreshes_cache_at_most_every_5_min(self):
+        cs, mgr = self.started()
+        n = mgr.cache_updates
+        cs._tick()
+        self.assertEqual(mgr.cache_updates, n)  # MQTT nu e tacut inca
+        self.clock.t += 301
+        cs._tick()
+        self.assertEqual(mgr.cache_updates, n + 1)
+        self.clock.t += 60
+        cs._tick()
+        self.assertEqual(mgr.cache_updates, n + 1)
+        self.clock.t += 250
+        cs._tick()
+        self.assertEqual(mgr.cache_updates, n + 2)
+
+    def test_message_resets_quiet_timer(self):
+        cs, mgr = self.started()
+        n = mgr.cache_updates
+        self.clock.t += 250
+        mgr.report("s1", {"va_humidity": 56})
+        self.clock.t += 250
+        cs._tick()
+        self.assertEqual(mgr.cache_updates, n)
+
+    def test_failed_cache_refresh_does_not_count_as_ok(self):
+        cs, mgr = self.started()
+        mgr.mq.client.connected = False
+        self.clock.t += 700
+        mgr.update_device_cache = mock.Mock(side_effect=OSError("retea"))
+        with self.assertLogs("casa.cloud", level="WARNING"):
+            cs._tick()
+        self.assertEqual(cs.state(), "disconnected")
+
+
+class LoginTest(Base):
+    def test_login_saves_session_600_and_syncs(self):
+        FakeManager.devices = [sensor()]
+        login = FakeLogin([(False, {"msg": "wait"}),
+                           (True, {"t": 111, "uid": "U1", "expire_time": 7200, "access_token": "AT9",
+                                   "refresh_token": "RT9", "terminal_id": "TERM9",
+                                   "endpoint": "https://ep9"})])
+        cs = self.session(with_session=False, login_control=login)
+        out = io.StringIO()
+        cs.login_interactive("UC1", out=out)
+        self.assertEqual(login.qr_calls, [(CLIENT_ID, SCHEMA, "UC1")])
+        self.assertEqual(login.polls, 2)
+        self.assertGreater(len(out.getvalue()), 200)  # QR ASCII
+        self.assertNotIn("AT9", out.getvalue())
+        path = os.path.join(self.dir, "cloud_session.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        with open(path) as f:
+            data = json.load(f)
+        self.assertEqual(data["terminal_id"], "TERM9")
+        self.assertEqual(data["endpoint"], "https://ep9")
+        self.assertEqual(data["user_code"], "UC1")
+        self.assertEqual(data["token_info"]["refresh_token"], "RT9")
+        self.assertEqual(FakeManager.created[-1].args[:4], (CLIENT_ID, "UC1", "TERM9", "https://ep9"))
+        self.assertTrue(os.path.exists(os.path.join(self.dir, "devices.json")))
+
+    def test_login_times_out_after_120_s_polling_every_2_s(self):
+        login = FakeLogin([])
+        cs = self.session(with_session=False, login_control=login)
+        with self.assertRaises(LoginFailed):
+            cs.login_interactive("UC1", out=io.StringIO())
+        self.assertEqual(login.polls, 60)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "cloud_session.json")))
+
+    def test_login_qr_failure_raises(self):
+        login = FakeLogin([])
+        login.qr_code = lambda *a: {"success": False, "msg": "user_code gresit"}
+        cs = self.session(with_session=False, login_control=login)
+        with self.assertRaises(LoginFailed):
+            cs.login_interactive("UC1", out=io.StringIO())
+
+    def test_refreshed_token_is_saved_by_listener(self):
+        cs, mgr = self.started()
+        mgr.args[5].update_token({"t": 5, "uid": "u", "expire_time": 7200,
+                                  "access_token": "AT2", "refresh_token": "RT2"})
+        path = os.path.join(self.dir, "cloud_session.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        with open(path) as f:
+            data = json.load(f)
+        self.assertEqual(data["token_info"]["access_token"], "AT2")
+        self.assertEqual(data["terminal_id"], "TERM")
+
+
+class DemoTest(unittest.TestCase):
+    def test_demo_devices_writes_five_plugs_and_three_sensors_without_keys(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = io.StringIO()
+            cfg = SimpleNamespace(data_dir=d, ntfy_url="")
+            with mock.patch.object(cli.Config, "from_env", return_value=cfg), contextlib.redirect_stdout(out):
+                self.assertEqual(cli.main(["demo-devices"]), 0)
+            devs = load_devices(d)
+            plugs = [x for x in devs if x.kind == "plug"]
+            sens = [x for x in devs if x.kind == "sensor"]
+            self.assertEqual([p.name for p in plugs],
+                             ["Boiler", "Living sus", "Priza cam Georgi", "Bucatarie", "Lumina Curte"])
+            self.assertEqual(sorted(s.name for s in sens), ["Temp BECI", "Temp Etaj", "Temp afara"])
+            self.assertTrue(all(x.local_key is None for x in devs))
+            self.assertIn("power", plugs[0].dps)
+            self.assertNotIn("power", plugs[3].dps)
+            self.assertTrue(all(p.ip for p in plugs))  # IP din valorile implicite
+            self.assertEqual(stat.S_IMODE(os.stat(os.path.join(d, "devices.json")).st_mode), 0o600)
+
+
+if __name__ == "__main__":
+    unittest.main()
