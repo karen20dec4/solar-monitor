@@ -78,6 +78,15 @@ class RateLimiter:
             self._hits[key] = q
             return True
 
+    def refund(self, key: str) -> None:
+        """Anuleaza ultima lovitura inregistrata pentru `key` (rezervare care nu s-a consumat)."""
+        with self._lock:
+            q = self._hits.get(key)
+            if q:
+                q.pop()
+                if not q:
+                    del self._hits[key]
+
     def retry_after(self, key: str) -> int:
         """Secunde pana cand `key` are din nou loc (0 daca are deja)."""
         with self._lock:
@@ -108,6 +117,7 @@ class Auth:
         self._clock = clock
         self._ip_limiter = RateLimiter(*PASSWORD_IP_LIMIT, clock)
         self._global_limiter = RateLimiter(*PASSWORD_GLOBAL_LIMIT, clock)
+        self._reserve_lock = threading.Lock()
 
     def set_password(self, password: str) -> None:
         if len(password) < MIN_PASSWORD_LEN:
@@ -131,14 +141,24 @@ class Auth:
     def register(self, password: str, device: str, client_ip: str) -> tuple[str, str]:
         if not self.has_password():
             raise NoPassword()
-        # Limitele se verifica inainte de parola: cat timp sunt pline, nici parola corecta nu trece.
-        blocked = max(self._ip_limiter.retry_after(client_ip), self._global_limiter.retry_after(GLOBAL_KEY))
-        if blocked:
-            raise RateLimited(blocked)
-        if not self._password_ok(password):
+        # Incercarea se rezerva INAINTE de scrypt (atomic) si se returneaza daca parola e buna:
+        # incercari paralele nu pot trece toate de limita cat timp scrypt ruleaza.
+        # Cat timp limitele sunt pline, nici parola corecta nu trece.
+        with self._reserve_lock:
+            blocked = max(self._ip_limiter.retry_after(client_ip),
+                          self._global_limiter.retry_after(GLOBAL_KEY))
+            if blocked:
+                raise RateLimited(blocked)
             self._ip_limiter.hit(client_ip)
             self._global_limiter.hit(GLOBAL_KEY)
+        try:
+            ok = self._password_ok(password)
+        except BaseException:
+            self._refund(client_ip)
+            raise
+        if not ok:
             raise BadPassword()
+        self._refund(client_ip)
 
         token = secrets.token_urlsafe(32)
         now = self._clock()
@@ -160,6 +180,11 @@ class Auth:
 
         self._store.update(fn, _DEFAULT)
         return token, out["phone_id"]
+
+    def _refund(self, client_ip: str) -> None:
+        with self._reserve_lock:
+            self._ip_limiter.refund(client_ip)
+            self._global_limiter.refund(GLOBAL_KEY)
 
     def check(self, token: str) -> Optional[dict]:
         if not token:

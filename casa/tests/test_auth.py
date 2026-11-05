@@ -189,6 +189,55 @@ class AuthTest(AuthBase):
             cli.register("parola-buna-1", "x", "10.0.0.2")
         cli.register("parola-noua-22", "x", "10.0.0.2")
 
+    def test_parallel_wrong_attempts_cannot_overshoot_ip_limit(self):
+        self.auth.set_password("parola-buna-1")
+        calls = []
+        gate = threading.Barrier(8)
+
+        def slow_check(password):
+            calls.append(password)
+            threading.Event().wait(0.2)   # scrypt lent: celelalte fire ajung la limita intre timp
+            return False
+
+        outcomes = []
+
+        def attempt():
+            gate.wait(5)
+            try:
+                self.auth.register("gresita", "tel", "10.0.0.9")
+            except (BadPassword, RateLimited) as e:
+                outcomes.append(type(e))
+
+        with mock.patch.object(self.auth, "_password_ok", slow_check):
+            threads = [threading.Thread(target=attempt) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(10)
+        self.assertEqual(len(outcomes), 8)
+        self.assertLessEqual(len(calls), 5)
+        self.assertEqual(outcomes.count(BadPassword), len(calls))
+
+    def test_correct_password_refunds_the_attempt(self):
+        self.auth.set_password("parola-buna-1")
+        for _ in range(4):
+            with self.assertRaises(BadPassword):
+                self.auth.register("gresita", "tel", "10.0.0.8")
+        for _ in range(10):  # reusitele nu consuma din limita
+            self.auth.register("parola-buna-1", "tel", "10.0.0.8")
+        with self.assertRaises(BadPassword):
+            self.auth.register("gresita", "tel", "10.0.0.8")  # a 5-a greseala, nu a 15-a
+        with self.assertRaises(RateLimited):
+            self.auth.register("parola-buna-1", "tel", "10.0.0.8")
+
+    def test_refund_removes_last_hit(self):
+        rl = RateLimiter(2, 10, FakeClock(0.0))
+        rl.hit("k")
+        rl.hit("k")
+        rl.refund("k")
+        self.assertTrue(rl.hit("k"))
+        rl.refund("nu-exista")
+
 
 class RateLimiterTest(unittest.TestCase):
     def test_burst_then_blocked_then_freed(self):

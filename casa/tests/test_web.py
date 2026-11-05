@@ -1,12 +1,17 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
+from casa import web
 from casa.auth import Auth, RateLimiter
+from casa.config import Config
 from casa.controller import CommandError
-from casa.store import JsonStore
-from casa.web import Services, create_app
+from casa.devices import DeviceInfo, save_devices
+from casa.store import CorruptStore, JsonStore
+from casa.web import Services, StateIsDemo, build_services, create_app
 
 PASSWORD = "parola-de-test"
 VIEW = {"id": "p1", "name": "Boiler", "online": True, "on": False, "metered": True, "power": 0.0,
@@ -22,7 +27,7 @@ class FakeController:
         self.raise_value = None
 
     def _view(self, pid):
-        return dict(VIEW, id=pid, metered=(pid == "p1"))
+        return dict(VIEW, id=pid, metered=(pid == "p1"), online=pid not in getattr(self, "offline", ()))
 
     def plug_view(self, pid):
         return self._view(pid)
@@ -39,6 +44,8 @@ class FakeController:
         return self._view(pid)
 
     def switch(self, pid, on):
+        if getattr(self, "slow", None):
+            self.slow.wait(5)
         return self._do("switch", pid, on)
 
     def set_countdown(self, pid, action, minutes):
@@ -385,6 +392,121 @@ class TestSensorRoutes(WebCase):
         r = self.c.get("/sensors/s1/history?range=2h", headers=self.h())
         self.assertEqual(r.status_code, 503)
         self.assertEqual(r.get_json(), {"error": "istoric indisponibil"})
+
+
+class TestRobustness(WebCase):
+    def test_public_remote_addr_ignores_forwarded_for(self):
+        env = {"REMOTE_ADDR": "8.8.4.4"}
+        for i in range(5):
+            r = self.c.post("/register", json={"password": "gresita!", "device": "x"},
+                            headers={"X-Forwarded-For": f"1.1.1.{i}"}, environ_overrides=env)
+            self.assertEqual(r.status_code, 401)
+        r = self.c.post("/register", json={"password": PASSWORD, "device": "x"},
+                        headers={"X-Forwarded-For": "3.3.3.3"}, environ_overrides=env)
+        self.assertEqual(r.status_code, 429)  # cheia e IP-ul real, nu antetul falsificabil
+
+    def test_oversized_body_is_413(self):
+        r = self.c.post("/register", data="x" * (web.MAX_BODY_BYTES + 1), content_type="application/json")
+        self.assertEqual(r.status_code, 413)
+        self.assertEqual(r.get_json(), {"error": "cerere prea mare"})
+        r = self.c.post("/plugs/p1/switch", data="x" * (web.MAX_BODY_BYTES + 1),
+                        content_type="application/json", headers=self.h())
+        self.assertEqual(r.status_code, 413)
+
+    def test_switch_to_offline_plug_is_502_without_waiting(self):
+        self.ctl.offline = {"p1"}
+        r = self.c.post("/plugs/p1/switch", json={"on": True}, headers=self.h())
+        self.assertEqual(r.status_code, 502)
+        body = r.get_json()
+        self.assertEqual((body["error"], body["plug"]["online"]), ("priza nu raspunde", False))
+        self.assertEqual(self.ctl.calls, [])        # comanda nici nu a plecat spre controller
+        # programarile se salveaza si cu priza offline
+        r = self.c.post("/plugs/p1/schedules", json={"start": "10:30", "stop": "16:00"}, headers=self.h())
+        self.assertEqual(r.status_code, 200)
+
+    def test_concurrent_command_to_same_plug_times_out_with_503(self):
+        self.ctl.slow = threading.Event()
+        h = self.h()
+        first = []
+        t = threading.Thread(target=lambda: first.append(
+            self.app.test_client().post("/plugs/p1/switch", json={"on": True}, headers=h).status_code))
+        t.start()
+        try:
+            for _ in range(100):  # asteapta ca prima cerere sa tina lock-ul
+                if self.ctl.slow is not None and any(l.locked() for l in [self.app.config["PLUG_LOCKS"]["p1"]]):
+                    break
+                threading.Event().wait(0.02)
+            with mock.patch.object(web, "PLUG_BUSY_WAIT_S", 0.2):
+                r = self.c.post("/plugs/p1/switch", json={"on": False}, headers=h)
+            self.assertEqual(r.status_code, 503)
+            # alta priza nu e blocata
+            self.assertEqual(self.c.post("/plugs/p2/switch", json={"on": True}, headers=h).status_code, 200)
+        finally:
+            self.ctl.slow.set()
+            t.join(5)
+        self.assertEqual(first, [200])
+
+    def test_storage_and_unexpected_errors_are_500_not_400_404(self):
+        h = self.h()
+        for exc in (CorruptStore("fisier JSON corupt: /data/state.json: x"), OSError("disc plin"),
+                    KeyError("altceva")):
+            with mock.patch.object(self.ctl, "switch", side_effect=exc):
+                with self.assertLogs("casa.web", level="ERROR") as logs:
+                    r = self.c.post("/plugs/p1/switch", json={"on": True}, headers=h)
+            self.assertEqual(r.status_code, 500, repr(exc))
+            self.assertEqual(r.get_json(), {"error": "eroare interna"})
+            self.assertNotIn(PASSWORD, " ".join(logs.output))
+
+
+class TestBuildServices(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        plug = DeviceInfo(id="bfplug1", name="Boiler", kind="plug", local_key=None, ip=None, version=None,
+                          dps={"switch": 1, "countdown": 9, "current": 18, "power": 19, "voltage": 20},
+                          scales={"power": 1, "voltage": 1, "current": 0})
+        sensor = DeviceInfo(id="demo_sensor_etaj", name="Temp Etaj", kind="sensor", local_key=None,
+                            ip=None, version=None)
+        save_devices(self.dir, [plug, sensor])
+
+    def cfg(self, demo):
+        return Config(data_dir=self.dir, influx_url="http://127.0.0.1:1", influx_token="t", influx_org="o",
+                      bucket_live="live", bucket_history="history", ntfy_url="", poll_s=0.2, demo=demo)
+
+    def test_demo_wiring_has_no_influx_no_cloud_and_never_touches_state_json(self):
+        boom = mock.Mock(side_effect=AssertionError("nu trebuia construit in demo"))
+        with mock.patch("casa.influx.CasaInflux", boom), mock.patch("casa.cloud.CloudSession", boom):
+            svc = build_services(self.cfg(True))
+        self.addCleanup(svc.shutdown)
+        boom.assert_not_called()
+        svc.controller.set_countdown("bfplug1", "off", 30)   # scrie stare
+        names = set(os.listdir(self.dir))
+        self.assertNotIn("state.json", names)
+        with open(os.path.join(self.dir, "state.demo.json")) as f:
+            data = json.load(f)
+        self.assertIs(data["demo"], True)                      # marcajul supravietuieste scrierilor
+        self.assertIn("bfplug1", data["plugs"])
+        self.assertEqual(svc.cloud.state(), "ok")
+
+    def test_real_mode_refuses_demo_marked_state(self):
+        with open(os.path.join(self.dir, "state.json"), "w") as f:
+            json.dump({"demo": True, "plugs": {"bfplug1": {}}}, f)
+        boom = mock.Mock(side_effect=AssertionError("nu trebuia construit"))
+        with mock.patch("casa.influx.CasaInflux", boom), mock.patch("casa.cloud.CloudSession", boom):
+            with self.assertRaises(StateIsDemo):
+                build_services(self.cfg(False))
+        boom.assert_not_called()
+
+    def test_real_mode_ignores_demo_state_file(self):
+        with open(os.path.join(self.dir, "state.demo.json"), "w") as f:
+            json.dump({"demo": True, "plugs": {"bfplug1": {"countdown": {"action": "on", "at": 1}}}}, f)
+        fake = mock.Mock()
+        with mock.patch("casa.influx.CasaInflux", return_value=fake), \
+                mock.patch("casa.cloud.CloudSession", return_value=fake):
+            svc = build_services(self.cfg(False))
+        self.addCleanup(svc.shutdown)
+        self.assertEqual(svc.controller.plug_view("bfplug1")["countdown"], None)
 
 
 if __name__ == "__main__":

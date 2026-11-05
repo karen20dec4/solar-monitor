@@ -8,6 +8,7 @@ import ipaddress
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ from .auth import Auth, BadPassword, NoPassword, RateLimited, RateLimiter
 from .config import Config
 from .controller import COUNTDOWN_MAX_MIN, INCHING_MAX_MIN, CommandError, Controller
 from .devices import load_devices
-from .store import JsonStore
+from .store import CorruptStore, JsonStore
 
 log = logging.getLogger("casa.web")
 
@@ -38,6 +39,13 @@ COMMAND_LIMIT = (3, 3.0)           # 3 comenzi / 3 s / telefon
 ENERGY_TTL_S = 20.0                # interogarile Influx se tin minte scurt: 3 telefoane la 5 s
 SPARK_TTL_S = 60.0
 FAIL_TTL_S = 30.0                  # dupa o eroare nu mai asteptam Influx la fiecare cerere
+PLUG_BUSY_WAIT_S = 15.0            # cat asteapta o cerere o comanda in curs catre aceeasi priza
+STATE_FILE = "state.json"
+DEMO_STATE_FILE = "state.demo.json"   # demo: niciodata starea prizelor reale
+
+
+class StateIsDemo(RuntimeError):
+    """state.json poarta marcajul de demonstratie: nu il rulam pe prizele reale."""
 
 
 class ApiError(Exception):
@@ -86,6 +94,14 @@ _services_lock = threading.Lock()
 def build_services(cfg: Optional[Config] = None) -> Services:
     """Serviciile reale (sau de demonstratie) din mediu; porneste firele de fundal."""
     cfg = cfg or Config.from_env()
+    # Starea (programari, countdown, inching) a modului demo sta intr-un fisier separat, marcat;
+    # modul real refuza un fisier marcat ca demo (altfel o programare de test ar porni prize reale).
+    state = JsonStore(os.path.join(cfg.data_dir, DEMO_STATE_FILE if cfg.demo else STATE_FILE))
+    if cfg.demo:
+        state.update(lambda d: d.__setitem__("demo", True), {"plugs": {}})
+    elif state.load({"plugs": {}}).get("demo"):
+        raise StateIsDemo(f"{state.path} are marcajul demo: il mut in {DEMO_STATE_FILE} inainte de a porni "
+                          "in modul real")
     from .plugs import PlugWorker, TinyTuyaDriver
 
     auth = Auth(JsonStore(os.path.join(cfg.data_dir, "auth.json")))
@@ -116,8 +132,7 @@ def build_services(cfg: Optional[Config] = None) -> Services:
         return hook
 
     workers = {d.id: PlugWorker(d, drivers[d.id], cfg.poll_s, on_reading(d)) for d in plugs}
-    controller = Controller(plugs, workers, JsonStore(os.path.join(cfg.data_dir, "state.json")),
-                            ZoneInfo(cfg.tz), lambda: datetime.now(timezone.utc))
+    controller = Controller(plugs, workers, state, ZoneInfo(cfg.tz), lambda: datetime.now(timezone.utc))
     holder["controller"] = controller
 
     def shutdown() -> None:
@@ -139,7 +154,11 @@ def _services_from_env() -> Services:
     global _services
     with _services_lock:
         if _services is None:
-            _services = build_services()
+            try:
+                _services = build_services()
+            except StateIsDemo as e:
+                log.critical("%s", e)
+                sys.exit(1)
             if _services.shutdown is not None:
                 atexit.register(_services.shutdown)
         return _services
@@ -247,6 +266,10 @@ def create_app(services: Optional[Services] = None) -> Flask:
     def _internal(e):
         if isinstance(e, HTTPException):
             return jsonify({"error": e.name.lower()}), e.code
+        if isinstance(e, (CorruptStore, OSError)):
+            log.error("eroare de stocare la %s %s: %s: %s", request.method, request.path,
+                      type(e).__name__, str(e)[:160])
+            return jsonify({"error": "eroare interna"}), 500
         # fara corpul cererii in log; tipul + traseul sunt de ajuns
         log.exception("eroare interna la %s %s", request.method, request.path)
         return jsonify({"error": "eroare interna"}), 500
@@ -275,18 +298,37 @@ def create_app(services: Optional[Services] = None) -> Flask:
             raise ApiError(404, "priza necunoscuta")
         return pid
 
-    def run(pid: str, call: Callable):
-        """Executa o comanda pe priza si intoarce vederea ei; CommandError -> 502 cu vederea."""
+    plug_locks = {pid: threading.Lock() for pid in controller.devices}
+    app.config["PLUG_LOCKS"] = plug_locks   # vizibil in teste
+
+    def run(pid: str, call: Callable, needs_plug: bool = False):
+        """Executa o comanda pe priza si intoarce vederea ei; CommandError -> 502 cu vederea.
+
+        Comenzile catre aceeasi priza se executa pe rand; o cerere nu asteapta mai mult de
+        PLUG_BUSY_WAIT_S dupa una in curs. `needs_plug`: comanda trebuie sa ajunga la priza chiar acum
+        (comutare); daca controllerul stie ca e offline, raspundem 502 fara sa asteptam timeout-ul."""
+        lock = plug_locks[pid]
+        if not lock.acquire(timeout=PLUG_BUSY_WAIT_S):
+            raise ApiError(503, "priza e ocupata, reincearca")
         try:
+            if needs_plug and not controller.plug_view(pid)["online"]:
+                raise CommandError("priza offline")
             return jsonify(call())
         except CommandError:
             resp = jsonify({"error": "priza nu raspunde", "plug": controller.plug_view(pid)})
             resp.status_code = 502
             return resp
         except KeyError as e:
-            raise ApiError(404, str(e.args[0]) if e.args else "negasit")
+            msg = str(e.args[0]) if e.args else ""
+            if not msg.startswith(("interval necunoscut", "priza necunoscuta")):
+                raise   # alt KeyError = defect, nu "negasit"
+            raise ApiError(404, msg)
+        except CorruptStore:
+            raise       # fisier de stare stricat: 500, nu "date invalide"
         except ValueError as e:
             raise ApiError(400, str(e))
+        finally:
+            lock.release()
 
     # -- fara autentificare --
     @app.get("/health")
@@ -337,7 +379,7 @@ def create_app(services: Optional[Services] = None) -> Flask:
     def plug_switch(pid):
         known_plug(pid)
         on = _bool(_body(("on",)), "on")
-        return run(pid, lambda: controller.switch(pid, on))
+        return run(pid, lambda: controller.switch(pid, on), needs_plug=True)
 
     @app.put("/plugs/<pid>/countdown")
     @require_token

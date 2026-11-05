@@ -8,6 +8,10 @@ import threading
 from typing import Callable
 
 
+class CorruptStore(ValueError):
+    """Fisier JSON ilizibil (distinct de erorile de validare, care sunt tot ValueError)."""
+
+
 class JsonStore:
     def __init__(self, path: str):
         self.path = path
@@ -21,7 +25,7 @@ class JsonStore:
             return copy.deepcopy(default)
         except ValueError as e:
             # Nu resetam niciodata in tacere programarile: fisierul stricat ramane pe disc.
-            raise ValueError(f"fisier JSON corupt: {self.path}: {e}") from e
+            raise CorruptStore(f"fisier JSON corupt: {self.path}: {e}") from e
 
     def save(self, data: dict, mode: int = 0o600) -> None:
         directory = os.path.dirname(os.path.abspath(self.path))

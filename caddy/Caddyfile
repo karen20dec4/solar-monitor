@@ -15,8 +15,16 @@ vyra.go.ro {
 	# CASA: prize si senzori Tuya (serviciul solar-casa). Autentificarea o face serviciul (token per telefon).
 	# X-Forwarded-For primeste o singura intrare, IP-ul real al clientului (folosit la limita de incercari de parola).
 	handle_path /solar/casa/* {
+		# Cererile fara autentificare nu pot tine firele serviciului: corp mic, timeouturi scurte.
+		request_body {
+			max_size 16KB
+		}
 		reverse_proxy casa:8100 {
 			header_up X-Forwarded-For {remote_host}
+			transport http {
+				read_timeout 20s
+				write_timeout 20s
+			}
 		}
 	}
 	# API JSON pentru aplicatia mobila: /solar/* -> microserviciu (strip prefix /solar).
