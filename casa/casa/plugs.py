@@ -7,7 +7,7 @@ import logging
 import queue
 import threading
 import time
-from concurrent.futures import Future
+from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
 
@@ -144,6 +144,7 @@ class FakeDriver:
 
 @dataclass
 class PlugReading:
+    """Unitati: power in W, voltage in V, current in A (Tuya da cur_current in mA)."""
     online: bool
     on: Optional[bool]
     power: Optional[float]
@@ -173,7 +174,7 @@ def decode_reading(device: DeviceInfo, dps: dict, at: Optional[float] = None) ->
         on=sw if isinstance(sw, bool) else None,
         power=scaled("power"),
         voltage=scaled("voltage"),
-        current=scaled("current"),
+        current=None if scaled("current") is None else scaled("current") / 1000,
         countdown_s=int(cd) if isinstance(cd, (int, float)) and not isinstance(cd, bool) else None,
         error=None,
         at=time.time() if at is None else at,
@@ -246,8 +247,14 @@ class PlugWorker(threading.Thread):
                 item = self._q.get_nowait()
             except queue.Empty:
                 break
-            if item is not _STOP:
-                item[2].set_exception(PlugError("worker oprit"))
+            if item is _STOP:
+                continue
+            fut = item[2]
+            try:
+                if not fut.cancelled():
+                    fut.set_exception(PlugError("worker oprit"))
+            except InvalidStateError:
+                pass  # anulat de apelant intre timp: nimic de rezolvat
         self._safe_close()
 
     def _safe_close(self) -> None:

@@ -38,7 +38,7 @@ class DeviceInfo:
     id: str
     name: str
     kind: Literal["plug", "sensor", "other"]
-    local_key: Optional[str]
+    local_key: Optional[str] = field(repr=False)
     ip: Optional[str]
     version: Optional[str]
     dps: dict = field(default_factory=dict)

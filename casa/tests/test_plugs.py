@@ -48,14 +48,14 @@ class WorkerBase(unittest.TestCase):
 
 class PlugWorkerTest(WorkerBase):
     def test_reading_decodes_power_with_scale(self):
-        d = FakeDriver({"1": True, "9": 120, "18": 7, "19": 16500, "20": 2305})
+        d = FakeDriver({"1": True, "9": 120, "18": 7000, "19": 16500, "20": 2305})
         self.start(d)
         self.assertTrue(self.col.wait_for(lambda r: r.online and r.power is not None))
         r = next(r for _, r in self.col.readings if r.online)
         self.assertIsInstance(r, PlugReading)
         self.assertEqual(r.power, 1650.0)
         self.assertEqual(r.voltage, 230.5)
-        self.assertEqual(r.current, 7)
+        self.assertEqual(r.current, 7.0)  # mA -> A
         self.assertIs(r.on, True)
         self.assertEqual(r.countdown_s, 120)
         self.assertIsNone(r.error)
@@ -77,9 +77,11 @@ class PlugWorkerTest(WorkerBase):
         # dupa offline apare din nou online
         self.assertTrue(self.col.wait_for(
             lambda r: r.online and r.error is None))
-        seq = [r.online for _, r in self.col.readings]
-        first_on = seq.index(True)
-        self.assertIn(False, seq[:first_on])
+        with self.col.cond:
+            seq = [r.online for _, r in self.col.readings]
+        first_off = seq.index(False)
+        # dupa prima citire offline exista una online (reconectare reala)
+        self.assertIn(True, seq[first_off:])
         self.assertGreaterEqual(d.connect_count, 1)
 
     def test_submit_runs_on_worker_thread_only(self):
@@ -162,6 +164,37 @@ class PlugWorkerTest(WorkerBase):
         f = w.submit(1, True)
         with self.assertRaises(PlugError):
             f.result(timeout=1)
+
+    def test_stop_with_cancelled_and_blocked_futures_closes_cleanly(self):
+        class BlockingDriver(FakeDriver):
+            def __init__(self, dps):
+                super().__init__(dps)
+                self.in_status = threading.Event()
+                self.release = threading.Event()
+
+            def status(self):
+                r = super().status()
+                self.in_status.set()
+                self.release.wait(5)
+                return r
+
+        d = BlockingDriver({"1": False})
+        w = self.start(d)
+        self.assertTrue(d.in_status.wait(3))  # workerul e blocat in status()
+        w.stop()                              # _STOP intra primul in coada
+        f1 = w.submit(1, True)                # comenzile raman in spatele lui _STOP
+        f2 = w.submit(1, False)
+        f3 = w.submit(1, True)
+        self.assertTrue(f2.cancel())
+        d.release.set()
+        w.join(3)
+        self.assertFalse(w.is_alive())
+        for f in (f1, f3):
+            with self.assertRaises(PlugError):
+                f.result(timeout=1)
+        self.assertTrue(f2.cancelled())
+        self.assertEqual(d.calls[-1][0], "close")
+        self.assertFalse(d.connected)
 
 
 if __name__ == "__main__":

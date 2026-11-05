@@ -44,6 +44,14 @@ class DpMapTest(unittest.TestCase):
         self.assertEqual(scales, {"power": 1, "voltage": 1, "current": 0})
 
 
+class DeviceReprTest(unittest.TestCase):
+    def test_repr_does_not_leak_local_key(self):
+        d = DeviceInfo(id="x", name="P", kind="plug", local_key="SECRETKEY123",
+                       ip=None, version=None)
+        self.assertNotIn("SECRETKEY123", repr(d))
+        self.assertNotIn("SECRETKEY123", str(d))
+
+
 class StoreDevicesTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
