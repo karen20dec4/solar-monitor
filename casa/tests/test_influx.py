@@ -12,8 +12,9 @@ from casa.plugs import PlugReading
 
 
 class Rec:
-    def __init__(self, t, v, f=None):
+    def __init__(self, t, v, f=None, values=None):
         self._t, self._v, self._f = t, v, f
+        self.values = values or {}
 
     def get_time(self):
         return datetime.fromtimestamp(self._t, timezone.utc)
@@ -192,6 +193,21 @@ class InfluxTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 fn()
         self.assertEqual(self.c.q.queries, [])
+
+    def test_sensor_last_groups_by_device(self):
+        tag = {"device_id": "s1", "name": "Temp Etaj"}
+        self.c.q.answer = lambda flux: [Table([
+            Rec(100, 20.1, "temperature", tag), Rec(160, 57.0, "humidity", tag), Rec(100, 100.0, "battery", tag),
+            Rec(50, 7.8, "temperature", {"device_id": "s2", "name": "Temp afara"}),
+            Rec(70, None, "humidity", {"device_id": "s2", "name": "Temp afara"}),
+            Rec(80, 1.0, "altceva", tag)])]
+        out = {e["id"]: e for e in self.db.sensor_last()}
+        self.assertEqual(out["s1"], {"id": "s1", "name": "Temp Etaj", "temperature": 20.1, "humidity": 57.0,
+                                     "battery": 100.0, "updated": 160.0})
+        self.assertEqual(out["s2"], {"id": "s2", "name": "Temp afara", "temperature": 7.8, "humidity": None,
+                                     "battery": None, "updated": 50.0})
+        self.assertIn("-7d", self.c.q.queries[0])
+        self.assertIn("|> last()", self.c.q.queries[0])
 
     def test_spark_limited_to_24(self):
         self.c.q.answer = lambda flux: [Table([Rec(i * 300, float(i), "temperature")

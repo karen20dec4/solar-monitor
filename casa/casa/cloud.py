@@ -43,6 +43,11 @@ CODE_BATTERY_STATE = "battery_state"
 BATTERY_STATE_PCT = {"low": 10, "middle": 50, "high": 100}
 DEFAULT_SCALE = {CODE_TEMPERATURE: 1, CODE_HUMIDITY: 0}
 SENSOR_CODES = {CODE_TEMPERATURE, CODE_HUMIDITY, CODE_BATTERY_PCT, CODE_BATTERY_STATE}
+# Senzorii reali "T & H Sensor" (categoria tdq) vin fara stare si fara strategie prin API-ul de partajare;
+# valorile sosesc doar prin MQTT, ca DP-uri numerotate (masurat 2026-11-05): 27 = temperatura x10,
+# 46 = umiditate %, 101 = baterie "low"/"middle"/"high". Le traducem in codurile de mai sus.
+SENSOR_DP_CODES = {27: CODE_TEMPERATURE, 46: CODE_HUMIDITY, 101: CODE_BATTERY_STATE}
+PROTOCOL_DEVICE_REPORT = 4
 # cheile de masurare din DeviceInfo.dps si codul Tuya corespunzator (pentru prize fara strategie locala)
 METERING_CODES = {"power": "cur_power", "voltage": "cur_voltage", "current": "cur_current"}
 
@@ -354,8 +359,15 @@ class CloudSession:
         prev = self._sensors.get(dev.id)
         values = {"temperature": _number(dev, CODE_TEMPERATURE), "humidity": _number(dev, CODE_HUMIDITY),
                   "battery": _battery(dev)}
+        fresh = any(v is not None for v in values.values())
+        if prev:
+            # o valoare lipsa nu sterge una stiuta: REST-ul nu aduce nimic pentru senzorii tdq, iar un
+            # mesaj MQTT poate aduce doar o parte din DP-uri
+            values = {k: prev.get(k) if v is None else v for k, v in values.items()}
         prev_updated = prev["updated"] if prev else None
-        if from_cache:
+        if from_cache and not fresh:
+            updated = prev_updated
+        elif from_cache:
             ut = _epoch(getattr(dev, "update_time", None))
             if ut is not None:
                 updated = max(ut, prev_updated) if prev_updated else ut
@@ -389,6 +401,39 @@ class CloudSession:
             entry = dict(self._store_sensor(dev, timestamps, touched=touched))
         self._emit(entry)
 
+    def _on_raw_message(self, msg) -> None:
+        """Mesaj MQTT brut: DP-urile numerotate ale senzorilor fara strategie locala (SDK-ul le arunca)."""
+        try:
+            if not isinstance(msg, dict) or msg.get("protocol") != PROTOCOL_DEVICE_REPORT:
+                return
+            data = msg.get("data")
+            if not isinstance(data, dict):
+                return
+            mgr = self._manager
+            dev = mgr.device_map.get(data.get("devId")) if mgr is not None else None
+            if dev is None or getattr(dev, "local_strategy", None) or _kind(dev) != "sensor":
+                return
+            touched, stamps = [], {}
+            for item in data.get("status") or []:
+                code = SENSOR_DP_CODES.get(item.get("dpId")) if isinstance(item, dict) else None
+                if code is None or "value" not in item:
+                    continue
+                dev.status[code] = item["value"]
+                touched.append(code)
+                if item.get("t"):
+                    stamps[code] = item["t"]
+            if touched:
+                self._on_device_update(dev, touched, stamps)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("mesaj MQTT de senzor ignorat: %s", type(exc).__name__)
+
+    def seed_sensors(self, entries: list, known_ids: set) -> None:
+        """Valorile de dinainte de repornire (din InfluxDB), doar pentru senzorii din devices.json."""
+        with self._lock:
+            for e in entries:
+                if e.get("id") in known_ids and e["id"] not in self._sensors:
+                    self._sensors[e["id"]] = dict(e)
+
     def _drop_sensor(self, device_id: str) -> None:
         with self._lock:
             self._sensors.pop(device_id, None)
@@ -410,8 +455,8 @@ class CloudSession:
             return "no_session"
         if self._manager is None:
             return "disconnected"
-        # MQTT nu intra in socoteala: `refresh_mq()` aboneaza doar dispozitivele cu set_up=True, iar
-        # casa nu il seteaza, deci MQTT nu aduce date de senzor. Datele vin din citirea REST la 5 min.
+        # Criteriul ramane citirea REST: valorile senzorilor tdq vin prin MQTT (abonati cu set_up=True),
+        # dar un senzor pe baterie poate tacea o ora, deci lipsa mesajelor nu inseamna deconectare.
         if self._last_refresh_ok is not None and self._clock() - self._last_refresh_ok <= OK_REFRESH_S:
             return "ok"
         return "disconnected"
@@ -442,7 +487,13 @@ class CloudSession:
         if not self._listening:
             mgr.add_device_listener(_DeviceListener(self))
             self._listening = True
+        for dev in list(mgr.device_map.values()):
+            if _kind(dev) == "sensor":
+                dev.set_up = True  # SDK-ul aboneaza la MQTT doar dispozitivele cu set_up
         mgr.refresh_mq()
+        mq = getattr(mgr, "mq", None)
+        if mq is not None:
+            mq.add_message_listener(self._on_raw_message)
         self._mq_started = True
         self._last_msg = self._clock()
 

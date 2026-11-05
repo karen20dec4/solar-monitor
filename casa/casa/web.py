@@ -129,6 +129,10 @@ def build_services(cfg: Optional[Config] = None) -> Services:
         influx = CasaInflux(cfg)
         cloud = CloudSession(cfg.data_dir, make_notify(cfg.ntfy_url))
         cloud.on_sensor_update = influx.write_sensor
+        try:  # senzorii pe baterie trimit cam o data pe ora: pana atunci, ultimele valori stiute
+            cloud.seed_sensors(influx.sensor_last(), {d.id for d in all_devices if d.kind == "sensor"})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("ultimele valori ale senzorilor nu s-au putut citi din InfluxDB: %s", type(exc).__name__)
         drivers = {d.id: TinyTuyaDriver(d.id, d.ip, d.local_key, d.version) for d in plugs}
 
     def on_reading(device):

@@ -457,15 +457,20 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
 
 Container `solar-casa` (Python, gunicorn 1 worker × 8 fire, port 8100, **fără port publicat**). Specificație:
 `docs/superpowers/specs/2026-11-05-casa-prize-senzori-design.md`; jurnalul construcției: `COPILOT_CONTEXT.md` §13.78.
-**Stare: construit și pornit în mod demo; cheile reale, rezervările DHCP, parola și telefoanele sunt pașii utilizatorului
-de dimineață (lista de mai jos). Release-ul v3.40 se construiește după recenzia finală.**
+**Stare (2026-11-05): mod real (`CASA_DEMO=0`), login QR + `sync` făcute, toate cele 5 prize online local, parola setată
+de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea programărilor din SmartLife (lista de mai jos).**
 
 - **Ce face:** 5 prize comandate local (`tinytuya`, TCP 6668, o conexiune persistentă per priză; IP și protocol implicite
   în `casa/casa/devices.py`, potrivite după device id: Boiler .204, Living sus .244, Priza cam Georgi .104, Bucatarie .185,
   Lumina Curte .158 (confirmate de primul `sync` real, 2026-11-05; Bucatarie și Lumina Curte sunt „T34-Smart Plug”,
-  protocol 3.4, fără măsurare, categoria Tuya `tdq`)). 3 senzori de temperatură/umiditate citiți din cloud-ul Tuya (`tuya-device-sharing-sdk`, sesiune din login QR)
-  **prin REST la 5 min**: starea cloud e `ok` doar dacă ultima citire REST reușită are ≤ 10 min. MQTT e doar pe cât se
-  poate și nu aduce date azi (SDK-ul abonează doar dispozitivele cu `set_up=True`, pe care casa nu îl setează). Fără
+  protocol 3.4, fără măsurare, categoria Tuya `tdq`)). 3 senzori de temperatură/umiditate din cloud-ul Tuya (`tuya-device-sharing-sdk`, sesiune din login QR). Senzorii
+  reali („T & H Sensor”, categoria `tdq`) vin **fără nicio stare prin REST**; valorile sosesc **doar prin MQTT**, ca DP-uri
+  numerotate pe care SDK-ul le aruncă (n-au strategie locală): **27 = temperatură ×10, 46 = umiditate %, 101 = baterie
+  `low`/`middle`/`high`** (`SENSOR_DP_CODES` în `cloud.py`, măsurat 2026-11-05). casa pune `set_up=True` pe senzori ca
+  SDK-ul să-i aboneze și decodează singur mesajele brute (`_on_raw_message`). Un senzor pe baterie se trezește și trimite
+  cam **o dată pe oră**; o valoare lipsă nu șterge una știută, iar la pornire ultimele valori vin din InfluxDB
+  (`sensor_last`, 7 zile). Citirea REST la 5 min decide în continuare starea cloud: `ok` doar dacă ultima citire REST
+  reușită are ≤ 10 min. Fără
   rezervă prin cloud pentru comenzile prizelor: o priză care refuză conexiunea locală apare OFFLINE.
 - **Dispozitivele se încarcă o singură dată, la pornire** (`casa/casa/web.py`). După `login`/`sync`, o redenumire în
   SmartLife sau o editare a lui `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "...", "hidden": true}}`;
@@ -507,7 +512,7 @@ de dimineață (lista de mai jos). Release-ul v3.40 se construiește după recen
   (programări, countdown, inching; mod real) / `state.demo.json` (mod demo, poartă un marcaj demo; modul real **refuză** o
   stare marcată demo, ca programările de test să nu poată porni niciodată boilerul real). Secretele nu ajung niciodată în
   git, log-uri, ntfy sau Telegram (nu se loghează text de excepție cu token QR / cod de utilizator).
-- **Mod demo:** `CASA_DEMO=1` în `.env` (**PORNIT acum pe server**): prize false din `casa/casa/demo.py`, fără scrieri în
+- **Mod demo:** `CASA_DEMO=1` în `.env` (**oprit din 2026-11-05**, `CASA_DEMO=0`): prize false din `casa/casa/demo.py`, fără scrieri în
   InfluxDB, fără cloud. Scoate-l (și `docker compose up -d casa`) pentru funcționarea reală. Serviciul `casa` **nu**
   primește tot `.env`: `docker-compose.yml` îi dă doar `INFLUX_*`, `NTFY_URL`, `CASA_DEMO` (implicit 0), `CASA_POLL_S`
   (implicit 5) și `CASA_DATA_DIR`. O variabilă `CASA_*` nouă trebuie adăugată și acolo. Dacă fișierul de stare e marcat
@@ -541,10 +546,9 @@ de dimineață (lista de mai jos). Release-ul v3.40 se construiește după recen
 - **Teste:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
   solar-monitor-casa -m unittest discover -s tests -v` (264 de teste; rulează după orice modificare în `casa/`, suita
   completă de mai multe ori: un eșec nereproductibil a apărut o dată în timpul editărilor).
-- **Pașii de dimineață (utilizator):** (1) rezervări DHCP în router pentru cele 5 IP-uri ale prizelor; (2) `python -m
-  casa login` (QR) și `sync`; (3) scoate `CASA_DEMO=1`, `docker compose up -d casa`, verifică fiecare priză online și
-  puterile față de SmartLife (curentul e mA Tuya / 1000; confirmă unitatea); (4) `python -m casa set-password` (înlocuiește
-  parola temporară rămasă din teste); (5) înregistrează telefoanele (Note 9, S20 FE, S26) din aplicație și verifică
+- **Pașii de punere în funcțiune:** făcute 2026-11-05: login + `sync`, mod real, toate prizele online, parola, timerul ARP.
+  Rămân: (1) rezervări DHCP în router pentru cele 5 IP-uri; (2) confirmarea unității curentului cu un consumator pornit
+  (mA Tuya / 1000); (5) înregistrează telefoanele (Note 9, S20 FE, S26) din aplicație și verifică
   `phones`; (6) teste live de comutare, countdown, programare, inching pe o priză (boilerul la urmă); (7) **șterge
   programările echivalente din SmartLife** după ce merg ale noastre, altfel se bat între ele.
 

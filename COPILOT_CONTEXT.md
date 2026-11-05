@@ -2097,7 +2097,9 @@ READ-ONLY, nimic din `collector/` sau `bms/` nu s-a schimbat.
 - Container nou `solar-casa` (7 containere acum): `casa/` (Python, gunicorn 1×8 fire, port intern 8100, fără port publicat,
   variabile de mediu date explicit în `docker-compose.yml` (nu tot `.env`), volum `./casa/data`). Prize local prin `tinytuya`
   (TCP 6668, conexiune persistentă per priză); senzori din cloud-ul Tuya prin `tuya-device-sharing-sdk` (login QR, citire
-  din cloud la 5 min; starea e `ok` doar dacă ultima citire REST are ≤ 10 min; MQTT doar pe cât se poate).
+  din cloud; starea e `ok` doar dacă ultima citire REST are ≤ 10 min). **Real (2026-11-05):** senzorii tdq n-au stare prin REST;
+  valorile vin doar prin MQTT, DP 27 = temperatură ×10, 46 = umiditate %, 101 = baterie; cam o dată pe oră; la pornire, ultimele
+  valori din InfluxDB. Prizele Boiler/Living sus/Priza cam Georgi nu răspund la ARP: `deploy/solar-tuya-arp.timer` (instalat de user).
 - Prizele (IP-uri de rezervat în DHCP; confirmate de primul `sync` real, 2026-11-05): Boiler 192.168.1.204 (v3.3),
   Living sus .244 (3.3), Priza cam Georgi .104 (3.3), Bucatarie .185 (3.4), Lumina Curte .158 (3.4); senzorii: Temp Etaj,
   Temp afara, Temp BECI. Primele trei: „WiFi Plug”, categoria `cz`, cu măsurare; Bucatarie și Lumina Curte: „T34-Smart Plug”,
@@ -2140,8 +2142,7 @@ READ-ONLY, nimic din `collector/` sau `bms/` nu s-a schimbat.
 - Suita `casa`: 264 teste OK (după valul de corecturi al recenziei finale) (container `solar-monitor-casa`, rețea oprită). Teste Android pe logica CASA (model, acces, detaliu,
   Retro). Serviciul rulează în **mod demo** (`CASA_DEMO=1` în `.env`, prize false, fără cloud): `/health` 200, rutele cer token,
   `/solar/latest` și Grafana neatinse, `/beci-cloud/` neschimbat. Capturi pe emulator pentru pagina CASA și detalii (Retro), Simple.
-- **Neverificat pe hardware real:** conexiunea la prizele reale, chei/QR, senzorii din cloud (SDK-ul abonează MQTT doar
-  dispozitivele „set_up", pe care casa nu le setează: senzorii vin din citirea REST la 5 min), unitatea curentului, DP-ul de countdown (dp 9) pe fiecare model, comportamentul real al programărilor.
+- **Neverificat pe hardware real** (la construire; vezi mai sus ce s-a confirmat pe 2026-11-05): unitatea curentului, DP-ul de countdown (dp 9) pe fiecare model, comportamentul real al programărilor.
 - Parcat pentru recenzia finală: `inching_off_at` vechi după repornire dacă priza a fost ciclată cât controlerul era oprit
   (greșește spre oprire); un singur OFF fals șterge termenele; client deconectat în timpul corpului → 500 „eroare de stocare".
 

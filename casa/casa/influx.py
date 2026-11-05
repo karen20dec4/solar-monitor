@@ -309,6 +309,21 @@ class CasaInflux:
             },
         }
 
+    def sensor_last(self) -> list:
+        """Ultimele valori ale fiecarui senzor (7 zile): la pornire, pana trimite senzorul ceva nou (~1 h)."""
+        flux = (f'from(bucket: "{self._bucket("history")}") |> range(start: -7d) '
+                f'|> filter(fn: (r) => r._measurement == "{SENSOR}") |> last()')
+        out: dict = {}
+        for rec in self._rows(flux):
+            dev_id, field, value = rec.values.get("device_id"), rec.get_field(), rec.get_value()
+            if not dev_id or field not in _SENSOR_FIELDS or value is None:
+                continue
+            e = out.setdefault(dev_id, {"id": dev_id, "name": rec.values.get("name") or dev_id,
+                                        "temperature": None, "humidity": None, "battery": None, "updated": None})
+            e[field] = float(value)
+            e["updated"] = max(e["updated"] or 0.0, rec.get_time().timestamp())
+        return list(out.values())
+
     def sensor_spark(self, device_id: str) -> list:
         _check_id(device_id)
         flux = (f'from(bucket: "{self._bucket("live")}") |> range(start: -2h) '

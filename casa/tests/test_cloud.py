@@ -68,8 +68,14 @@ class FakeManager:
         self.device_listeners.append(listener)
 
     def refresh_mq(self):
-        self.mq = SimpleNamespace(client=FakeClient(self.mq_connected), stopped=False)
+        self.mq = SimpleNamespace(client=FakeClient(self.mq_connected), stopped=False, listeners=[],
+                                  subscribed=[d.id for d in self.device_map.values() if getattr(d, "set_up", False)])
         self.mq.stop = lambda: setattr(self.mq, "stopped", True)
+        self.mq.add_message_listener = self.mq.listeners.append
+
+    def raw(self, msg):
+        for lst in self.mq.listeners:
+            lst(msg)
 
     def report(self, device_id, status, timestamps_ms=None):
         d = self.device_map[device_id]
@@ -277,6 +283,72 @@ class SensorTest(Base):
     def test_cache_refresh_unknown_time_is_none_not_now(self):
         cs, _ = self.started([sensor()])
         self.assertIsNone(cs.sensors()[0]["updated"])
+
+
+def th_sensor(dev_id="s2", name="Temp Etaj", update_time=1743546011):
+    """Senzorul real "T & H Sensor": categoria tdq, fara stare si fara strategie prin API-ul de partajare."""
+    d = dev(dev_id, name, "tdq", update_time=update_time)
+    d.product_name = "T & H Sensor"
+    return d
+
+
+def dp_msg(dev_id, items, t_ms):
+    return {"protocol": 4, "data": {"devId": dev_id,
+                                    "status": [{"dpId": k, "t": t_ms, "value": v} for k, v in items]}}
+
+
+class RawMqttSensorTest(Base):
+    """Senzorii tdq isi trimit valorile doar prin MQTT, pe DP 27/46/101 (masurat 2026-11-05)."""
+
+    def test_sensor_subscribed_and_dp_report_decoded(self):
+        cs, mgr = self.started([th_sensor(), dev("p1", "Boiler", "cz", status={"switch_1": False})])
+        self.assertEqual(mgr.mq.subscribed, ["s2"])
+        seen = []
+        cs.on_sensor_update = seen.append
+        t = self.clock.t - 2
+        mgr.raw(dp_msg("s2", [(27, 201), (46, 57), (101, "high")], int(t * 1000)))
+        s = cs.sensors()[0]
+        self.assertEqual((s["temperature"], s["humidity"], s["battery"], s["updated"]), (20.1, 57.0, 100.0, t))
+        self.assertEqual(seen[-1]["temperature"], 20.1)
+
+    def test_first_cache_read_without_values_has_no_updated(self):
+        cs, _ = self.started([th_sensor()])
+        s = cs.sensors()[0]
+        self.assertEqual((s["temperature"], s["humidity"], s["updated"]), (None, None, None))
+
+    def test_partial_report_and_empty_rest_refresh_keep_values(self):
+        cs, mgr = self.started([th_sensor()])
+        t = self.clock.t
+        mgr.raw(dp_msg("s2", [(27, 201), (46, 57)], int(t * 1000)))
+        mgr.raw(dp_msg("s2", [(27, 195)], int((t + 60) * 1000)))
+        self.assertEqual((cs.sensors()[0]["temperature"], cs.sensors()[0]["humidity"]), (19.5, 57.0))
+        FakeManager.devices = [th_sensor()]          # REST: obiecte noi, tot fara stare
+        self.clock.t += 400
+        cs._tick()
+        self.assertEqual(mgr.cache_updates, 2)
+        s = cs.sensors()[0]
+        self.assertEqual((s["temperature"], s["humidity"], s["updated"]), (19.5, 57.0, t + 60))
+        mgr.raw(dp_msg("s2", [(46, 60)], int((t + 500) * 1000)))   # dupa refresh: obiect nou
+        self.assertEqual((cs.sensors()[0]["temperature"], cs.sensors()[0]["humidity"]), (19.5, 60.0))
+
+    def test_seeded_values_survive_first_empty_cache_read(self):
+        FakeManager.devices = [th_sensor()]
+        cs = self.session()
+        cs.seed_sensors([{"id": "s2", "name": "Temp Etaj", "temperature": 20.1, "humidity": 57.0,
+                          "battery": 100.0, "updated": 123.0},
+                         {"id": "sters", "name": "Vechi", "temperature": 1.0, "humidity": None,
+                          "battery": None, "updated": 1.0}], {"s2"})
+        cs._start_once()
+        self.assertEqual([(s["id"], s["temperature"], s["updated"]) for s in cs.sensors()], [("s2", 20.1, 123.0)])
+
+    def test_other_messages_ignored(self):
+        cs, mgr = self.started([th_sensor(), dev("p1", "Boiler", "cz", status={"switch_1": False})])
+        mgr.raw(dp_msg("p1", [(1, True)], 1))
+        mgr.raw(dp_msg("s2", [(99, 5)], 1))
+        mgr.raw(dp_msg("necunoscut", [(27, 5)], 1))
+        mgr.raw({"protocol": 20, "data": {"devId": "s2"}})
+        mgr.raw({"protocol": 4, "data": None})
+        self.assertIsNone(cs.sensors()[0]["temperature"])
 
 
 class StateTest(Base):

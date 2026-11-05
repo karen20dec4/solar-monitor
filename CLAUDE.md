@@ -363,16 +363,20 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
 
 Container `solar-casa` (Python, gunicorn 1 worker x 8 threads, port 8100, **no published port**). Spec:
 `docs/superpowers/specs/2026-11-05-casa-prize-senzori-design.md`; log of the build: `COPILOT_CONTEXT.md` §13.78.
-**Status: built and deployed in demo mode; real keys, DHCP reservations, password and phones are still the user's
-morning steps (list below). Release v3.40 is built after the final review.**
+**Status (2026-11-05): real mode (`CASA_DEMO=0`), QR login + `sync` done, all 5 plugs online locally, password set by
+the user; still open: DHCP reservations, phones, live tests, deleting the SmartLife schedules (list below).**
 
 - **What it does:** 5 plugs controlled locally (`tinytuya`, TCP 6668, one persistent connection per plug; IPs/protocol
   defaults in `casa/casa/devices.py`, matched by device id: Boiler .204, Living sus .244, Priza cam Georgi .104,
   Bucatarie .185, Lumina Curte .158 (confirmed by the first real `sync`, 2026-11-05; Bucatarie and Lumina Curte are
-  "T34-Smart Plug", protocol 3.4, no metering, Tuya category `tdq`)). 3 temperature/humidity sensors read from the Tuya cloud
-  (`tuya-device-sharing-sdk`, session from a QR login) **by REST every 5 min**: the cloud state is `ok` only if the last
-  successful REST read is ≤ 10 min old. MQTT is best-effort and carries no device data today (the SDK subscribes only
-  devices with `set_up=True`, which casa never sets). No cloud fallback for plug commands: a plug that refuses the local
+  "T34-Smart Plug", protocol 3.4, no metering, Tuya category `tdq`)). 3 temperature/humidity sensors from the Tuya cloud
+  (`tuya-device-sharing-sdk`, session from a QR login). The real sensors ("T & H Sensor", category `tdq`) come with **no
+  status at all over REST**; their values arrive **only by MQTT**, as numbered DPs the SDK drops (no local strategy):
+  **27 = temperature ×10, 46 = humidity %, 101 = battery `low`/`middle`/`high`** (`SENSOR_DP_CODES` in `cloud.py`, measured
+  2026-11-05). casa sets `set_up=True` on sensors so the SDK subscribes them, and decodes the raw messages itself
+  (`_on_raw_message`). A battery sensor wakes and reports roughly **once an hour**; a missing value never erases a known
+  one, and at boot the last values come from InfluxDB (`sensor_last`, 7 days). The REST read every 5 min still decides
+  the cloud state: `ok` only if the last successful REST read is ≤ 10 min old. No cloud fallback for plug commands: a plug that refuses the local
   connection shows OFFLINE.
 - **Devices are loaded once, at boot** (`casa/casa/web.py`). After `login`/`sync`, a rename in SmartLife, or an edit of
   `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "...", "hidden": true}}`; `hidden` keeps a
@@ -415,7 +419,7 @@ morning steps (list below). Release v3.40 is built after the final review.**
   countdowns, inching; real mode) / `state.demo.json` (demo mode, carries a demo marker; real mode **refuses** a
   demo-marked state, so test schedules can never run on the real boiler). Secrets never go to git, logs, ntfy or
   Telegram (no exception text with QR token / user code is logged).
-- **Demo mode:** `CASA_DEMO=1` in `.env` (**ON right now on the server**): fake plugs from `casa/casa/demo.py`, no
+- **Demo mode:** `CASA_DEMO=1` in `.env` (**off since 2026-11-05**, `CASA_DEMO=0`): fake plugs from `casa/casa/demo.py`, no
   InfluxDB writes, no cloud. Remove it (and `docker compose up -d casa`) for real operation. The `casa` service does
   **not** get the whole `.env`: `docker-compose.yml` passes only `INFLUX_*`, `NTFY_URL`, `CASA_DEMO` (default 0),
   `CASA_POLL_S` (default 5) and `CASA_DATA_DIR`. A new `CASA_*` variable must be added there too. If the state file is
@@ -445,10 +449,8 @@ morning steps (list below). Release v3.40 is built after the final review.**
 - **Tests:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
   solar-monitor-casa -m unittest discover -s tests -v` (264 tests, run it after any change in `casa/`; run the full
   suite more than once, a non-reproducible failure was seen once during edits).
-- **Morning steps (user):** (1) DHCP reservations on the router for the 5 plug IPs; (2) `python -m casa login` (QR) and
-  `sync`; (3) remove `CASA_DEMO=1`, `docker compose up -d casa`, check every plug online and the power readings against
-  SmartLife (current is Tuya mA / 1000; confirm the unit); (4) `python -m casa set-password` (replace the temporary
-  one left by testing); (5) register the phones (Note 9, S20 FE, S26) from the app and check `phones`; (6) live tests of
+- **Go-live steps:** done 2026-11-05: login + `sync`, real mode, every plug online, password, ARP timer. Left: (1) DHCP
+  reservations on the router for the 5 plug IPs; (2) confirm the current unit with a load on (Tuya mA / 1000); (5) register the phones (Note 9, S20 FE, S26) from the app and check `phones`; (6) live tests of
   switch, countdown, schedule, inching on a plug (boiler last); (7) **delete the equivalent SmartLife schedules** once
   ours work, or the two will fight.
 
