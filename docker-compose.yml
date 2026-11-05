@@ -131,6 +131,26 @@ services:
       # Metrici agregate CPU/RAM/retea/uptime; montare strict READ-ONLY, fara Docker socket.
       - /proc:/host/proc:ro
 
+  # CASA: prize si senzori Tuya (comanda locala TCP 6668 + cloud pentru senzori). Fara port publicat;
+  # ajunge prin Caddy (/solar/casa/*). Date (chei, sesiune, programari) in ./casa/data, mod 600.
+  casa:
+    build: ./casa
+    container_name: solar-casa
+    restart: unless-stopped
+    env_file: ./.env
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUX_ORG: ${INFLUXDB_ORG}
+      INFLUX_BUCKET_LIVE: ${INFLUXDB_BUCKET_LIVE}
+      INFLUX_BUCKET_HISTORY: ${INFLUXDB_BUCKET_HISTORY}
+      CASA_DATA_DIR: /data
+    volumes:
+      - ./casa/data:/data
+
   # Reverse proxy HTTPS pentru acces remote securizat la Grafana (TLS self-signed).
   caddy:
     image: caddy:2

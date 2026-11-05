@@ -33,3 +33,7 @@ android/local.properties
 
 # Local migration backups
 solar-volume-backup-cutover/
+
+# CASA: prize si senzori Tuya
+casa/data/*
+!casa/data/.gitkeep
