@@ -79,7 +79,11 @@ class RateLimiter:
             return True
 
     def refund(self, key: str) -> None:
-        """Anuleaza ultima lovitura inregistrata pentru `key` (rezervare care nu s-a consumat)."""
+        """Anuleaza ultima lovitura inregistrata pentru `key` (rezervare care nu s-a consumat).
+
+        Scoate cea mai recenta lovitura, care poate fi a altei incercari paralele de pe aceeasi cheie:
+        numarul de lovituri ramane corect (una rezervata, una returnata), doar momentul exact difera.
+        """
         with self._lock:
             q = self._hits.get(key)
             if q:

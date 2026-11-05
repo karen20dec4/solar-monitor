@@ -39,7 +39,12 @@ COMMAND_LIMIT = (3, 3.0)           # 3 comenzi / 3 s / telefon
 ENERGY_TTL_S = 20.0                # interogarile Influx se tin minte scurt: 3 telefoane la 5 s
 SPARK_TTL_S = 60.0
 FAIL_TTL_S = 30.0                  # dupa o eroare nu mai asteptam Influx la fiecare cerere
-PLUG_BUSY_WAIT_S = 15.0            # cat asteapta o cerere o comanda in curs catre aceeasi priza
+# Cat asteapta o cerere o comanda in curs catre aceeasi priza. Cel mai rau caz al unei comenzi:
+# PLUG_BUSY_WAIT_S + asteptarea lock-ului priza din controller (pana la CMD_TIMEOUT_S, daca programatorul
+# trimite chiar atunci) + CMD_TIMEOUT_S = 5 + 10 + 10 = 25 s. Trebuie sa ramana sub read_timeout-ul Caddy
+# (45 s, caddy/Caddyfile), ca telefonul sa primeasca JSON-ul 502/503 al serviciului, nu un 502 gol de la
+# proxy. Timeout-ul de citire al comenzilor din aplicatia Android trebuie sa fie >= 35 s.
+PLUG_BUSY_WAIT_S = 5.0
 STATE_FILE = "state.json"
 DEMO_STATE_FILE = "state.demo.json"   # demo: niciodata starea prizelor reale
 
@@ -159,6 +164,9 @@ def _services_from_env() -> Services:
             except StateIsDemo as e:
                 log.critical("%s", e)
                 sys.exit(1)
+            except Exception as e:  # noqa: BLE001 - orice defect la pornire se vede in log, apoi gunicorn se opreste
+                log.critical("pornirea serviciului CASA a esuat: %s: %s", type(e).__name__, str(e)[:200])
+                raise
             if _services.shutdown is not None:
                 atexit.register(_services.shutdown)
         return _services

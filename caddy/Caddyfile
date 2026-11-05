@@ -19,11 +19,17 @@ vyra.go.ro {
 		request_body {
 			max_size 16KB
 		}
+		# Cel mai rau caz al unei comenzi la serviciu = 5 s coada pe priza + 10 s lock controller + 10 s comanda
+		# = 25 s (web.py PLUG_BUSY_WAIT_S, controller.py CMD_TIMEOUT_S): sub read_timeout 45 s, ca telefonul sa
+		# primeasca JSON-ul 502/503, nu un 502 gol de la Caddy. Aplicatia Android: timeout de citire >= 35 s.
+		# request_buffers: Caddy citeste tot corpul (max 16KB) inainte sa-l dea serviciului, deci un client
+		# lent nu tine un fir gunicorn.
 		reverse_proxy casa:8100 {
 			header_up X-Forwarded-For {remote_host}
+			request_buffers 16KB
 			transport http {
-				read_timeout 20s
-				write_timeout 20s
+				read_timeout 45s
+				write_timeout 45s
 			}
 		}
 	}
