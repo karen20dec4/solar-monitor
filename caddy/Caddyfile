@@ -12,6 +12,13 @@
 
 vyra.go.ro {
 	tls internal
+	# CASA: prize si senzori Tuya (serviciul solar-casa). Autentificarea o face serviciul (token per telefon).
+	# X-Forwarded-For primeste o singura intrare, IP-ul real al clientului (folosit la limita de incercari de parola).
+	handle_path /solar/casa/* {
+		reverse_proxy casa:8100 {
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
 	# API JSON pentru aplicatia mobila: /solar/* -> microserviciu (strip prefix /solar).
 	handle_path /solar/* {
 		reverse_proxy api:8000
