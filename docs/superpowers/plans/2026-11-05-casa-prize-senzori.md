@@ -40,7 +40,7 @@ Sensor "Temp BECI" id `bfd920a7665be19c4cjytc` (Wi-Fi battery, cloud only). Name
 ## Review Focus
 
 1. **Plug unreachable at an edge** (Wi-Fi drop, plug unplugged): a "stop" must be retried until it succeeds, a "start" only until the interval ends; the error is visible in `GET /plugs` and the plug shows `online:false`. → tests in Task 5.
-2. **DST days**: on 2026-03-29 02:00–03:00 does not exist, on 2026-10-25 02:00–03:00 happens twice; an edge at 02:30 must fire exactly once on both days, and an interval 22:00→06:00 must still work. → tests in Task 3.
+2. **DST days** (Europe/Bucharest switches at 03:00 local): on 2026-03-29 03:00–04:00 does not exist, on 2026-10-25 03:00–04:00 happens twice; an edge at 03:30 must fire exactly once on both days, and an interval 22:00→06:00 must still work. → tests in Task 3.
 3. **Three phones + scheduler hitting one plug at once**: all commands to a plug go through that plug's single worker queue; no second TCP connection is ever opened to the same plug. → test in Task 4.
 4. **Token revoked / password changed while the app is open**: server answers 401, the app shows the password plate once and stops polling `/plugs` (no 401 loop). → tests in Task 8 (server) and Task 11 (`CasaAccessTest`).
 5. **Sensor silent for hours / cloud session lost**: `/sensors` returns `updated` (epoch) and `cloud:"disconnected"`; the app shows "ACUM 6 H" in red / "CLOUD DECONECTAT", never a fresh-looking stale value. → tests in Task 6 and Task 10.
@@ -107,7 +107,7 @@ grafana/dashboards/solar.json   new row "🏠 Casa: prize si senzori"
 - Produces: `class Auth(store: JsonStore, clock: Callable[[], float] = time.time)`:
   - `set_password(password: str) -> None` (reject < 8 chars with `ValueError`; hash with `hashlib.scrypt(n=2**14, r=8, p=1, dklen=32)` + 16-byte random salt; keeps existing phones).
   - `has_password() -> bool`
-  - `register(password: str, device: str, client_ip: str) -> tuple[str, str]` returns `(token, phone_id)`; raises `RateLimited` or `BadPassword` or `NoPassword`. Token = `secrets.token_urlsafe(32)`; stored as sha256 hex with `{phone_id (8 hex), device (max 60 chars, sanitized), created, last_used}`.
+  - `register(password: str, device: str, client_ip: str) -> tuple[str, str]` returns `(token, phone_id)`; raises `RateLimited(retry_after: int)` (seconds until the window frees, used for the 429 body) or `BadPassword` or `NoPassword`. Token = `secrets.token_urlsafe(32)`; stored as sha256 hex with `{phone_id (8 hex), device (max 60 chars, sanitized), created, last_used}`.
   - `check(token: str) -> dict | None` (constant-time compare via dict lookup on sha256; updates `last_used` at most once per minute).
   - `phones() -> list[dict]`, `revoke(phone_id: str) -> bool`.
 - Produces: `class RateLimiter(limit: int, window_s: float, clock)` with `hit(key: str) -> bool` (True = allowed) and `allowed(key) -> bool` (peek). Used for password (`5/900s` per IP, `20/3600s` key `"*"`) and commands (`1/1s` per phone, burst 3: implement as `limit=3, window_s=3`).
@@ -126,7 +126,7 @@ grafana/dashboards/solar.json   new row "🏠 Casa: prize si senzori"
 - Produces:
   - `@dataclass(frozen=True) class Interval: id: str; start: str; stop: str; enabled: bool` (`"HH:MM"`, 24 h; `parse_hhmm(s) -> tuple[int,int]` raises `ValueError` on bad format; `start == stop` → `ValueError`).
   - `@dataclass(frozen=True) class Edge: interval_id: str; kind: Literal["start","stop"]; at: datetime` (aware, UTC).
-  - `edges_between(intervals: list[Interval], t0: datetime, t1: datetime, tz: ZoneInfo) -> list[Edge]`: all edges of enabled intervals with `t0 < at <= t1`, sorted. Local wall time → UTC: for a non-existent local time (spring forward) use the instant right after the gap (`fold=0` then normalize: 02:30 → 03:30 local / same as 03:00 + 30 min is fine, just fire once); for an ambiguous time (fall back) use the first occurrence (`fold=0`) only.
+  - `edges_between(intervals: list[Interval], t0: datetime, t1: datetime, tz: ZoneInfo) -> list[Edge]`: all edges of enabled intervals with `t0 < at <= t1`, sorted. Local wall time → UTC: for a non-existent local time (spring forward, e.g. 03:30 on 2026-03-29) use the instant right after the gap (03:30 → 04:30 local is acceptable; it must fire exactly once); for an ambiguous time (fall back) use the first occurrence (`fold=0`) only.
   - `active_interval(intervals, now, tz) -> Interval | None`: an enabled interval whose window contains `now` (handles over-midnight).
   - `interval_end(interval, now, tz) -> datetime`: the stop instant of the window containing `now`.
   - `missed_edges(intervals, last_done: dict[str, dict[str, str]], now, tz, lookback: timedelta = timedelta(days=1)) -> list[Edge]`: edges in `(now - lookback, now]` whose ISO time is newer than `last_done[interval_id][kind]`. Caller applies the rules (stop always, start only if still inside the window).
@@ -136,8 +136,8 @@ grafana/dashboards/solar.json   new row "🏠 Casa: prize si senzori"
   - `test_daily_edges_in_one_day`: interval 10:30→16:00; `edges_between` 2026-11-05 00:00→23:59 local → start at 08:30Z, stop at 14:00Z.
   - `test_over_midnight_interval`: 22:00→06:00; `active_interval` at 23:00 and at 05:00 → the interval; at 12:00 → None; `interval_end` at 23:00 on 11-05 = 11-06 06:00 local.
   - `test_disabled_interval_has_no_edges`.
-  - `test_spring_forward_edge_fires_once`: interval 02:30→07:00, window 2026-03-28 12:00 → 2026-03-29 12:00 local → exactly one start edge.
-  - `test_fall_back_edge_fires_once`: interval 02:30→07:00, window 2026-10-24 12:00 → 2026-10-25 12:00 → exactly one start edge.
+  - `test_spring_forward_edge_fires_once`: interval 03:30→07:00, window 2026-03-28 12:00 → 2026-03-29 12:00 local → exactly one start edge.
+  - `test_fall_back_edge_fires_once`: interval 03:30→07:00, window 2026-10-24 12:00 → 2026-10-25 12:00 → exactly one start edge.
   - `test_missed_edges_skips_already_done`: last_done start = today 10:30 → only the stop edge is returned at 16:05.
   - `test_nearest_off_picks_earliest`.
   - `test_bad_hhmm_and_equal_start_stop_raise`.
@@ -152,7 +152,9 @@ grafana/dashboards/solar.json   new row "🏠 Casa: prize si senzori"
 **Interfaces:**
 - Produces in `devices.py`:
   - `@dataclass class DeviceInfo: id: str; name: str; kind: Literal["plug","sensor","other"]; local_key: str | None; ip: str | None; version: str | None; dps: dict[str, int]` where `dps` maps codes `switch`, `countdown`, `power`, `voltage`, `current` to DP numbers (missing = not supported); `scales: dict[str, int]` (decimal places, e.g. power 1 → value/10).
-  - `load_devices(data_dir: str) -> list[DeviceInfo]`: reads `devices.json` (written by Task 6 sync; mode 600) and merges `devices.local.json` overrides (`{id: {ip, version, name}}`); built-in defaults for IP/version from the table in Global Constraints when missing.
+  - `devices.json` schema (owned by this task; Task 6 sync and the `demo-devices` CLI write it only through `save_devices`): `{"devices": [{"id","name","raw_name","category","kind","local_key","ip","version","dps","scales"}], "synced_at": epoch}`.
+  - `save_devices(data_dir: str, devices: list[DeviceInfo], raw_names: dict[str,str] | None = None, categories: dict[str,str] | None = None) -> None` (atomic via `JsonStore`, mode 600).
+  - `load_devices(data_dir: str) -> list[DeviceInfo]`: reads `devices.json` (mode 600) and merges `devices.local.json` overrides (`{id: {ip, version, name}}`); built-in defaults for IP/version from the table in Global Constraints when missing.
   - `clean_name(raw: str) -> str`: strips time ranges like `"11:30 - 16:00"`, `"10.30 - 16.00"`, `": 11:00 - 16.25"` and trailing punctuation/spaces: `"Boiler  10.30 - 16.00"` → `"Boiler"`, `"Living sus: 11:00 - 16.25"` → `"Living sus"`, `"Priza cam Georgi"` unchanged.
   - `dp_map_from_strategy(local_strategy: dict) -> tuple[dict[str,int], dict[str,int]]`: from the sharing SDK `CustomerDevice.local_strategy` (`{dp_id: {"status_code": "switch_1"|"countdown_1"|"cur_power"|"cur_voltage"|"cur_current"|..., "config_item": {"valueDesc": "{\"scale\":1,...}"}}}`) build `dps` and `scales`. Codes: switch ← `switch_1`/`switch`; countdown ← `countdown_1`/`countdown`; power ← `cur_power`; voltage ← `cur_voltage`; current ← `cur_current`. Fallback when strategy is empty: `{switch:1, countdown:9, current:18, power:19, voltage:20}`, scales `{power:1, voltage:1, current:0}`; `metered` = `power` present AND a real reading was seen (Task 5 decides from data).
 - Produces in `plugs.py`:
