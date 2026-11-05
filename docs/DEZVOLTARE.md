@@ -39,6 +39,13 @@ GET /solar/grid-outage                     -> { down, outages: [{start, end, sec
 (toate)  User-Agent: SolarMonitor/3.38 (42; Android 13; SM-G781B)  -> numărat în `app_client` (Grafana, „Telefoane")
 ```
 
+`/history` face **validare strictă cu listă albă**: dacă `field` nu e cheie în `HISTORY_FIELDS`
+sau `range` nu e cheie în `HISTORY_FIELDS[field]["ranges"]`, răspunde **400** cu lista permisă.
+Clientul Android tratează orice cod ≠ 200 ca `null` și afișează „ISTORIC INDISPONIBIL".
+
+De aceea: **orice interval nou trebuie adăugat mai întâi în API**, altfel butonul din aplicație
+va exista dar va da mereu eroare.
+
 ### Contractul CASA (serviciul `solar-casa`, prefix `/solar/casa`, tăiat de Caddy)
 
 ```
@@ -52,19 +59,18 @@ POST   /solar/casa/plugs/<id>/schedules   {start:"HH:MM", stop:"HH:MM", enabled?
 PUT    /solar/casa/plugs/<id>/inching     {enabled, minutes}      (fiecare întoarce priza actualizată; 502 {error, plug} dacă nu răspunde)
 GET    /solar/casa/sensors                -> {cloud:"ok"|"disconnected"|"no_session", sensors:[{id,name,temperature,humidity,battery,updated,spark}]}
 GET    /solar/casa/sensors/<id>/history?range=2h|1d|7d   -> {temperature[],humidity[],stats{...}}
-(toate, în afară de /register și /health)  Authorization: Bearer <token>; corp ≤ 16 KB; comenzile ≤ ~1/s per token
+(toate, în afară de /register și /health)  Authorization: Bearer <token>; corp ≤ 16 KB; comenzile: 3 la 3 s per telefon, doar non-GET
 ```
 
 Forma exactă a câmpurilor e în `casa/casa/web.py` și `casa/casa/controller.py` (sursa de adevăr). Testele serviciului:
 `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python solar-monitor-casa -m unittest discover -s tests -v`
 (după orice modificare în `casa/`). Reguli de semantică (fronturi, termen de oprire, DST): `CLAUDE.md` §„CASA".
 
-`/history` face **validare strictă cu listă albă**: dacă `field` nu e cheie în `HISTORY_FIELDS`
-sau `range` nu e cheie în `HISTORY_FIELDS[field]["ranges"]`, răspunde **400** cu lista permisă.
-Clientul Android tratează orice cod ≠ 200 ca `null` și afișează „ISTORIC INDISPONIBIL".
-
-De aceea: **orice interval nou trebuie adăugat mai întâi în API**, altfel butonul din aplicație
-va exista dar va da mereu eroare.
+**Priză/senzor nou sau schimbat:** dispozitivele se încarcă o singură dată, la pornire; după `login`/`sync`, o redenumire în
+SmartLife sau o editare a `casa/data/devices.local.json` → `docker compose restart casa`. Procedura „Adăugare priză/senzor nou":
+asociezi în SmartLife → `docker exec -it solar-casa python -m casa sync` → dacă IP-ul prizei nu e cunoscut, îl pui (cu `version`)
+în `devices.local.json` (IP-ul din lista DHCP a routerului după MAC, plus rezervare DHCP) → `docker compose restart casa` →
+apare în aplicație, fără APK nou. Pagina CASA din Retro e făcută pentru cel mult 5 prize și 3 senzori. Detalii: `CLAUDE.md` §„CASA".
 
 ### Ce bucket alegi pentru un interval
 

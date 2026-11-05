@@ -37,3 +37,5 @@ solar-volume-backup-cutover/
 # CASA: prize si senzori Tuya
 casa/data/*
 !casa/data/.gitkeep
+# copii de siguranta locale ale Caddyfile
+caddy/Caddyfile.bak-*

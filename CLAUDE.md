@@ -368,17 +368,28 @@ morning steps (list below). Release v3.40 is built after the final review.**
 
 - **What it does:** 5 plugs controlled locally (`tinytuya`, TCP 6668, one persistent connection per plug; IPs/protocol
   defaults in `casa/casa/devices.py`, matched by device id: Boiler .244, Living sus .104, Priza cam Georgi .204,
-  Bucatarie .185, Lumina Curte .158). 3 temperature/humidity sensors read from the Tuya cloud
-  (`tuya-device-sharing-sdk`, MQTT push + poll every ≤ 5 min, session from a QR login). No cloud fallback for
-  plug commands: a plug that refuses the local connection shows OFFLINE.
+  Bucatarie .185, Lumina Curte .158; the name↔IP pairing is a **guess from the passive scan until `sync` has run** and
+  must be checked against SmartLife). 3 temperature/humidity sensors read from the Tuya cloud
+  (`tuya-device-sharing-sdk`, session from a QR login) **by REST every 5 min**: the cloud state is `ok` only if the last
+  successful REST read is ≤ 10 min old. MQTT is best-effort and carries no device data today (the SDK subscribes only
+  devices with `set_up=True`, which casa never sets). No cloud fallback for plug commands: a plug that refuses the local
+  connection shows OFFLINE.
+- **Devices are loaded once, at boot** (`casa/casa/web.py`). After `login`/`sync`, a rename in SmartLife, or an edit of
+  `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "..."}}`; a malformed entry is skipped
+  with a warning in the log) → `docker compose restart casa`.
+- **Adding a new plug/sensor:** (1) pair it in SmartLife; (2) `docker exec -it solar-casa python -m casa sync`; (3) if the
+  plug's IP is not known, put it (and `version`) in `casa/data/devices.local.json` (IP from the router's DHCP list by MAC,
+  plus a DHCP reservation); (4) `docker compose restart casa`. It appears in the app, no new APK. The Retro CASA page is laid
+  out for **≤ 5 plugs and ≤ 3 sensors**.
 - **Route:** Caddy `handle_path /solar/casa/*` → `casa:8100`, placed **before** `/solar/*`. `request_body max_size 16KB`,
   `request_buffers 20KB` (must stay larger than max_size; Flask `MAX_BODY_BYTES` 16000 must stay ≤ max_size),
-  read/write timeouts 60 s (worst command ≈ 25 s; the app waits 50 s), `header_up X-Forwarded-For {remote_host}`
+  read/write timeouts 60 s (a command takes ≈ 25 s typical, 45 s theoretical worst case; the app waits 50 s), `header_up X-Forwarded-For {remote_host}`
   (client IP for the password limit). Only the casa block of `caddy/Caddyfile` is ours; the rest belongs to beci-cloud
-  and is committed apart (`git add -p`), the `Caddyfile.bak-*` files are ignored.
+  and is committed apart (`git add -p`); the `Caddyfile.bak-*` files are ignored (`.gitignore`).
 - **Auth:** one shared password, set on the server; `POST /solar/casa/register` `{password, device}` returns a long
   token per phone (server keeps only hashes). Every other route needs `Authorization: Bearer`. Limit: 5 wrong tries /
-  15 min per IP and 20 / h overall (so anyone can block new registrations for an hour); commands ≤ ~1/s per token.
+  15 min per IP and 20 / h overall (so the global cap can block **new** registrations for up to 1 h; phones already
+  registered are unaffected); commands: 3 per 3 s per phone, non-GET requests only.
   401 on a stored token (revoked) brings the password plate back in the app.
 - **CLI** (run in the container): `docker exec -it solar-casa python -m casa <cmd>`:
   `login [user_code]` (QR login with Smart Life: Eu > Setari > Cont si securitate > User Code, then scan the QR in the
@@ -391,21 +402,26 @@ morning steps (list below). Release v3.40 is built after the final review.**
   demo-marked state, so test schedules can never run on the real boiler). Secrets never go to git, logs, ntfy or
   Telegram (no exception text with QR token / user code is logged).
 - **Demo mode:** `CASA_DEMO=1` in `.env` (**ON right now on the server**): fake plugs from `casa/casa/demo.py`, no
-  InfluxDB writes, no cloud. Remove it (and restart `casa`) for real operation.
+  InfluxDB writes, no cloud. Remove it (and `docker compose up -d casa`) for real operation. The `casa` service does
+  **not** get the whole `.env`: `docker-compose.yml` passes only `INFLUX_*`, `NTFY_URL`, `CASA_DEMO` (default 0),
+  `CASA_POLL_S` (default 5) and `CASA_DATA_DIR`. A new `CASA_*` variable must be added there too. If the state file is
+  demo-marked, real mode exits with gunicorn's code 4 (app load error), so gunicorn halts and Docker's restart backoff applies.
 - **Semantics** (spec §4.4 + the rulings of the build): times in Europe/Bucharest. A schedule is a daily interval
   `start → stop`; it acts **on edges only** (a manual off mid-interval stays off until the next edge). After a
-  restart/reconnect a missed **stop is always executed**, however late; a missed **start is recovered only inside the
-  window**. At the same instant **stops run before starts**, and only the interval that started the plug can stop it
-  (back-to-back windows work). Spring DST gap (03:00–04:00 does not exist): start and stop land on 04:00; a collapsed
+  restart/reconnect a missed **stop is executed, however late, unless the plug is known to be off or a newer manual
+  command or start exists**; a missed **start is recovered only inside the window**. At the same instant **stops run
+  before starts**, and only the interval that holds the plug can stop it (back-to-back windows work); after a manual
+  "on" nobody holds the plug, so any interval's stop acts. Spring DST gap (03:00–04:00 does not exist): start and stop land on 04:00; a collapsed
   window makes no edges. While a plug is on, the **nearest off deadline** (end of the interval that started it, inching,
-  countdown "off") is written to the plug's own countdown DP (dp 9, seconds), so it switches off even if the server is
-  down; the app shows "OPRIRE IN …". Editing the interval that holds the plug: still contains now → new end; no longer
+  countdown "off") is written to the plug's own countdown DP (seconds; dp 9 is only the fallback, the real DP number comes
+  from `sync`), so it switches off even if the server is down; the app shows "OPRIRE IN …". Editing the interval that holds the plug: still contains now → new end; no longer
   contains now → off now; **disable/delete → the plug stays on until the OLD stop** (countdown-off). A manual "on" after
   the holder was deleted is unbounded unless inching applies (the user's decision). A manual command cancels a running
-  countdown. Per-plug locks and throttle: one dead plug never delays another's stop; a dead plug ties one thread ≤ 10 s.
+  countdown. Per-plug locks and throttle: one dead plug never delays another's stop; a dead plug ties one thread for a command ≈ 25 s typical / 45 s theoretical worst case.
 - **InfluxDB:** `casa_plug` (tags `device_id`, `name`; fields `on`, `online`, `power`, `voltage`, `current` in A) and
-  `casa_sensor` (fields `temperature`, `humidity`, `battery`) in `live` and `history` (60 s mean). Written by one flusher
-  thread, so a down InfluxDB never delays plug commands. The API energy today = integral of `power` since local midnight.
+  `casa_sensor` (fields `temperature`, `humidity`, `battery`) in `live` and `history`. Sensors are written **on every
+  change** to both buckets (not 60 s means); plug history is per minute: `on`/`online` = minimum, `power`/`voltage`/
+  `current` = mean. Written by one flusher thread, so a down InfluxDB never delays plug commands. The API energy today = integral of `power` since local midnight.
   Grafana: row "🏠 Casa: prize si senzori" (panels 142–147: plug power, plugs on, sensor temperature/humidity, sensors now).
 - **App (v3.40, versionCode 44):** Retro SISTEM page has a SISTEM | CASA selector; CASA = 5 plug plates + sensors, tap
   opens plug detail (switch, countdown 30M/1H/2H/6H/other, schedules, inching) or sensor detail (2h/1d/7d charts). Simple
@@ -413,7 +429,7 @@ morning steps (list below). Release v3.40 is built after the final review.**
   Command timeout 50 s; commands stay enabled when a plug looks offline. Files: `CasaModel.kt`, `CasaRepository.kt`,
   `CasaAccess.kt`, `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt`.
 - **Tests:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
-  solar-monitor-casa -m unittest discover -s tests -v` (258 tests, run it after any change in `casa/`; run the full
+  solar-monitor-casa -m unittest discover -s tests -v` (264 tests, run it after any change in `casa/`; run the full
   suite more than once, a non-reproducible failure was seen once during edits).
 - **Morning steps (user):** (1) DHCP reservations on the router for the 5 plug IPs; (2) `python -m casa login` (QR) and
   `sync`; (3) remove `CASA_DEMO=1`, `docker compose up -d casa`, check every plug online and the power readings against

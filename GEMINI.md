@@ -462,18 +462,27 @@ de dimineață (lista de mai jos). Release-ul v3.40 se construiește după recen
 
 - **Ce face:** 5 prize comandate local (`tinytuya`, TCP 6668, o conexiune persistentă per priză; IP și protocol implicite
   în `casa/casa/devices.py`, potrivite după device id: Boiler .244, Living sus .104, Priza cam Georgi .204, Bucatarie .185,
-  Lumina Curte .158). 3 senzori de temperatură/umiditate citiți din cloud-ul Tuya (`tuya-device-sharing-sdk`, push MQTT +
-  citire la cel mult 5 min, sesiune din login QR). Fără rezervă prin cloud pentru comenzile prizelor: o priză care refuză
-  conexiunea locală apare OFFLINE.
+  Lumina Curte .158; perechea nume↔IP e o **presupunere din scanarea pasivă până după `sync`** și trebuie verificată cu
+  SmartLife). 3 senzori de temperatură/umiditate citiți din cloud-ul Tuya (`tuya-device-sharing-sdk`, sesiune din login QR)
+  **prin REST la 5 min**: starea cloud e `ok` doar dacă ultima citire REST reușită are ≤ 10 min. MQTT e doar pe cât se
+  poate și nu aduce date azi (SDK-ul abonează doar dispozitivele cu `set_up=True`, pe care casa nu îl setează). Fără
+  rezervă prin cloud pentru comenzile prizelor: o priză care refuză conexiunea locală apare OFFLINE.
+- **Dispozitivele se încarcă o singură dată, la pornire** (`casa/casa/web.py`). După `login`/`sync`, o redenumire în
+  SmartLife sau o editare a lui `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "..."}}`;
+  o intrare greșită se sare cu avertisment în log) → `docker compose restart casa`.
+- **Adăugarea unei prize/unui senzor nou:** (1) îl asociezi în SmartLife; (2) `docker exec -it solar-casa python -m casa
+  sync`; (3) dacă IP-ul prizei nu se cunoaște, îl pui (și `version`) în `casa/data/devices.local.json` (IP-ul din lista DHCP
+  a routerului după MAC, plus rezervare DHCP); (4) `docker compose restart casa`. Apare în aplicație, fără APK nou. Pagina
+  CASA din Retro e făcută pentru **cel mult 5 prize și 3 senzori**.
 - **Rută:** Caddy `handle_path /solar/casa/*` → `casa:8100`, pusă **înaintea** lui `/solar/*`. `request_body max_size 16KB`,
   `request_buffers 20KB` (trebuie să rămână mai mare decât max_size; `MAX_BODY_BYTES` 16000 din Flask rămâne ≤ max_size),
-  timeout citire/scriere 60 s (cea mai lungă comandă ≈ 25 s; aplicația așteaptă 50 s), `header_up X-Forwarded-For
+  timeout citire/scriere 60 s (o comandă durează ≈ 25 s în mod obișnuit, 45 s în cel mai rău caz teoretic; aplicația așteaptă 50 s), `header_up X-Forwarded-For
   {remote_host}` (IP-ul clientului pentru limita de parolă). Doar blocul casa din `caddy/Caddyfile` e al nostru; restul e
-  al proiectului beci-cloud și se comite separat (`git add -p`); fișierele `Caddyfile.bak-*` se ignoră.
+  al proiectului beci-cloud și se comite separat (`git add -p`); fișierele `Caddyfile.bak-*` se ignoră (`.gitignore`).
 - **Autentificare:** o singură parolă comună, setată pe server; `POST /solar/casa/register` `{password, device}` dă un
   token lung per telefon (serverul păstrează doar hash-uri). Orice altă rută cere `Authorization: Bearer`. Limită: 5
-  încercări greșite / 15 min per IP și 20 / oră în total (deci cineva poate bloca noi înregistrări o oră); comenzi ≤ ~1/s
-  per token. Un 401 pe un token salvat (revocat) readuce placa de parolă în aplicație.
+  încercări greșite / 15 min per IP și 20 / oră în total (deci plafonul global poate bloca **noi** înregistrări până la o
+  oră; telefoanele deja înregistrate nu sunt afectate); comenzi: 3 la 3 s per telefon, doar cererile non-GET. Un 401 pe un token salvat (revocat) readuce placa de parolă în aplicație.
 - **CLI** (în container): `docker exec -it solar-casa python -m casa <comandă>`:
   `login [cod_utilizator]` (login QR Smart Life: Eu > Setări > Cont și securitate > User Code, apoi scanezi QR-ul din
   terminal), `sync` (reîmprospătează dispozitivele și cheile locale în `devices.json`), `set-password [--stdin]` (se cere
@@ -486,22 +495,28 @@ de dimineață (lista de mai jos). Release-ul v3.40 se construiește după recen
   stare marcată demo, ca programările de test să nu poată porni niciodată boilerul real). Secretele nu ajung niciodată în
   git, log-uri, ntfy sau Telegram (nu se loghează text de excepție cu token QR / cod de utilizator).
 - **Mod demo:** `CASA_DEMO=1` în `.env` (**PORNIT acum pe server**): prize false din `casa/casa/demo.py`, fără scrieri în
-  InfluxDB, fără cloud. Scoate-l (și repornește `casa`) pentru funcționarea reală.
+  InfluxDB, fără cloud. Scoate-l (și `docker compose up -d casa`) pentru funcționarea reală. Serviciul `casa` **nu**
+  primește tot `.env`: `docker-compose.yml` îi dă doar `INFLUX_*`, `NTFY_URL`, `CASA_DEMO` (implicit 0), `CASA_POLL_S`
+  (implicit 5) și `CASA_DATA_DIR`. O variabilă `CASA_*` nouă trebuie adăugată și acolo. Dacă fișierul de stare e marcat
+  demo, modul real iese cu codul 4 al gunicorn (eroare la încărcarea aplicației), deci gunicorn se oprește și se aplică
+  backoff-ul de restart al Docker.
 - **Semantică** (spec §4.4 + deciziile din construcție): ora Europe/Bucharest. O programare e un interval zilnic
   `start → stop` și acționează **doar pe fronturi** (o oprire manuală în interval rămâne oprită până la următorul front).
-  După repornire/reconectare un **stop ratat se execută întotdeauna**, oricât de târziu; un **start ratat se recuperează
-  doar în interiorul ferestrei**. În același moment **stop-urile rulează înaintea start-urilor**, iar stop-ul îl dă doar
-  intervalul care a pornit priza (ferestre cap la cap merg). Golul de primăvară (03:00–04:00 nu există): start și stop
+  După repornire/reconectare un **stop ratat se execută, oricât de târziu, în afară de cazul în care priza se știe oprită
+  sau există o comandă manuală ori un start mai nou**; un **start ratat se recuperează doar în interiorul ferestrei**. În
+  același moment **stop-urile rulează înaintea start-urilor**, iar stop-ul îl dă doar intervalul care ține priza (ferestre
+  cap la cap merg); după un „pornit" manual nu o ține nimeni, deci stop-ul oricărui interval acționează. Golul de primăvară (03:00–04:00 nu există): start și stop
   cad la 04:00; o fereastră prăbușită nu produce fronturi. Cât timp priza e pornită, **cel mai apropiat termen de oprire**
-  (sfârșitul intervalului care a pornit-o, inching, countdown „oprește") se scrie în DP-ul de countdown al prizei (dp 9,
-  secunde), ca priza să se stingă și dacă serverul cade; aplicația arată „OPRIRE IN …". Editarea intervalului care ține
+  (sfârșitul intervalului care a pornit-o, inching, countdown „oprește") se scrie în DP-ul de countdown al prizei (în
+  secunde; dp 9 e doar varianta de rezervă, numărul real al DP vine din `sync`), ca priza să se stingă și dacă serverul cade; aplicația arată „OPRIRE IN …". Editarea intervalului care ține
   priza: încă conține acum → sfârșit nou; nu mai conține acum → oprire acum; **dezactivare/ștergere → priza rămâne
   pornită până la VECHIUL stop** (countdown-oprire). Un „pornit" manual după ștergerea intervalului e nelimitat, dacă nu
   se aplică inching (decizia utilizatorului). O comandă manuală anulează countdown-ul în curs. Lock-uri și throttle per
-  priză: o priză moartă nu întârzie niciodată oprirea alteia; ține blocat un fir cel mult 10 s.
+  priză: o priză moartă nu întârzie niciodată oprirea alteia; ține blocat un fir cât durează o comandă: ≈ 25 s în mod obișnuit, 45 s în cel mai rău caz teoretic.
 - **InfluxDB:** `casa_plug` (tag-uri `device_id`, `name`; câmpuri `on`, `online`, `power`, `voltage`, `current` în A) și
-  `casa_sensor` (câmpuri `temperature`, `humidity`, `battery`) în `live` și `history` (medie pe 60 s). Le scrie un singur
-  fir de flush, deci un InfluxDB căzut nu întârzie comenzile. Energia azi din API = integrala lui `power` de la miezul
+  `casa_sensor` (câmpuri `temperature`, `humidity`, `battery`) în `live` și `history`. Senzorii se scriu **la fiecare
+  schimbare** în ambele găleți (nu medii pe 60 s); istoricul prizelor e pe minut: `on`/`online` = minimul, `power`/
+  `voltage`/`current` = media. Le scrie un singur fir de flush, deci un InfluxDB căzut nu întârzie comenzile. Energia azi din API = integrala lui `power` de la miezul
   nopții local. Grafana: rândul „🏠 Casa: prize si senzori" (panourile 142–147: putere prize, prize pornite,
   temperatură/umiditate senzori, senzori acum).
 - **Aplicația (v3.40, versionCode 44):** pagina SISTEM din Retro are comutatorul SISTEM | CASA; CASA = 5 plăci de priză +
@@ -511,7 +526,7 @@ de dimineață (lista de mai jos). Release-ul v3.40 se construiește după recen
   comenzile rămân active chiar dacă priza pare offline. Fișiere: `CasaModel.kt`, `CasaRepository.kt`, `CasaAccess.kt`,
   `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt`.
 - **Teste:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
-  solar-monitor-casa -m unittest discover -s tests -v` (258 de teste; rulează după orice modificare în `casa/`, suita
+  solar-monitor-casa -m unittest discover -s tests -v` (264 de teste; rulează după orice modificare în `casa/`, suita
   completă de mai multe ori: un eșec nereproductibil a apărut o dată în timpul editărilor).
 - **Pașii de dimineață (utilizator):** (1) rezervări DHCP în router pentru cele 5 IP-uri ale prizelor; (2) `python -m
   casa login` (QR) și `sync`; (3) scoate `CASA_DEMO=1`, `docker compose up -d casa`, verifică fiecare priză online și
