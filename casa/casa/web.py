@@ -301,18 +301,16 @@ def create_app(services: Optional[Services] = None) -> Flask:
     plug_locks = {pid: threading.Lock() for pid in controller.devices}
     app.config["PLUG_LOCKS"] = plug_locks   # vizibil in teste
 
-    def run(pid: str, call: Callable, needs_plug: bool = False):
+    def run(pid: str, call: Callable):
         """Executa o comanda pe priza si intoarce vederea ei; CommandError -> 502 cu vederea.
 
         Comenzile catre aceeasi priza se executa pe rand; o cerere nu asteapta mai mult de
-        PLUG_BUSY_WAIT_S dupa una in curs. `needs_plug`: comanda trebuie sa ajunga la priza chiar acum
-        (comutare); daca controllerul stie ca e offline, raspundem 502 fara sa asteptam timeout-ul."""
+        PLUG_BUSY_WAIT_S dupa una in curs. Comanda pleaca mereu spre priza, chiar daca pare offline:
+        workerul face o incercare imediata de conectare si hotaraste el (502 doar daca esueaza)."""
         lock = plug_locks[pid]
         if not lock.acquire(timeout=PLUG_BUSY_WAIT_S):
             raise ApiError(503, "priza e ocupata, reincearca")
         try:
-            if needs_plug and not controller.plug_view(pid)["online"]:
-                raise CommandError("priza offline")
             return jsonify(call())
         except CommandError:
             resp = jsonify({"error": "priza nu raspunde", "plug": controller.plug_view(pid)})
@@ -379,7 +377,7 @@ def create_app(services: Optional[Services] = None) -> Flask:
     def plug_switch(pid):
         known_plug(pid)
         on = _bool(_body(("on",)), "on")
-        return run(pid, lambda: controller.switch(pid, on), needs_plug=True)
+        return run(pid, lambda: controller.switch(pid, on))
 
     @app.put("/plugs/<pid>/countdown")
     @require_token

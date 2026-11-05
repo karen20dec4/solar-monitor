@@ -413,16 +413,15 @@ class TestRobustness(WebCase):
                         content_type="application/json", headers=self.h())
         self.assertEqual(r.status_code, 413)
 
-    def test_switch_to_offline_plug_is_502_without_waiting(self):
+    def test_command_for_offline_flagged_plug_is_still_submitted(self):
         self.ctl.offline = {"p1"}
         r = self.c.post("/plugs/p1/switch", json={"on": True}, headers=self.h())
+        self.assertEqual(r.status_code, 200)          # workerul decide; aici raspunde
+        self.assertEqual(self.ctl.calls, [("switch", "p1", (True,), {})])
+        self.ctl.fail = True                          # workerul nu a reusit conectarea
+        r = self.c.post("/plugs/p1/switch", json={"on": False}, headers=self.h())
         self.assertEqual(r.status_code, 502)
-        body = r.get_json()
-        self.assertEqual((body["error"], body["plug"]["online"]), ("priza nu raspunde", False))
-        self.assertEqual(self.ctl.calls, [])        # comanda nici nu a plecat spre controller
-        # programarile se salveaza si cu priza offline
-        r = self.c.post("/plugs/p1/schedules", json={"start": "10:30", "stop": "16:00"}, headers=self.h())
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["plug"]["online"], False)
 
     def test_concurrent_command_to_same_plug_times_out_with_503(self):
         self.ctl.slow = threading.Event()
