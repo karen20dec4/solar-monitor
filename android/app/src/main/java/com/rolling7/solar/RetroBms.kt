@@ -22,6 +22,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -393,6 +397,83 @@ internal fun RetroGridAlertRow(
     onEnabledChange = onEnabledChange,
     modifier = modifier
 )
+
+/**
+ * SETARI: randul "Acces CASA" - starea inregistrarii telefonului si butonul "UITA TELEFONUL" (cu confirmare).
+ * Sterge doar jetonul de pe telefon; telefonul ramane pe lista serverului pana e revocat acolo.
+ */
+@Composable
+internal fun RetroCasaAccessRow(modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val access = remember { casaAccess(context) }
+    val registered = rememberCasaToken().value != null
+    var confirm by remember { mutableStateOf(false) }
+    RetroInsetSurface(
+        modifier = modifier.semantics { contentDescription = "Setari acces casa" },
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val buttonHeight = maxHeight * 0.62f
+            Column(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 14.dp)
+            ) {
+                Text(
+                    "ACCES CASA",
+                    color = RetroBrassLight,
+                    fontFamily = RetroMono,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp,
+                    maxLines = 1
+                )
+                Text(
+                    if (registered) "TELEFON INREGISTRAT" else "NEINREGISTRAT",
+                    color = if (registered) RetroSage else RetroBrassLight.copy(alpha = 0.7f),
+                    fontFamily = RetroMono,
+                    fontSize = 8.sp,
+                    lineHeight = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp,
+                    maxLines = 1
+                )
+            }
+            if (registered) {
+                RetroMetalButton(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 12.dp)
+                        .height(buttonHeight)
+                        .width(130.dp),
+                    selected = false,
+                    accent = RetroRed,
+                    description = "Uita telefonul",
+                    onClick = { confirm = true }
+                ) {
+                    Text(
+                        "UITA TELEFONUL",
+                        color = RetroText,
+                        fontFamily = RetroMono,
+                        fontSize = 9.sp,
+                        lineHeight = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.6.sp,
+                        maxLines = 1,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+            }
+        }
+    }
+    if (confirm) {
+        CasaForgetDialog(
+            onConfirm = { access.forget(); confirm = false },
+            onDismiss = { confirm = false }
+        )
+    }
+}
 
 @Composable
 private fun RetroAlarmToggleRow(

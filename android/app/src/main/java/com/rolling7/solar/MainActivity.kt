@@ -132,17 +132,17 @@ import kotlin.math.roundToInt
 // mai sus decat pagina, de acolo vine senzatia de contur fara sa desenam borduri.
 // Accentele sunt mai inchise decat versiunea pe fond negru: un verde sau un
 // albastru luminos ar avea contrast prea mic pe gri deschis.
-private val CPv = Color(0xFF1F9D55)          // verde panouri
-private val CBat = Color(0xFFC2790A)         // ambru baterie
-private val CGrid = Color(0xFFD93A48)        // rosu retea
-private val CHouse = Color(0xFF0B72E7)       // albastru accent / casa
-private val CPanel = Color(0xFFF5F8FB)       // suprafata card
-private val CPanelSoft = Color(0xFFEAF0F7)   // card secundar / camp
+internal val CPv = Color(0xFF1F9D55)          // verde panouri
+internal val CBat = Color(0xFFC2790A)         // ambru baterie
+internal val CGrid = Color(0xFFD93A48)        // rosu retea
+internal val CHouse = Color(0xFF0B72E7)       // albastru accent / casa
+internal val CPanel = Color(0xFFF5F8FB)       // suprafata card
+internal val CPanelSoft = Color(0xFFEAF0F7)   // card secundar / camp
 private val CPanelRaised = Color(0xFFFFFFFF) // card evidentiat
-private val CBg = Color(0xFFDDE3EA)          // fundal pagina
-private val CLine = Color(0xFFC9D3DE)        // separator
-private val CMuted = Color(0xFF586576)       // text secundar
-private val CText = Color(0xFF1B2432)        // text principal
+internal val CBg = Color(0xFFDDE3EA)          // fundal pagina
+internal val CLine = Color(0xFFC9D3DE)        // separator
+internal val CMuted = Color(0xFF586576)       // text secundar
+internal val CText = Color(0xFF1B2432)        // text principal
 private const val DEAD = 50.0
 
 // Cadranul din tema Simple. Pragurile sunt fixe, nu legate de alarma din setari:
@@ -411,6 +411,18 @@ fun App() {
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                var casaPlugId by rememberSaveable { mutableStateOf<String?>(null) }
+                var casaSensorId by rememberSaveable { mutableStateOf<String?>(null) }
+                SimpleCasaCard(
+                    onOpenPlug = { casaPlugId = it },
+                    onOpenSensor = { casaSensorId = it },
+                    paused = casaPlugId != null || casaSensorId != null
+                )
+                SimpleCasaDetailDialog(
+                    plugId = casaPlugId,
+                    sensorId = if (casaPlugId == null) casaSensorId else null,
+                    onClose = { casaPlugId = null; casaSensorId = null }
+                )
                 SystemDetails(data = data, onHistoryClick = {
                     selectedEnergyField = it.field
                     retroTabName = RetroTab.ENERGY.name
@@ -2205,6 +2217,33 @@ private fun SettingsSheet(
                     checked = settings.gridEnabled,
                     onCheckedChange = onGridEnabledChange,
                     colors = if (retro) retroSwitchColors() else SwitchDefaults.colors()
+                )
+            }
+        }
+
+        SettingsGroup(retro) {
+            val casaRegistered = rememberCasaToken().value != null
+            val casaContext = LocalContext.current
+            val casaStore = remember { casaAccess(casaContext) }
+            var confirmForget by remember { mutableStateOf(false) }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Acces CASA", color = chrome.text, fontFamily = chrome.font, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (casaRegistered) "TELEFON INREGISTRAT" else "NEINREGISTRAT",
+                        color = if (casaRegistered) CPv else chrome.muted,
+                        fontFamily = chrome.font,
+                        fontSize = 12.sp
+                    )
+                }
+                if (casaRegistered) {
+                    Button(onClick = { confirmForget = true }) { Text("UITA TELEFONUL", fontFamily = chrome.font) }
+                }
+            }
+            if (confirmForget) {
+                CasaForgetDialog(
+                    onConfirm = { casaStore.forget(); confirmForget = false },
+                    onDismiss = { confirmForget = false }
                 )
             }
         }

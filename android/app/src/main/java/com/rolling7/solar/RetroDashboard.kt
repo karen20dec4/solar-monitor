@@ -1674,17 +1674,18 @@ internal fun RetroSettingsArtworkPage(
         val themeToAlarmGap = with(density) { 20.toDp() }
         val alarmToBatteryGap = with(density) { 20.toDp() }
         val batteryToGridGap = with(density) { 12.toDp() }
-        // Randurile "Alarma baterie" si "Mesaj retea" intra in aceeasi socoteala de inaltime ca cardurile pictate, deci
+        val gridToCasaGap = with(density) { 12.toDp() }
+        // Randurile "Alarma baterie", "Mesaj retea" si "Acces CASA" intra in aceeasi socoteala de inaltime ca cardurile pictate, deci
         // pe un telefon scurt cardurile se micsoreaza putin, nu iese nimic din ecran.
         val batteryRowRatio = 0.13f
         val heightPerWidth =
             (361f / 1_380f) +
                 (408f / 1_119f) +
                 (1_077f / 960f) +
-                batteryRowRatio * 2f
+                batteryRowRatio * 3f
         val naturalWidth = maxWidth * 0.95f
         val availableHeight =
-            (maxHeight - topOffset - topToThemeGap - themeToAlarmGap - alarmToBatteryGap - batteryToGridGap)
+            (maxHeight - topOffset - topToThemeGap - themeToAlarmGap - alarmToBatteryGap - batteryToGridGap - gridToCasaGap)
                 .coerceAtLeast(1.dp)
         val widthLimitedByHeight = availableHeight / heightPerWidth
         val cardWidth = if (naturalWidth <= widthLimitedByHeight) {
@@ -1738,6 +1739,12 @@ internal fun RetroSettingsArtworkPage(
             RetroGridAlertRow(
                 enabled = settings.gridEnabled,
                 onEnabledChange = onGridEnabledChange,
+                modifier = Modifier
+                    .width(cardWidth)
+                    .height(cardWidth * batteryRowRatio)
+            )
+            Spacer(Modifier.height(gridToCasaGap))
+            RetroCasaAccessRow(
                 modifier = Modifier
                     .width(cardWidth)
                     .height(cardWidth * batteryRowRatio)
