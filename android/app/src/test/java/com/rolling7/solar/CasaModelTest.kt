@@ -5,11 +5,20 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.ZoneId
+import java.time.ZonedDateTime
 
 class CasaModelTest {
+    private val zone = ZoneId.of("Europe/Bucharest")
+    private fun epoch(y: Int, mo: Int, d: Int, h: Int, mi: Int) =
+        ZonedDateTime.of(y, mo, d, h, mi, 0, 0, zone).toEpochSecond()
+
     private val plugJson = """{"id":"bf1","name":"Boiler","online":true,"on":false,"metered":true,
         "power":0.0,"voltage":231.2,"current":0.0,"energy_today":2.4,
-        "schedules":[{"id":"a1b2","start":"10:30","stop":"16:00","enabled":true}],
+        "events":[{"id":"e1","time":"10:30","action":"on","days":null,"enabled":true},
+                  {"id":"e2","time":"16:00","action":"off","days":[1,2,3,4,5],"enabled":false}],
+        "next_event":{"id":"e1","time":"10:30","action":"on","at":1793867400},
+        "schedules":[],
         "countdown":{"action":"on","at":1730800000,"seconds_left":18720},
         "inching":{"enabled":false,"minutes":30},
         "off_deadline":{"at":1730820000,"seconds_left":3600,"reason":"schedule"},
@@ -17,7 +26,7 @@ class CasaModelTest {
 
     private val plainJson = """{"id":"bf2","name":"Bucătărie","online":false,"on":true,"metered":false,
         "power":null,"voltage":null,"current":null,"energy_today":null,
-        "schedules":[],"countdown":null,
+        "events":[],"next_event":null,"schedules":[],"countdown":null,
         "inching":{"enabled":true,"minutes":15},
         "off_deadline":null,"error":"priza nu raspunde"}"""
 
@@ -33,7 +42,14 @@ class CasaModelTest {
         assertEquals(231.2, p.voltage!!, 0.0)
         assertEquals(0.0, p.current!!, 0.0)
         assertEquals(2.4, p.energyToday!!, 0.0)
-        assertEquals(listOf(CasaSchedule("a1b2", "10:30", "16:00", true)), p.schedules)
+        assertEquals(
+            listOf(
+                CasaEvent("e1", "10:30", "on", null, true),
+                CasaEvent("e2", "16:00", "off", listOf(1, 2, 3, 4, 5), false)
+            ),
+            p.events
+        )
+        assertEquals(CasaNextEvent("e1", "10:30", "on", 1793867400L), p.nextEvent)
         assertEquals(CasaCountdown("on", 1730800000L, 18720L), p.countdown)
         assertFalse(p.inchingEnabled)
         assertEquals(30, p.inchingMinutes)
@@ -51,7 +67,8 @@ class CasaModelTest {
         assertNull(p.voltage)
         assertNull(p.current)
         assertNull(p.energyToday)
-        assertTrue(p.schedules.isEmpty())
+        assertTrue(p.events.isEmpty())
+        assertNull(p.nextEvent)
         assertNull(p.countdown)
         assertNull(p.offDeadline)
         assertTrue(p.inchingEnabled)
@@ -63,6 +80,116 @@ class CasaModelTest {
     fun `parses the plug list`() {
         val plugs = parsePlugs("""{"plugs":[$plugJson,$plainJson],"timestamp":1730800000}""")
         assertEquals(listOf("bf1", "bf2"), plugs.map { it.id })
+    }
+
+    @Test
+    fun `reply from an old server without events has no events and no next event`() {
+        val p = parsePlug(
+            """{"id":"bf9","name":"Vechi","online":true,"on":true,"metered":false,
+            "schedules":[{"id":"a1b2","start":"10:30","stop":"16:00","enabled":true}],
+            "countdown":null,"inching":{"enabled":false,"minutes":30},"off_deadline":null,"error":null}"""
+        )
+        assertTrue(p.events.isEmpty())
+        assertNull(p.nextEvent)
+    }
+
+    @Test
+    fun `event days null is daily and a missing enabled means enabled`() {
+        val p = parsePlug(
+            """{"id":"bf8","name":"x","online":true,"on":false,"metered":false,
+            "events":[{"id":"e1","time":"17:00","action":"off"},
+                      {"id":"e2","time":"09:00","action":"on","days":[6,7],"enabled":true}],
+            "next_event":null,"countdown":null,"inching":{"enabled":false,"minutes":30},
+            "off_deadline":null,"error":null}"""
+        )
+        assertEquals(CasaEvent("e1", "17:00", "off", null, true), p.events[0])
+        assertEquals(listOf(6, 7), p.events[1].days)
+        assertNull(p.nextEvent)
+    }
+
+    @Test
+    fun `event days text`() {
+        assertEquals("ZILNIC", casaDaysText(null))
+        assertEquals("L-V", casaDaysText(listOf(1, 2, 3, 4, 5)))
+        assertEquals("SA · DU", casaDaysText(listOf(6, 7)))
+        assertEquals("L · MI · V", casaDaysText(listOf(1, 3, 5)))
+        assertEquals("J", casaDaysText(listOf(4)))
+        assertEquals(listOf("L", "MA", "MI", "J", "V", "SA", "DU"), CasaDayShort)
+    }
+
+    @Test
+    fun `event action text`() {
+        assertEquals("PORNESTE", casaActionText("on"))
+        assertEquals("OPRESTE", casaActionText("off"))
+        assertEquals("OPRESTE", casaActionText("altceva"))
+    }
+
+    @Test
+    fun `events are limited to twelve per plug`() {
+        assertEquals(12, MaxEvents)
+        assertTrue(casaCanAddEvent(0))
+        assertTrue(casaCanAddEvent(11))
+        assertFalse(casaCanAddEvent(12))
+    }
+
+    @Test
+    fun `next event text for today and for another day`() {
+        val now = epoch(2026, 11, 5, 14, 7) // joi
+        // azi: fara zi
+        assertEquals(
+            "OPRESTE 16:00 · IN 1H 53",
+            casaNextEventText(CasaNextEvent("e", "16:00", "off", epoch(2026, 11, 5, 16, 0)), now, zone)
+        )
+        // maine (vineri): ziua scurta inaintea orei
+        assertEquals(
+            "PORNESTE V 09:00 · IN 18H 53",
+            casaNextEventText(CasaNextEvent("e", "09:00", "on", epoch(2026, 11, 6, 9, 0)), now, zone)
+        )
+        // luni 17:00, peste 99 h 53 min (formatDuration, ca la celelalte insigne)
+        assertEquals(
+            "OPRESTE L 17:00 · IN 98H 53",
+            casaNextEventText(CasaNextEvent("e", "17:00", "off", epoch(2026, 11, 9, 17, 0)), now, zone)
+        )
+    }
+
+    @Test
+    fun `next event day is judged by the local date not by UTC`() {
+        // 2026-11-05 20:00 UTC = 22:00 la Bucuresti; 22:30 UTC = 00:30 vineri la Bucuresti
+        val now = epoch(2026, 11, 5, 22, 0)
+        val at = epoch(2026, 11, 6, 0, 30)
+        assertEquals(
+            "OPRESTE V 00:30 · IN 2H 30",
+            casaNextEventText(CasaNextEvent("e", "00:30", "off", at), now, zone)
+        )
+    }
+
+    @Test
+    fun `event request bodies`() {
+        val daily = casaEventBody("17:00", "off", null)
+        assertEquals("17:00", daily.getString("time"))
+        assertEquals("off", daily.getString("action"))
+        assertTrue(daily.has("days") && daily.isNull("days"))
+        assertEquals(3, daily.length())
+        val some = casaEventBody("09:00", "on", listOf(6, 7))
+        assertEquals(listOf(6, 7), (0 until some.getJSONArray("days").length()).map { some.getJSONArray("days").getInt(it) })
+    }
+
+    @Test
+    fun `event update body sends only what changes`() {
+        assertEquals(1, casaEventUpdateBody(enabled = false).length())
+        assertFalse(casaEventUpdateBody(enabled = false).getBoolean("enabled"))
+        val t = casaEventUpdateBody(time = "16:25", action = "on")
+        assertEquals(setOf("time", "action"), t.keySet())
+        // zilnic = days null explicit; lista ramane lista
+        val d = casaEventUpdateBody(daily = true)
+        assertTrue(d.has("days") && d.isNull("days"))
+        assertEquals(1, d.length())
+        val l = casaEventUpdateBody(days = listOf(1, 2))
+        assertEquals(2, l.getJSONArray("days").length())
+        // days nul si daily=false: nu trimite "days" (nu schimba zilele)
+        assertFalse(casaEventUpdateBody(time = "10:00").has("days"))
+        // daily bate days
+        assertTrue(casaEventUpdateBody(days = listOf(1), daily = true).isNull("days"))
     }
 
     @Test
@@ -174,7 +301,7 @@ class CasaModelTest {
     @Test
     fun `json nulls never become the text null`() {
         val p = parsePlug(
-            """{"id":"bf3","name":null,"online":true,"on":false,"metered":false,"schedules":[],
+            """{"id":"bf3","name":null,"online":true,"on":false,"metered":false,"events":[],"next_event":null,
             "countdown":null,"inching":{"enabled":false,"minutes":30},
             "off_deadline":{"at":1,"seconds_left":2,"reason":null},"error":null}"""
         )
@@ -194,10 +321,18 @@ class CasaModelTest {
         assertEquals(CasaResult.Error("PREA MULTE INCERCARI"), casaFailure(429, """{"error":"prea multe incercari","retry_after":30}"""))
         assertEquals(CasaResult.Error("PRIZA NU RASPUNDE"), casaFailure(502, """{"error":"priza nu raspunde","plug":{}}"""))
         assertEquals(CasaResult.Error("X"), casaFailure(404, """{"error":"x"}"""))
-        assertEquals(CasaResult.Error("MAXIM 6 INTERVALE"), casaFailure(400, """{"error":"maxim 6 intervale"}"""))
+        assertEquals(CasaResult.Error("CEL MULT 12 EVENIMENTE PE PRIZA"), casaFailure(400, """{"error":"cel mult 12 evenimente pe priza"}"""))
         assertEquals(CasaResult.Error("DURATA INVALIDA"), casaFailure(400, """{"error":"durată invalidă"}"""))
         assertEquals(CasaResult.Error("CERERE INVALIDA"), casaFailure(400, "nu e json"))
         assertEquals(CasaResult.Error("EROARE SERVER"), casaFailure(500, ""))
+    }
+
+    @Test
+    fun `conflict message from the server is shown as it is`() {
+        assertEquals(
+            CasaResult.Error("CONFLICT: EXISTA DEJA UN EVENIMENT ACTIV LA 17:00 IN ACELEASI ZILE"),
+            casaFailure(400, """{"error":"conflict: exista deja un eveniment activ la 17:00 in aceleasi zile"}""")
+        )
     }
 
     @Test
@@ -207,7 +342,7 @@ class CasaModelTest {
         assertEquals(CasaResult.Error("PRIZA E OCUPATA, REINCEARCA"), casaFailure(503, """{"error":"priza e ocupată, reîncearcă"}"""))
         assertEquals(CasaResult.Error("PAROLA NESETATA"), casaFailure(503, """{"error":"parola nesetata"}"""))
         assertEquals(CasaResult.Error("ISTORIC INDISPONIBIL"), casaFailure(503, """{"error":"istoric indisponibil"}"""))
-        assertEquals(CasaResult.Error("MAXIM 6 INTERVALE"), casaFailure(400, """{"error":"maxim 6 intervale"}"""))
+        assertEquals(CasaResult.Error("CEL MULT 12 EVENIMENTE PE PRIZA"), casaFailure(400, """{"error":"cel mult 12 evenimente pe priza"}"""))
     }
 
     @Test
@@ -234,33 +369,32 @@ class CasaModelTest {
 
     @Test
     fun `badges in display order`() {
-        val base = parsePlug(plugJson)
-        // countdown "on" + off_deadline reason schedule + enabled schedule; inching off
+        val now = epoch(2026, 11, 5, 9, 0) // joi
+        val base = parsePlug(plugJson) // next_event: PORNESTE 10:30 azi
+        // next event first, then countdown "on" + off_deadline reason schedule; inching off
         assertEquals(
-            listOf("10:30-16:00", "PORNIRE IN 5H 12", "STINGE IN 1H 00"),
-            plugBadges(base)
+            listOf("PORNESTE 10:30", "PORNIRE IN 5H 12", "STINGE IN 1H 00"),
+            plugBadges(base, now, zone)
         )
         val full = base.copy(
-            schedules = listOf(
-                CasaSchedule("a", "10:30", "16:00", true),
-                CasaSchedule("b", "01:00", "02:00", false),
-                CasaSchedule("c", "20:00", "22:15", true)
-            ),
+            nextEvent = CasaNextEvent("e2", "16:00", "off", epoch(2026, 11, 9, 16, 0)),
             countdown = CasaCountdown("off", 1, 6000),
             inchingEnabled = true,
             inchingMinutes = 30,
             offDeadline = CasaOffDeadline(2, 1380, "inching")
         )
         assertEquals(
-            listOf("10:30-16:00", "20:00-22:15", "OPRIRE IN 1H 40", "AUTO 30 MIN", "STINGE IN 23 MIN"),
-            plugBadges(full)
+            listOf("OPRESTE L 16:00", "OPRIRE IN 1H 40", "AUTO 30 MIN", "STINGE IN 23 MIN"),
+            plugBadges(full, now, zone)
         )
         // off_deadline caused by the countdown is already shown
         val cd = full.copy(offDeadline = CasaOffDeadline(2, 6000, "countdown"))
         assertEquals(
-            listOf("10:30-16:00", "20:00-22:15", "OPRIRE IN 1H 40", "AUTO 30 MIN"),
-            plugBadges(cd)
+            listOf("OPRESTE L 16:00", "OPRIRE IN 1H 40", "AUTO 30 MIN"),
+            plugBadges(cd, now, zone)
         )
-        assertTrue(plugBadges(parsePlug(plainJson)).contains("AUTO 15 MIN"))
+        assertTrue(plugBadges(parsePlug(plainJson), now, zone).contains("AUTO 15 MIN"))
+        // fara urmator eveniment nu apare nicio insigna de program
+        assertEquals(listOf("AUTO 15 MIN"), plugBadges(parsePlug(plainJson), now, zone))
     }
 }

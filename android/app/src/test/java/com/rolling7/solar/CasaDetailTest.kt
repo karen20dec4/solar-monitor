@@ -51,11 +51,7 @@ class CasaDetailTest {
     }
 
     @Test
-    fun `interval validation and limit`() {
-        assertEquals("INTERVAL INVALID", casaIntervalError("10:00", "10:00"))
-        assertNull(casaIntervalError("22:00", "06:00"))
-        assertTrue(casaCanAddInterval(5))
-        assertFalse(casaCanAddInterval(6))
+    fun `time text is zero padded`() {
         assertEquals("07:05", casaHm(7, 5))
     }
 

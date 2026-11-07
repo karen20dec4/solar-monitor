@@ -391,7 +391,7 @@ private fun SimpleCasaPlugRow(
     // comutatorul se blocheaza doar la date vechi sau comanda in zbor; `usable` conduce doar afisarea W.
     val usable = plug.online && !stale
     val canSwitch = !stale && !busy
-    val badges = casaBadgeLines(plug, maxLines = 2)
+    val badges = casaBadgeLines(plug, System.currentTimeMillis() / 1000, BucharestZone, maxLines = 2)
     val power = plug.power
     val watts = if (usable && plug.metered && power != null) "${power.roundToInt()} W" else "--- W"
     Row(

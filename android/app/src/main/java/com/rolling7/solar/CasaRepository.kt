@@ -139,22 +139,19 @@ object CasaRepository {
     fun cancelCountdown(token: String, id: String): CasaResult<CasaPlug> =
         command("DELETE", token, id, "/countdown", null)
 
-    fun addInterval(token: String, id: String, start: String, stop: String): CasaResult<CasaPlug> =
-        command("POST", token, id, "/schedules", JSONObject().put("start", start).put("stop", stop))
+    fun addEvent(token: String, id: String, time: String, action: String, days: List<Int>?): CasaResult<CasaPlug> =
+        command("POST", token, id, "/events", casaEventBody(time, action, days))
 
-    fun updateInterval(
-        token: String, id: String, sid: String,
-        enabled: Boolean? = null, start: String? = null, stop: String? = null
-    ): CasaResult<CasaPlug> {
-        val body = JSONObject()
-        if (enabled != null) body.put("enabled", enabled)
-        if (start != null) body.put("start", start)
-        if (stop != null) body.put("stop", stop)
-        return command("PUT", token, id, "/schedules/${enc(sid)}", body)
-    }
+    /** `daily = true` trimite `"days": null` (zilnic); fara `daily`, `days` null lasa zilele neschimbate. */
+    fun updateEvent(
+        token: String, id: String, eid: String,
+        time: String? = null, action: String? = null, days: List<Int>? = null,
+        daily: Boolean = false, enabled: Boolean? = null
+    ): CasaResult<CasaPlug> =
+        command("PUT", token, id, "/events/${enc(eid)}", casaEventUpdateBody(time, action, days, daily, enabled))
 
-    fun deleteInterval(token: String, id: String, sid: String): CasaResult<CasaPlug> =
-        command("DELETE", token, id, "/schedules/${enc(sid)}", null)
+    fun deleteEvent(token: String, id: String, eid: String): CasaResult<CasaPlug> =
+        command("DELETE", token, id, "/events/${enc(eid)}", null)
 
     fun setInching(token: String, id: String, enabled: Boolean, minutes: Int): CasaResult<CasaPlug> =
         command("PUT", token, id, "/inching", JSONObject().put("enabled", enabled).put("minutes", minutes))

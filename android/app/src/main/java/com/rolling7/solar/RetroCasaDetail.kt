@@ -87,10 +87,9 @@ import kotlin.math.roundToInt
 internal const val InchingMinMinutes = 5
 internal const val InchingMaxMinutes = 720
 internal const val InchingStepMinutes = 5
-internal const val MaxIntervals = 6
 internal const val CountdownMaxMinutes = 1440
 private const val InchingDebounceMs = 600L
-private val BucharestZone: ZoneId = ZoneId.of("Europe/Bucharest")
+internal val BucharestZone: ZoneId = ZoneId.of("Europe/Bucharest")
 
 /** Valoarea inchingului dupa un pas (-1 / +1): multiplu de 5, intre 5 si 720 minute. */
 internal fun casaInchingStep(current: Int, direction: Int): Int {
@@ -170,15 +169,6 @@ internal fun casaDeadlineText(seconds: Long): String {
 }
 
 internal fun casaHm(h: Int, m: Int): String = "%02d:%02d".format(Locale.US, h, m)
-
-/** Mesajul de eroare al unui interval nou, sau null daca e bun. Doua ore egale nu sunt un interval. */
-internal fun casaIntervalError(start: String, stop: String): String? =
-    if (start == stop) "INTERVAL INVALID" else null
-
-internal fun casaCanAddInterval(count: Int): Boolean = count < MaxIntervals
-
-internal fun casaScheduleSub(s: CasaSchedule): String =
-    "ZILNIC · PORNESTE ${s.start}, OPRESTE ${s.stop}"
 
 internal fun casaBatteryText(b: Double?): String =
     if (b == null) "BATERIE ?" else "BATERIE ${b.roundToInt()}%"
@@ -588,15 +578,11 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
     var message by remember { mutableStateOf<String?>(null) }
     var messageStamp by remember { mutableLongStateOf(0L) }
     var pendingOn by remember { mutableStateOf<Boolean?>(null) }
-    var pendingEnabled by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var pendingInching by remember { mutableStateOf<Int?>(null) }
     // Grupurile de comenzi aflate in zbor: "power", "countdown", "inching" (atingerile lor se ignora).
     var busy by remember { mutableStateOf<Set<String>>(emptySet()) }
     var action by remember { mutableStateOf<String?>(null) }
     var showDuration by remember { mutableStateOf(false) }
-    var addStage by remember { mutableIntStateOf(0) }
-    var addStart by remember { mutableStateOf("08:00") }
-    var deleteTarget by remember { mutableStateOf<CasaSchedule?>(null) }
     var renaming by remember { mutableStateOf(false) }
     val stale by remember { derivedStateOf { clock.value - lastGoodMs > PlugsStaleMs } }
 
@@ -759,21 +745,6 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
             onMore = { showDuration = true },
             onCancel = { command("countdown") { CasaRepository.cancelCountdown(it, plugId) } }
         )
-        PlugSchedulesCard(
-            plug = p,
-            usable = usable,
-            pendingEnabled = pendingEnabled,
-            onToggle = { s ->
-                val target = !(pendingEnabled[s.id] ?: s.enabled)
-                pendingEnabled = pendingEnabled + (s.id to target)
-                command(onDone = { pendingEnabled = pendingEnabled - s.id }) {
-                    CasaRepository.updateInterval(it, plugId, s.id, enabled = target)
-                }
-            },
-            onDelete = { deleteTarget = it },
-            onAdd = { addStage = 1 },
-            modifier = Modifier.weight(1f)
-        )
         PlugInchingCard(
             enabled = p.inchingEnabled,
             minutes = inchingMinutes,
@@ -825,43 +796,10 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
             )
         }
     }
-    if (addStage == 1) {
-        CasaTimeDialog("INTERVAL: PORNESTE LA", addStart, onCancel = { addStage = 0 }, onOk = {
-            addStart = it
-            addStage = 2
-        })
-    }
-    if (addStage == 2) {
-        val initialStop = remember(addStart) {
-            val h = addStart.substringBefore(':').toInt()
-            val m = addStart.substringAfter(':').toInt()
-            val t = (h * 60 + m + 30) % 1440
-            casaHm(t / 60, t % 60)
-        }
-        CasaTimeDialog("INTERVAL: OPRESTE LA", initialStop, onCancel = { addStage = 0 }, onOk = { stop ->
-            addStage = 0
-            val err = casaIntervalError(addStart, stop)
-            if (err != null) {
-                show(err)
-            } else {
-                val start = addStart
-                command { CasaRepository.addInterval(it, plugId, start, stop) }
-            }
-        })
-    }
     if (renaming && p != null) {
         CasaRenameDialog(current = p.name, onDismiss = { renaming = false }) { name ->
             renaming = false
             command { CasaRepository.renamePlug(it, plugId, name) }
-        }
-    }
-    deleteTarget?.let { s ->
-        CasaDialog("STERGI INTERVALUL?", onDismiss = { deleteTarget = null }) {
-            CasaText("${s.start} → ${s.stop} ZILNIC", 16f, CasaOrange, Modifier.fillMaxWidth(), bold = true, align = TextAlign.Center)
-            CasaDialogButtons(okText = "STERGE", onCancel = { deleteTarget = null }, onOk = {
-                deleteTarget = null
-                command { CasaRepository.deleteInterval(it, plugId, s.id) }
-            })
         }
     }
 }
@@ -1003,101 +941,6 @@ private fun PlugCountdownCard(
                 }
                 CasaKey("ANULEAZA", Modifier.width(104.dp).height(36.dp), accent = RetroRed,
                     fill = CasaRedFillTop to CasaRedFillBottom, enabled = usable, size = 11f, onClick = onCancel)
-            }
-        }
-    }
-}
-
-@Composable
-private fun PlugSchedulesCard(
-    plug: CasaPlug,
-    usable: Boolean,
-    pendingEnabled: Map<String, Boolean>,
-    onToggle: (CasaSchedule) -> Unit,
-    onDelete: (CasaSchedule) -> Unit,
-    onAdd: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    RetroPanelSurface(
-        modifier = modifier,
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-        fillContent = true,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        CasaSectionTitle("PROGRAMARI", "ZILNIC", RetroMuted, 12f)
-        val scrolls = plug.schedules.size > 2 // pe Note 9 incap ~2,7 randuri
-        Column(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .then(if (scrolls) Modifier.verticalScroll(rememberScrollState()) else Modifier)
-        ) {
-            if (plug.schedules.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CasaText("NICIUN INTERVAL", 11f, RetroMuted, spacing = 1.5f)
-                }
-            }
-            plug.schedules.forEachIndexed { i, s ->
-                if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(RetroBrassLight.copy(alpha = 0.25f)))
-                val enabled = pendingEnabled[s.id] ?: s.enabled
-                ScheduleRow(s, enabled, usable, onToggle = { onToggle(s) }, onDelete = { onDelete(s) })
-            }
-        }
-        if (casaCanAddInterval(plug.schedules.size)) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(40.dp)
-                    .alpha(if (usable) 1f else 0.4f)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF2A2412).copy(alpha = 0.8f))
-                    .border(1.dp, RetroBrassLight.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                    .semantics { contentDescription = "Adauga interval" }
-                    .clickable(enabled = usable, onClick = onAdd),
-                contentAlignment = Alignment.Center
-            ) {
-                CasaText("+ ADAUGA INTERVAL", 12f, RetroText, bold = true, spacing = 1.5f)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ScheduleRow(s: CasaSchedule, enabled: Boolean, usable: Boolean, onToggle: () -> Unit, onDelete: () -> Unit) {
-    val timeColor = if (enabled) CasaOrange else RetroSage.copy(alpha = 0.55f)
-    Row(
-        Modifier.fillMaxWidth().height(54.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        RetroLed(color = RetroSage, active = enabled, modifier = Modifier.size(24.dp))
-        Column(Modifier.weight(1f)) {
-            CasaText("${s.start} → ${s.stop}", 17f, timeColor, bold = true, spacing = 1f)
-            CasaText(casaScheduleSub(s), 8f, RetroMuted, spacing = 0.2f)
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CasaText(if (enabled) "ACTIV" else "INACTIV", 9f, if (enabled) RetroSage else RetroMuted, bold = true, spacing = 1f)
-            CasaToggle(
-                checked = enabled,
-                description = "Interval ${s.start}-${s.stop}: ${if (enabled) "dezactiveaza" else "activeaza"}",
-                modifier = Modifier.width(60.dp).height(30.dp),
-                enabled = usable,
-                onClick = onToggle
-            )
-        }
-        Box(
-            Modifier
-                .size(44.dp)
-                .semantics { contentDescription = "Sterge intervalul ${s.start}-${s.stop}" }
-                .clickable(enabled = usable, onClick = onDelete),
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(Modifier.size(24.dp)) {
-                drawCircle(RetroBrassLight.copy(alpha = 0.5f), style = Stroke(1.dp.toPx()))
-                val a = size.minDimension * 0.22f
-                val w = 1.8.dp.toPx()
-                drawLine(RetroMuted, Offset(center.x - a, center.y - a), Offset(center.x + a, center.y + a), w, StrokeCap.Round)
-                drawLine(RetroMuted, Offset(center.x - a, center.y + a), Offset(center.x + a, center.y - a), w, StrokeCap.Round)
             }
         }
     }

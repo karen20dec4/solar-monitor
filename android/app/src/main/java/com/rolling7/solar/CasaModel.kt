@@ -4,10 +4,18 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.text.Normalizer
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Locale
 
-/** Un interval de program al unei prize (ora locala Europe/Bucharest, "HH:MM"). */
-data class CasaSchedule(val id: String, val start: String, val stop: String, val enabled: Boolean)
+/**
+ * Un eveniment al unei prize (ora locala Europe/Bucharest, "HH:MM"): `action` = "on" / "off";
+ * `days` = null (zilnic) sau zilele ISO 1 (luni)..7 (duminica).
+ */
+data class CasaEvent(val id: String, val time: String, val action: String, val days: List<Int>?, val enabled: Boolean)
+
+/** Urmatorul eveniment activ al prizei: `at` = epoch-ul (secunde) la care se executa. */
+data class CasaNextEvent(val id: String, val time: String, val action: String, val at: Long)
 
 /** Numaratoare inversa: `action` = "on" / "off", `at` = epoch-ul la care se executa. */
 data class CasaCountdown(val action: String, val at: Long, val secondsLeft: Long)
@@ -25,7 +33,8 @@ data class CasaPlug(
     val voltage: Double?,
     val current: Double?,
     val energyToday: Double?,
-    val schedules: List<CasaSchedule>,
+    val events: List<CasaEvent>,
+    val nextEvent: CasaNextEvent?,
     val countdown: CasaCountdown?,
     val inchingEnabled: Boolean,
     val inchingMinutes: Int,
@@ -93,13 +102,21 @@ private fun parseStat(o: JSONObject?, key: String): Pair<Double, Long>? {
     return v to t
 }
 
+/** `days` al unui eveniment: null (lipsa sau JSON null) = zilnic, altfel lista zilelor ISO. */
+private fun parseDays(o: JSONObject): List<Int>? {
+    val a = o.optJSONArray("days") ?: return null
+    return (0 until a.length()).map { a.getInt(it) }
+}
+
 internal fun parsePlugObject(j: JSONObject): CasaPlug {
-    val schedules = j.optJSONArray("schedules")?.let { a ->
+    // Un raspuns fara `events` (server vechi) nu are evenimente: lista goala, nu eroare.
+    val events = j.optJSONArray("events")?.let { a ->
         (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map {
-            CasaSchedule(
+            CasaEvent(
                 id = it.requiredString("id"),
-                start = it.requiredString("start"),
-                stop = it.requiredString("stop"),
+                time = it.requiredString("time"),
+                action = it.requiredString("action"),
+                days = parseDays(it),
                 enabled = it.optBoolean("enabled", true)
             )
         }
@@ -115,7 +132,15 @@ internal fun parsePlugObject(j: JSONObject): CasaPlug {
         voltage = j.doubleOrNull("voltage"),
         current = j.doubleOrNull("current"),
         energyToday = j.doubleOrNull("energy_today"),
-        schedules = schedules,
+        events = events,
+        nextEvent = j.objOrNull("next_event")?.let {
+            CasaNextEvent(
+                id = it.requiredString("id"),
+                time = it.requiredString("time"),
+                action = it.requiredString("action"),
+                at = it.getLong("at")
+            )
+        },
         countdown = j.objOrNull("countdown")?.let {
             CasaCountdown(it.requiredString("action"), it.getLong("at"), it.optLong("seconds_left", 0))
         },
@@ -197,10 +222,63 @@ private val CombiningMarks = Regex("\\p{M}+")
 fun retroLabel(name: String): String =
     Normalizer.normalize(name, Normalizer.Form.NFD).replace(CombiningMarks, "").uppercase(Locale.ROOT)
 
-/** Insemnele de sub numele prizei, in ordinea afisarii. */
-fun plugBadges(p: CasaPlug): List<String> {
+/** Cel mult atatea evenimente pe priza (aceeasi limita ca pe server, `MAX_EVENTS`). */
+internal const val MaxEvents = 12
+
+internal fun casaCanAddEvent(count: Int): Boolean = count < MaxEvents
+
+/** Numele scurte ale zilelor; indexul = ziua ISO - 1. */
+internal val CasaDayShort = listOf("L", "MA", "MI", "J", "V", "SA", "DU")
+
+/** Zilele unui eveniment: "ZILNIC", "L-V", "SA · DU" sau numele scurte despartite prin " · ". */
+internal fun casaDaysText(days: List<Int>?): String = when {
+    days == null -> "ZILNIC"
+    days == listOf(1, 2, 3, 4, 5) -> "L-V"
+    else -> days.mapNotNull { CasaDayShort.getOrNull(it - 1) }.joinToString(" · ")
+}
+
+/** "PORNESTE" pentru "on", altfel "OPRESTE". */
+internal fun casaActionText(action: String): String = if (action == "on") "PORNESTE" else "OPRESTE"
+
+/** "OPRESTE 16:00" azi, "OPRESTE L 17:00" in alta zi (data locala a evenimentului fata de azi). */
+internal fun casaNextEventShort(e: CasaNextEvent, nowEpoch: Long, zone: ZoneId): String {
+    val today = Instant.ofEpochSecond(nowEpoch).atZone(zone).toLocalDate()
+    val day = Instant.ofEpochSecond(e.at).atZone(zone)
+    val prefix = if (day.toLocalDate() == today) "" else CasaDayShort[day.dayOfWeek.value - 1] + " "
+    return "${casaActionText(e.action)} $prefix${e.time}"
+}
+
+/** "OPRESTE 16:00 · IN 2H 14" (rand "URMATORUL" din detaliu); in alta zi, ziua scurta inaintea orei. */
+internal fun casaNextEventText(e: CasaNextEvent, nowEpoch: Long, zone: ZoneId): String =
+    "${casaNextEventShort(e, nowEpoch, zone)} · IN ${formatDuration(e.at - nowEpoch)}"
+
+/** Corpul `POST /plugs/<id>/events`: `days` null = zilnic (trimis ca null explicit). */
+internal fun casaEventBody(time: String, action: String, days: List<Int>?): JSONObject =
+    JSONObject().put("time", time).put("action", action).put("days", if (days == null) JSONObject.NULL else JSONArray(days))
+
+/**
+ * Corpul `PUT /plugs/<id>/events/<eid>`: doar ce se schimba. `daily = true` trimite `"days": null`
+ * (si bate `days`); fara `daily` si fara `days`, zilele nu se ating.
+ */
+internal fun casaEventUpdateBody(
+    time: String? = null, action: String? = null, days: List<Int>? = null,
+    daily: Boolean = false, enabled: Boolean? = null
+): JSONObject {
+    val body = JSONObject()
+    if (time != null) body.put("time", time)
+    if (action != null) body.put("action", action)
+    if (daily) body.put("days", JSONObject.NULL) else if (days != null) body.put("days", JSONArray(days))
+    if (enabled != null) body.put("enabled", enabled)
+    return body
+}
+
+/**
+ * Insemnele de sub numele prizei, in ordinea afisarii: urmatorul eveniment ("OPRESTE 17:00", cu ziua
+ * scurta daca nu e azi), apoi numaratoarea, inchingul si termenul de oprire.
+ */
+fun plugBadges(p: CasaPlug, nowEpoch: Long, zone: ZoneId): List<String> {
     val out = ArrayList<String>()
-    p.schedules.filter { it.enabled }.forEach { out += "${it.start}-${it.stop}" }
+    p.nextEvent?.let { out += casaNextEventShort(it, nowEpoch, zone) }
     p.countdown?.let {
         out += (if (it.action == "on") "PORNIRE IN " else "OPRIRE IN ") + formatDuration(it.secondsLeft)
     }

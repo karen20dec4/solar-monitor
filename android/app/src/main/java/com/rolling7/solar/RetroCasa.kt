@@ -113,19 +113,21 @@ internal enum class CasaBadgeKind { SCHEDULE, TIMER, LOOP, OFFLINE, MORE }
 
 internal data class CasaBadge(val kind: CasaBadgeKind, val text: String)
 
-private val ScheduleBadge = Regex("^\\d\\d:\\d\\d-\\d\\d:\\d\\d$")
+private val ScheduleBadge = Regex("^(PORNESTE|OPRESTE)( (L|MA|MI|J|V|SA|DU))? \\d\\d:\\d\\d$")
 
 /**
  * Randurile de sub numele prizei (max [maxLines]): "OFFLINE" daca nu raspunde, apoi insemnele din
- * [plugBadges] cu textul complet ("PROGRAM 10:30-16:00 ZILNIC", "INCHING: STINGE DUPA 30 MIN").
+ * [plugBadges] ("OPRESTE 17:00", "PORNESTE SA 09:00", "INCHING: STINGE DUPA 30 MIN").
  * Daca nu incap, ultimul rand spune cate au ramas ascunse.
  */
-internal fun casaBadgeLines(p: CasaPlug, maxLines: Int = MaxBadgeLines): List<CasaBadge> {
+internal fun casaBadgeLines(
+    p: CasaPlug, nowEpoch: Long, zone: ZoneId, maxLines: Int = MaxBadgeLines
+): List<CasaBadge> {
     val all = ArrayList<CasaBadge>()
     if (!p.online) all += CasaBadge(CasaBadgeKind.OFFLINE, "OFFLINE")
-    plugBadges(p).forEach { b ->
+    plugBadges(p, nowEpoch, zone).forEach { b ->
         all += when {
-            ScheduleBadge.matches(b) -> CasaBadge(CasaBadgeKind.SCHEDULE, "PROGRAM $b ZILNIC")
+            ScheduleBadge.matches(b) -> CasaBadge(CasaBadgeKind.SCHEDULE, b)
             b.startsWith("AUTO ") -> CasaBadge(CasaBadgeKind.LOOP, "INCHING: STINGE DUPA ${b.removePrefix("AUTO ")}")
             else -> CasaBadge(CasaBadgeKind.TIMER, b)
         }
@@ -583,7 +585,7 @@ private fun CasaPlugRow(
 ) {
     val online = plug.online
     val usable = online && !stale
-    val badges = casaBadgeLines(plug, maxLines = 2)
+    val badges = casaBadgeLines(plug, System.currentTimeMillis() / 1000, BucharestZone, maxLines = 2)
     val power = plug.power
     val watts = if (usable && plug.metered && power != null) power.roundToInt().toString() else "---"
     val wattsColor = when {
