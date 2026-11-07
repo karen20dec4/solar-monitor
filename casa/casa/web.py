@@ -337,7 +337,7 @@ def create_app(services: Optional[Services] = None) -> Flask:
             return resp
         except KeyError as e:
             msg = str(e.args[0]) if e.args else ""
-            if not msg.startswith(("interval necunoscut", "priza necunoscuta")):
+            if not msg.startswith(("eveniment necunoscut", "priza necunoscuta")):
                 raise   # alt KeyError = defect, nu "negasit"
             raise ApiError(404, msg)
         except CorruptStore:
@@ -413,34 +413,6 @@ def create_app(services: Optional[Services] = None) -> Flask:
     def plug_countdown_cancel(pid):
         known_plug(pid)
         return run(pid, lambda: controller.cancel_countdown(pid))
-
-    @app.post("/plugs/<pid>/schedules")
-    @require_token
-    def schedule_add(pid):
-        known_plug(pid)
-        data = _body(("start", "stop"), ("enabled",))
-        start, stop = _hhmm(data, "start"), _hhmm(data, "stop")
-        enabled = _bool(data, "enabled") if "enabled" in data else True
-        return run(pid, lambda: controller.add_interval(pid, start, stop, enabled))
-
-    @app.put("/plugs/<pid>/schedules/<sid>")
-    @require_token
-    def schedule_update(pid, sid):
-        known_plug(pid)
-        data = _body((), ("start", "stop", "enabled"), at_least_one=True)
-        changes = {}
-        for key in ("start", "stop"):
-            if key in data:
-                changes[key] = _hhmm(data, key)
-        if "enabled" in data:
-            changes["enabled"] = _bool(data, "enabled")
-        return run(pid, lambda: controller.update_interval(pid, sid, **changes))
-
-    @app.delete("/plugs/<pid>/schedules/<sid>")
-    @require_token
-    def schedule_delete(pid, sid):
-        known_plug(pid)
-        return run(pid, lambda: controller.delete_interval(pid, sid))
 
     def _new_name() -> str:
         name = clean_user_name(_body(("name",))["name"])

@@ -57,19 +57,6 @@ class FakeController:
     def set_inching(self, pid, enabled, minutes):
         return self._do("inching", pid, enabled, minutes)
 
-    def add_interval(self, pid, start, stop, enabled=True):
-        return self._do("add", pid, start, stop, enabled)
-
-    def update_interval(self, pid, sid, **changes):
-        if sid == "nope":
-            raise KeyError("interval necunoscut: nope")
-        return self._do("update", pid, sid, **changes)
-
-    def delete_interval(self, pid, sid):
-        if sid == "nope":
-            raise KeyError("interval necunoscut: nope")
-        return self._do("delete", pid, sid)
-
     def rename(self, pid, name):
         return dict(self._do("rename", pid, name), name=name)
 
@@ -160,7 +147,7 @@ class TestAuthRoutes(WebCase):
                 self.assertEqual(r.headers.get("WWW-Authenticate"), 'Bearer realm="casa"',
                                  f"{method} {url}")
                 checked += 1
-        self.assertEqual(checked, 13)
+        self.assertEqual(checked, 10)
 
     def test_bad_and_malformed_token_is_401(self):
         for hdr in ({"Authorization": "Bearer nu-exista"}, {"Authorization": "Basic abc"},
@@ -270,17 +257,10 @@ class TestPlugRoutes(WebCase):
         self.assertEqual(self.c.put("/plugs/p1/countdown", json={"action": "off", "minutes": 30},
                                     headers=h).status_code, 200)
         self.assertEqual(self.c.delete("/plugs/p1/countdown", headers=h).status_code, 200)
-        self.assertEqual(self.c.post("/plugs/p1/schedules", json={"start": "10:30", "stop": "16:00"},
-                                     headers=h).status_code, 200)
-        self.assertEqual(self.c.put("/plugs/p1/schedules/ab12", json={"enabled": False},
-                                    headers=h).status_code, 200)
-        self.assertEqual(self.c.delete("/plugs/p1/schedules/ab12", headers=h).status_code, 200)
         self.assertEqual(self.c.put("/plugs/p1/inching", json={"enabled": True, "minutes": 45},
                                     headers=h).status_code, 200)
         names = [c[0] for c in self.ctl.calls]
-        self.assertEqual(names, ["countdown", "cancel", "add", "update", "delete", "inching"])
-        self.assertEqual(self.ctl.calls[2][2], ("10:30", "16:00", True))
-        self.assertEqual(self.ctl.calls[3][3], {"enabled": False})
+        self.assertEqual(names, ["countdown", "cancel", "inching"])
 
     def test_validation_errors_are_400(self):
         h = self.h()
@@ -293,15 +273,6 @@ class TestPlugRoutes(WebCase):
             ("put", "/plugs/p1/countdown", {"action": "off", "minutes": 5.5}),
             ("put", "/plugs/p1/countdown", {"action": "off", "minutes": True}),
             ("put", "/plugs/p1/countdown", {"action": "toggle", "minutes": 5}),
-            ("post", "/plugs/p1/schedules", {"start": "25:00", "stop": "16:00"}),
-            ("post", "/plugs/p1/schedules", {"start": "10:60", "stop": "16:00"}),
-            ("post", "/plugs/p1/schedules", {"start": "9:30", "stop": "16:00"}),
-            ("post", "/plugs/p1/schedules", {"start": "10:30", "stop": "16:00\n"}),
-            ("post", "/plugs/p1/schedules", {"start": "10:30", "stop": "16:00", "enabled": "yes"}),
-            ("post", "/plugs/p1/schedules", {"start": "10:30"}),
-            ("put", "/plugs/p1/schedules/ab12", {}),
-            ("put", "/plugs/p1/schedules/ab12", {"start": "xx"}),
-            ("put", "/plugs/p1/schedules/ab12", {"colour": "red"}),
             ("put", "/plugs/p1/inching", {"enabled": True, "minutes": 721}),
             ("put", "/plugs/p1/inching", {"enabled": 1, "minutes": 10}),
             ("put", "/plugs/p1/inching", {"enabled": True}),
@@ -317,26 +288,28 @@ class TestPlugRoutes(WebCase):
         self.assertEqual(self.ctl.calls, [])
 
     def test_controller_value_error_is_400(self):
-        self.ctl.raise_value = "cel mult 6 intervale pe priza"
-        r = self.c.post("/plugs/p1/schedules", json={"start": "10:30", "stop": "16:00"}, headers=self.h())
+        self.ctl.raise_value = "minute inching invalide"
+        r = self.c.put("/plugs/p1/inching", json={"enabled": True, "minutes": 45}, headers=self.h())
         self.assertEqual(r.status_code, 400)
-        self.assertEqual(r.get_json(), {"error": "cel mult 6 intervale pe priza"})
+        self.assertEqual(r.get_json(), {"error": "minute inching invalide"})
 
     def test_unknown_plug_404(self):
         h = self.h()
         for method, url, body in [("post", "/plugs/zzz/switch", {"on": True}),
                                   ("delete", "/plugs/zzz/countdown", None),
-                                  ("put", "/plugs/zzz/inching", {"enabled": True, "minutes": 5}),
-                                  ("delete", "/plugs/zzz/schedules/ab12", None)]:
+                                  ("put", "/plugs/zzz/inching", {"enabled": True, "minutes": 5})]:
             r = getattr(self.c, method)(url, json=body, headers=h)
             self.assertEqual(r.status_code, 404, url)
             self.assertIn("error", r.get_json())
 
-    def test_unknown_schedule_404(self):
-        r = self.c.delete("/plugs/p1/schedules/nope", headers=self.h())
-        self.assertEqual(r.status_code, 404)
-        r = self.c.put("/plugs/p1/schedules/nope", json={"enabled": True}, headers=self.h())
-        self.assertEqual(r.status_code, 404)
+    def test_schedule_routes_are_gone(self):
+        # intervalele au fost inlocuite de evenimente; aplicatia <= 3.43 doar citeste "schedules": []
+        h = self.h()
+        for method, url in (("post", "/plugs/p1/schedules"), ("put", "/plugs/p1/schedules/ab12"),
+                            ("delete", "/plugs/p1/schedules/ab12")):
+            r = getattr(self.c, method)(url, json={"start": "10:30", "stop": "16:00"}, headers=h)
+            self.assertIn(r.status_code, (404, 405), url)
+        self.assertEqual(self.ctl.calls, [])
 
     def test_command_rate_limit_429(self):
         self.limiter = RateLimiter(3, 3.0)
@@ -555,6 +528,28 @@ class TestBuildServices(unittest.TestCase):
             svc = build_services(self.cfg(False))
         self.addCleanup(svc.shutdown)
         self.assertEqual(svc.controller.plug_view("bfplug1")["countdown"], None)
+
+    def test_demo_state_with_old_intervals_is_migrated_and_stays_demo_marked(self):
+        demo_path = os.path.join(self.dir, "state.demo.json")
+        with open(demo_path, "w") as f:
+            json.dump({"demo": True, "plugs": {"bfplug1": {
+                "schedules": [{"id": "ab12", "start": "10:30", "stop": "16:00", "enabled": True}],
+                "last_done": {}, "started_by": None, "cutoff": {}}}}, f)
+        svc = build_services(self.cfg(True))
+        view = svc.controller.plug_view("bfplug1")
+        svc.shutdown()
+        self.assertEqual([e["id"] for e in view["events"]], ["ab12s", "ab12e"])
+        self.assertEqual(view["schedules"], [])
+        with open(demo_path) as f:
+            data = json.load(f)
+        self.assertIs(data["demo"], True)                    # marcajul demo ramane
+        self.assertNotIn("schedules", data["plugs"]["bfplug1"])
+        # mutat in state.json, modul real il refuza in continuare
+        os.replace(demo_path, os.path.join(self.dir, "state.json"))
+        boom = mock.Mock(side_effect=AssertionError("nu trebuia construit"))
+        with mock.patch("casa.influx.CasaInflux", boom), mock.patch("casa.cloud.CloudSession", boom):
+            with self.assertRaises(StateIsDemo):
+                build_services(self.cfg(False))
 
 
 if __name__ == "__main__":

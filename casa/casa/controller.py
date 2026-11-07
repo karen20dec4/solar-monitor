@@ -1,12 +1,16 @@
-"""Programatorul prizelor: comenzi, programari, countdown, inching, fronturi ratate.
+"""Programatorul prizelor: comenzi, evenimente programate, countdown, inching, evenimente ratate.
 
-Starea care trebuie sa supravietuiasca unei reporniri (programari, countdown, inching,
-ultimul front executat) sta in state.json (JsonStore). Starea de moment a prizei
+Starea care trebuie sa supravietuiasca unei reporniri (evenimente, countdown, inching,
+ultimul eveniment consumat) sta in state.json (JsonStore). Starea de moment a prizei
 (citirea, erori, ce s-a scris in DP-ul de countdown) sta doar in memorie.
 
+Un eveniment (ora + zile + PORNESTE/OPRESTE) actioneaza doar la ora lui; intre evenimente priza
+asculta de buton si de aplicatie. Un eveniment ratat se judeca dupa cel mai recent eveniment scadent.
+
 Reguli de siguranta:
-  * oprirea conteaza mai mult decat pornirea: un "stop" ratat se executa oricat de vechi,
-    se reincearca la 30 s fara limita; un "start" doar cat timp suntem in interval;
+  * oprirea conteaza mai mult decat pornirea: un OPRESTE ratat se executa oricat de tarziu (in
+    lookback) si se reincearca la 30 s fara limita cat timp e cel mai recent eveniment; un PORNESTE
+    ratat doar cat timp e inca cel mai recent eveniment scadent;
   * orice comanda catre priza trece prin worker-ul ei (o singura conexiune);
   * termenul de oprire cel mai apropiat se scrie si in countdown-ul intern al prizei.
 """
@@ -21,9 +25,9 @@ from zoneinfo import ZoneInfo
 
 from .devices import DeviceInfo
 from .plugs import PlugReading, encode_inching
-from .schedule import (Interval, OffDeadline, edges_between, interval_end, missed_edges,
-                       nearest_off)
-from .store import JsonStore
+from .schedule import (Event, OffDeadline, events_conflict, nearest_off, next_occurrence,
+                       normalize_days, occurrences_between, parse_hhmm)
+from .store import CorruptStore, JsonStore
 
 log = logging.getLogger("casa.controller")
 UTC = timezone.utc
@@ -31,7 +35,7 @@ UTC = timezone.utc
 TICK_S = 5
 RETRY_S = 30
 CMD_TIMEOUT_S = 10
-MAX_INTERVALS = 6
+MAX_EVENTS = 12
 COUNTDOWN_MAX_MIN = 1440
 INCHING_MAX_MIN = 720
 DP_MAX_S = 86400
@@ -42,7 +46,7 @@ RESYNC_EVERY = timedelta(seconds=60)
 # Un countdown "porneste" care nu a putut fi executat se abandoneaza dupa 30 min de intarziere
 # (o pornire tarzie dupa o pana lunga ar fi o surpriza); se afiseaza o eroare.
 ON_COUNTDOWN_GIVE_UP = timedelta(minutes=30)
-LOOKBACK = timedelta(days=2)      # ferestrele dureaza cel mult ~25 h
+LOOKBACK = timedelta(days=2)      # cat de veche poate fi o aparitie ratata si totusi executata
 
 _DEFAULT = {"plugs": {}}
 
@@ -52,19 +56,13 @@ class CommandError(Exception):
 
 
 def _blank() -> dict:
-    return {"schedules": [], "countdown": None,
+    return {"events": [], "countdown": None,
             "inching": {"enabled": False, "minutes": 30},
-            "last_done": {}, "started_by": None,
             "inching_off_at": None, "last_manual_at": None,
-            # termen de oprire propriu: "ramane pornita pana la vechiul stop" dupa ce intervalul
-            # care tinea priza a fost sters/dezactivat/editat. NU sta in slotul countdown
-            # (vizibil si modificabil de utilizator), ca un countdown nou sa nu-l stearga.
-            "release_off_at": None,
-            # last_done = fronturi "consumate" (executate sau sarite); last_start_at = ultimul
-            # start EXECUTAT cu adevarat; cutoff = momentul crearii/editarii unui interval
-            # (fronturile lui mai vechi nu se mai executa). Sunt separate ca o creare/editare
-            # sa nu poata anula un stop in asteptare.
-            "last_start_at": None, "cutoff": {}}
+            # event_cutoff: id eveniment -> momentul crearii/editarii/activarii; aparitiile lui
+            # mai vechi (at <= cutoff) nu se executa niciodata (nimic retroactiv).
+            # last_event_at: aparitiile cu at <= last_event_at sunt consumate (executate sau sarite).
+            "event_cutoff": {}, "last_event_at": None}
 
 
 def _fill(p: dict) -> dict:
@@ -96,6 +94,54 @@ def _int_in(value, lo: int, hi: int, what: str) -> int:
     return value
 
 
+# Cheile starii vechi (intervale): dispar la migrare. `schedules` se converteste, restul se arunca.
+_LEGACY_KEYS = ("schedules", "last_done", "started_by", "release_off_at", "last_start_at", "cutoff")
+
+
+def migrate_state(data: dict, now: datetime) -> bool:
+    """Intervalele vechi -> evenimente, pe loc. True daca s-a schimbat ceva.
+
+    Fiecare interval {id, start, stop, enabled} devine PORNESTE (`<id>s`, ora start) si OPRESTE
+    (`<id>e`, ora stop), zilnice, cu acelasi `enabled`. `last_event_at = now`: nimic din ce era
+    scadent pana acum nu se executa retroactiv la prima pornire. Starea de executie veche (last_done,
+    started_by, release_off_at, last_start_at, cutoff) se arunca. Se ating doar prizele cu chei vechi;
+    restul fisierului (ex. marcajul `demo`) ramane neschimbat."""
+    plugs = data.get("plugs") if isinstance(data, dict) else None
+    if not isinstance(plugs, dict):
+        return False
+    changed = False
+    for pid, p in plugs.items():
+        if not isinstance(p, dict) or not any(k in p for k in _LEGACY_KEYS):
+            continue
+        events = p.get("events")
+        if not isinstance(events, list):
+            events = []
+        taken = {e.get("id") for e in events if isinstance(e, dict)}
+        for s in p.get("schedules") or []:
+            try:
+                iid, start, stop, enabled = s["id"], s["start"], s["stop"], bool(s["enabled"])
+                if not isinstance(iid, str):
+                    raise TypeError("id de interval ne-text")
+                parse_hhmm(start)
+                parse_hhmm(stop)
+            except (KeyError, TypeError, ValueError):
+                log.warning("interval invalid ignorat la migrare (priza %s): %r", pid, s)
+                continue
+            for suffix, hhmm, action in (("s", start, "on"), ("e", stop, "off")):
+                if iid + suffix not in taken:
+                    events.append({"id": iid + suffix, "time": hhmm, "action": action,
+                                   "days": None, "enabled": enabled})
+                    taken.add(iid + suffix)
+        p["events"] = events
+        if not isinstance(p.get("event_cutoff"), dict):
+            p["event_cutoff"] = {}
+        p["last_event_at"] = now.astimezone(UTC).isoformat()
+        for k in _LEGACY_KEYS:
+            p.pop(k, None)
+        changed = True
+    return changed
+
+
 @dataclass
 class _Rt:
     """Starea de moment a unei prize (nu se salveaza)."""
@@ -106,7 +152,7 @@ class _Rt:
     cmd_error: Optional[str] = None      # ramane pana reuseste o comanda
     poll_error: Optional[str] = None     # cat timp e offline
     needs_missed: bool = True            # la pornire si la fiecare reconectare
-    retry_at: Optional[datetime] = None  # reincercare front esuat
+    retry_at: Optional[datetime] = None  # reincercare eveniment esuat
     cd_written: Optional[int] = None     # termenul (epoch) scris in DP-ul de countdown
     cd_capped: bool = False
     cd_dirty: bool = False               # priza oprita cu un DP scris: de anulat (0)
@@ -115,7 +161,7 @@ class _Rt:
     off_sent_at: Optional[datetime] = None
     offline_since: Optional[datetime] = None
     # UN singur ritm de reincercare pe priza, respectat de TOATE caile automate
-    # (fronturi, countdown, inching): cel mult o incercare la 30 s cat timp esueaza.
+    # (evenimente, countdown, inching): cel mult o incercare la 30 s cat timp esueaza.
     next_cmd_try: Optional[datetime] = None
 
 
@@ -134,6 +180,21 @@ class Controller:
         self._last_tick: Optional[datetime] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """O singura data, la pornire: intervalele din formatul vechi devin evenimente. Nu scrie
+        nimic cand nu e nimic de convertit. Un fisier stricat sau ilizibil nu opreste serviciul
+        (senzorii merg mai departe); ramane de rezolvat de mana, ca si pana acum."""
+        now = self.clock()
+        try:
+            if not migrate_state(self.store.load(_DEFAULT), now):
+                return
+            self.store.update(lambda d: migrate_state(d, now), _DEFAULT)
+        except (CorruptStore, OSError):
+            log.exception("migrarea starii (intervale -> evenimente) a esuat")
+        else:
+            log.warning("intervalele prizelor au fost convertite in evenimente")
 
     # ------------------------------------------------------------------ ciclu de viata
     def start(self) -> None:
@@ -175,21 +236,15 @@ class Controller:
         return self.store.update(apply, _DEFAULT)["plugs"][pid]
 
     @staticmethod
-    def _intervals(st: dict) -> dict:
-        out = {}
-        for s in st["schedules"]:
+    def _events(st: dict) -> list:
+        """Evenimentele din stare ca obiecte `Event`; un eveniment stricat se ignora (cu avertisment)."""
+        out = []
+        for e in st["events"]:
             try:
-                out[s["id"]] = Interval(s["id"], s["start"], s["stop"], bool(s["enabled"]))
-            except (KeyError, ValueError):
-                log.warning("interval invalid ignorat: %r", s)
+                out.append(Event.from_dict(e))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                log.warning("eveniment invalid ignorat: %r", e)
         return out
-
-    def _window_end(self, iv: Interval, now: datetime) -> Optional[datetime]:
-        """Sfarsitul ferestrei intervalului care contine `now`, sau None."""
-        try:
-            return interval_end(iv, now, self.tz)
-        except ValueError:
-            return None
 
     def _set(self, pid: str, **kw) -> None:
         """Scrie campuri din starea de moment, sub lock."""
@@ -321,8 +376,6 @@ class Controller:
         self._set(pid, cd_written=None)
         def f(p):
             inch = p["inching"]
-            if not only_if_unset:
-                p["release_off_at"] = None   # o pornire reala invalideaza un termen de eliberare vechi
             if only_if_unset and (p["inching_off_at"] is not None or not inch["enabled"]):
                 return
             p["inching_off_at"] = (_epoch(now) + inch["minutes"] * 60) if inch["enabled"] else None
@@ -335,28 +388,19 @@ class Controller:
                 rt.cd_dirty = True        # un DP armat pe o priza oprita trebuie anulat (0)
             rt.cd_written = None
         def f(p):
-            p["started_by"] = None
             p["inching_off_at"] = None
-            p["release_off_at"] = None
             if p["countdown"] and p["countdown"].get("action") == "off":
                 p["countdown"] = None
         self._mut(pid, f)
 
     # ------------------------------------------------------------------ vederi
     def _candidates(self, st: dict, now: datetime) -> list:
-        """Termenele la care serverul va opri priza (cel mai apropiat castiga). Sfarsitul unui
-        interval conteaza pentru ORICE interval a carui fereastra contine `now` si al carui
-        stop ar actiona (nu il tine alt interval) - exact ce va face frontul de stop."""
+        """Termenele la care serverul va opri priza (cel mai apropiat castiga): urmatorul eveniment
+        OPRESTE activ, inching, countdown "opreste"."""
         c = []
-        sb = st["started_by"]
-        for iv in self._intervals(st).values():
-            if not iv.enabled or (sb is not None and sb != iv.id):
-                continue
-            end = self._window_end(iv, now)
-            if end:
-                c.append(OffDeadline(end, "schedule"))
-        if st["release_off_at"] is not None:
-            c.append(OffDeadline(_from_epoch(st["release_off_at"]), "schedule"))
+        o = next_occurrence(self._events(st), now, self.tz, action="off")
+        if o is not None:
+            c.append(OffDeadline(o.at, "schedule"))
         if st["inching_off_at"] is not None:
             c.append(OffDeadline(_from_epoch(st["inching_off_at"]), "inching"))
         cd = st["countdown"]
@@ -376,6 +420,8 @@ class Controller:
         live = metered and online and r is not None
         cd = st["countdown"]
         nd = nearest_off(self._candidates(st, now)) if on else None
+        events = self._events(st)
+        nxt = next_occurrence(events, now, self.tz)
         return {
             "id": pid,
             "name": dev.name,
@@ -385,8 +431,12 @@ class Controller:
             "power": r.power if live else None,
             "voltage": r.voltage if live else None,
             "current": r.current if live else None,
-            "schedules": [{"id": s["id"], "start": s["start"], "stop": s["stop"],
-                           "enabled": bool(s["enabled"])} for s in st["schedules"]],
+            # cheia veche, goala: aplicatia <= 3.43 afiseaza o sectiune de programari goala
+            "schedules": [],
+            "events": [e.to_dict() for e in sorted(events, key=lambda e: (e.time, e.days or ()))],
+            "next_event": None if nxt is None else {
+                "id": nxt.event_id, "time": next(e.time for e in events if e.id == nxt.event_id),
+                "action": nxt.action, "at": _epoch(nxt.at)},
             "countdown": None if not cd else {
                 "action": cd["action"], "at": int(cd["at"]),
                 "seconds_left": max(0, int(cd["at"] - now.timestamp()))},
@@ -403,17 +453,14 @@ class Controller:
 
     # ------------------------------------------------------------------ comenzi publice
     def switch(self, pid: str, on: bool) -> dict:
-        # O comanda manuala e decizia utilizatorului: o pornire manuala dupa ce intervalul
-        # care tinea priza a fost sters/dezactivat ramane fara termen (daca nu se aplica
-        # inching), la fel ca o pornire manuala in afara oricarui interval.
+        # O comanda manuala e decizia utilizatorului: anuleaza countdown-ul si bate orice eveniment
+        # mai vechi (last_manual_at); evenimentele ramase nu se ating.
         self._dev(pid)
         with self._plock[pid]:
             now = self.clock()
             self._send_switch(pid, on)          # CommandError: nimic nu se schimba
             def f(p):
                 p["countdown"] = None
-                p["started_by"] = None
-                p["release_off_at"] = None
                 p["last_manual_at"] = now.isoformat()
                 if not on:
                     p["inching_off_at"] = None
@@ -465,111 +512,81 @@ class Controller:
             self._after(pid)
         return self.plug_view(pid)
 
-    def add_interval(self, pid: str, start: str, stop: str, enabled: bool = True) -> dict:
+    @staticmethod
+    def _check_conflict(others: list, ev: Event) -> None:
+        for o in others:
+            if events_conflict(ev, o):
+                raise ValueError(f"conflict: exista deja un eveniment activ la {ev.time} in aceleasi zile")
+
+    @staticmethod
+    def _find_event(st: dict, event_id: str) -> Optional[dict]:
+        return next((e for e in st["events"] if isinstance(e, dict) and e.get("id") == event_id), None)
+
+    def add_event(self, pid: str, time: str, action: str, days, enabled: bool = True) -> dict:
         self._dev(pid)
         with self._plock[pid]:
+            now = self.clock()
             st = self._get(pid)
-            if len(st["schedules"]) >= MAX_INTERVALS:
-                raise ValueError(f"cel mult {MAX_INTERVALS} intervale pe priza")
-            taken = {s["id"] for s in st["schedules"]}
-            iid = secrets.token_hex(2)
-            while iid in taken:
-                iid = secrets.token_hex(2)
-            iv = Interval(iid, start, stop, bool(enabled))  # valideaza formatul
-            now = self.clock().isoformat()
+            taken = {e.get("id") for e in st["events"] if isinstance(e, dict)}
+            eid = secrets.token_hex(2)
+            while eid in taken:
+                eid = secrets.token_hex(2)
+            ev = Event(eid, time, action, normalize_days(days), bool(enabled))  # valideaza
+            if len(st["events"]) >= MAX_EVENTS:
+                raise ValueError(f"cel mult {MAX_EVENTS} evenimente pe priza")
+            self._check_conflict(self._events(st), ev)
+
             def f(p):
-                p["schedules"].append({"id": iv.id, "start": iv.start, "stop": iv.stop,
-                                       "enabled": iv.enabled})
-                p["cutoff"][iv.id] = now      # fronturile trecute ale unui interval nou nu se executa
+                p["events"].append(ev.to_dict())
+                p["event_cutoff"][ev.id] = now.isoformat()   # aparitiile trecute ale unui eveniment nou nu se executa
             self._mut(pid, f)
             self._after(pid)
         return self.plug_view(pid)
 
-    @staticmethod
-    def _earlier_release(p: dict, at: int) -> None:
-        cur = p["release_off_at"]
-        p["release_off_at"] = at if cur is None else min(cur, at)
-
-    def _release_holder(self, pid: str, now: datetime, old: Interval,
-                        new_end: Optional[datetime], retired: bool) -> Optional[int]:
-        """Intervalul `old` tine priza (started_by) si e editat/dezactivat/sters.
-        Priza nu ramane NICIODATA pornita fara termen. Intoarce (epoch) momentul
-        pentru `release_off_at`, sau None daca intervalul ramane valabil.
-          * editat, fereastra noua contine `now`  -> ramane started_by, termen = noul sfarsit;
-          * editat, fereastra noua nu mai contine -> oprire acum;
-          * dezactivat / sters                     -> ramane pornita pana la vechiul stop."""
-        if new_end is not None and not retired:
-            return None
-        old_end = self._window_end(old, now) if retired else None
-        return _epoch(old_end or now)
-
-    def update_interval(self, pid: str, interval_id: str, **changes) -> dict:
+    def update_event(self, pid: str, event_id: str, **changes) -> dict:
         self._dev(pid)
-        unknown = set(changes) - {"start", "stop", "enabled"}
+        unknown = set(changes) - {"time", "action", "days", "enabled"}
         if unknown:
             raise ValueError(f"campuri necunoscute: {sorted(unknown)}")
         with self._plock[pid]:
             now = self.clock()
             st = self._get(pid)
-            cur = next((s for s in st["schedules"] if s["id"] == interval_id), None)
+            cur = self._find_event(st, event_id)
             if cur is None:
-                raise KeyError(f"interval necunoscut: {interval_id}")
+                raise KeyError(f"eveniment necunoscut: {event_id}")
             new = dict(cur)
             new.update(changes)
-            iv = Interval(interval_id, new["start"], new["stop"], bool(new["enabled"]))
-            old = Interval(interval_id, cur["start"], cur["stop"], bool(cur["enabled"]))
-            changed = (iv.start, iv.stop, iv.enabled) != (old.start, old.stop, old.enabled)
-            new_end = self._window_end(iv, now) if iv.enabled else None
-            off_at = None
-            if changed and st["started_by"] == interval_id and self._rt[pid].on is not False:
-                off_at = self._release_holder(pid, now, old, new_end, retired=not iv.enabled)
+            ev = Event(event_id, new.get("time"), new.get("action"), normalize_days(new.get("days")),
+                       bool(new.get("enabled")))                    # valideaza
+            self._check_conflict(self._events(st), ev)
+            try:
+                changed = ev.to_dict() != Event.from_dict(cur).to_dict()
+            except (AttributeError, KeyError, TypeError, ValueError):
+                changed = True                                      # evenimentul stocat era stricat
+
             def f(p):
-                for s in p["schedules"]:
-                    if s["id"] == interval_id:
-                        s.update({"start": iv.start, "stop": iv.stop, "enabled": iv.enabled})
+                p["events"] = [ev.to_dict() if isinstance(e, dict) and e.get("id") == event_id else e
+                               for e in p["events"]]
                 if changed:
-                    p["cutoff"][interval_id] = now.isoformat()
-                    if p["started_by"] == interval_id and new_end is None:
-                        p["started_by"] = None
-                if off_at is not None:
-                    self._earlier_release(p, off_at)
+                    # editat/activat: aparitiile lui de pana acum nu se mai executa (nimic retroactiv)
+                    p["event_cutoff"][event_id] = now.isoformat()
             self._mut(pid, f)
-            self._flush_due(pid, now, off_at)
+            self._after(pid)
         return self.plug_view(pid)
 
-    def delete_interval(self, pid: str, interval_id: str) -> dict:
+    def delete_event(self, pid: str, event_id: str) -> dict:
         self._dev(pid)
         with self._plock[pid]:
-            now = self.clock()
-            st = self._get(pid)
-            cur = next((s for s in st["schedules"] if s["id"] == interval_id), None)
-            if cur is None:
-                raise KeyError(f"interval necunoscut: {interval_id}")
-            off_at = None
-            if st["started_by"] == interval_id and self._rt[pid].on is not False:
-                old = Interval(interval_id, cur["start"], cur["stop"], bool(cur["enabled"]))
-                off_at = self._release_holder(pid, now, old, None, retired=True)
-            def f(p):
-                p["schedules"] = [s for s in p["schedules"] if s["id"] != interval_id]
-                p["last_done"].pop(interval_id, None)
-                p["cutoff"].pop(interval_id, None)
-                if p["started_by"] == interval_id:
-                    p["started_by"] = None
-                if off_at is not None:
-                    self._earlier_release(p, off_at)
-            self._mut(pid, f)
-            self._flush_due(pid, now, off_at)
-        return self.plug_view(pid)
+            if self._find_event(self._get(pid), event_id) is None:
+                raise KeyError(f"eveniment necunoscut: {event_id}")
 
-    def _flush_due(self, pid: str, now: datetime, off_at: Optional[int]) -> None:
-        """Dupa o editare: daca s-a cerut oprire imediata o incearca acum (esecul ramane in
-        release_off_at si se reincearca la 30 s), apoi rescrie termenul pe priza."""
-        try:
-            if off_at is not None and off_at <= _epoch(now):
-                self._due_off(pid, now, "release_off_at", force=True)
-        except Exception:  # noqa: BLE001
-            log.exception("oprire imediata esuata pentru %s", pid)
-        self._after(pid)
+            def f(p):
+                p["events"] = [e for e in p["events"]
+                               if not (isinstance(e, dict) and e.get("id") == event_id)]
+                p["event_cutoff"].pop(event_id, None)
+            self._mut(pid, f)
+            self._after(pid)
+        return self.plug_view(pid)
 
     def _after(self, pid: str) -> None:
         """Dupa o modificare: recalculeaza si rescrie termenul de oprire (nu ridica erori)."""
@@ -593,14 +610,12 @@ class Controller:
         rt = self._rt[pid]
         self._due_countdown(pid, now)
         if prev is not None and not rt.needs_missed:
-            ivs = list(self._intervals(self._get(pid)).values())
-            if edges_between(ivs, prev, now, self.tz):
+            if occurrences_between(self._events(self._get(pid)), prev, now, self.tz):
                 self._set(pid, needs_missed=True)
         if (rt.reading is not None and not self._throttled(rt, now)
                 and (rt.needs_missed or (rt.retry_at is not None and now >= rt.retry_at))):
-            self._process_missed(pid, now)
+            self._process_events(pid, now)
         self._due_off(pid, now, "inching_off_at")
-        self._due_off(pid, now, "release_off_at")
         self._sync_deadline(pid, now)
 
     def _grace(self, pid: str) -> timedelta:
@@ -635,7 +650,7 @@ class Controller:
             self._mut(pid, clear)
 
     def _due_off(self, pid: str, now: datetime, key: str, force: bool = False) -> None:
-        """Termen de oprire scadent din starea persistenta (`inching_off_at`/`release_off_at`)."""
+        """Termen de oprire scadent din starea persistenta (`inching_off_at`)."""
         off_at = self._get(pid)[key]
         rt = self._rt[pid]
         if off_at is None:
@@ -650,76 +665,49 @@ class Controller:
         if self._auto_switch(pid, now, False, force=force):
             self._mut(pid, lambda p: p.__setitem__(key, None))
 
-    # ------------------------------------------------------------------ fronturi
-    def _process_missed(self, pid: str, now: datetime) -> None:
-        """Executa fronturile neexecutate (live, ratate sau esuate), dupa last_done.
+    # ------------------------------------------------------------------ evenimente
+    def _process_events(self, pid: str, now: datetime) -> None:
+        """Executa evenimentul scadent cel mai recent (live, ratat sau esuat), dupa last_event_at.
 
-        Stop: mereu, oricat de vechi, daca priza nu e sigur oprita si nu l-a anulat o
-        comanda manuala mai noua, un start executat mai nou sau alt interval care tine
-        priza (started_by). Start: doar daca fereastra lui inca contine `now` si nu a
-        urmat o comanda manuala. La acelasi instant, stop-urile merg inaintea start-urilor."""
+        Se iau aparitiile active din (max(last_event_at, now - LOOKBACK), now] care nu sunt taiate de
+        event_cutoff; conteaza doar cea mai recenta (la aceeasi ora, PORNESTE dupa OPRESTE), cele mai
+        vechi sunt depasite de ea si se consuma odata cu ea. O comanda manuala mai noua o anuleaza.
+        OPRESTE: nimic de trimis daca priza e sigur oprita, altfel se reincearca la 30 s fara limita.
+        PORNESTE: la fel, dar nu mai e reincercat cand o aparitie mai noua devine cea mai recenta.
+        Consumat = last_event_at = momentul aparitiei."""
         rt = self._rt[pid]
         st = self._get(pid)
-        ivs = self._intervals(st)
-        cutoff = {i: _parse_iso(v) for i, v in st["cutoff"].items()}
-        edges = [e for e in missed_edges(list(ivs.values()), st["last_done"], now, self.tz,
-                                         lookback=LOOKBACK)
-                 if not (cutoff.get(e.interval_id) and e.at <= cutoff[e.interval_id])]
-        edges.sort(key=lambda e: (e.at, e.kind != "stop", e.interval_id))
         with self._rt_lock:
             rt.needs_missed = False
             rt.retry_at = None
-        if not edges:
+        lo = now - LOOKBACK
+        last = _parse_iso(st["last_event_at"])
+        if last is not None and last > lo:
+            lo = last
+        cutoff = {i: _parse_iso(v) for i, v in st["event_cutoff"].items()}
+        pending = [o for o in occurrences_between(self._events(st), lo, now, self.tz)
+                   if not (cutoff.get(o.event_id) and o.at <= cutoff[o.event_id])]
+        if not pending:
             return
+        o = max(pending, key=lambda x: (x.at, x.action == "on", x.event_id))
         last_manual = _parse_iso(st["last_manual_at"])
-        last_start = _parse_iso(st["last_start_at"])
-        holder = st["started_by"]
-        latest_start = {e.interval_id: e for e in edges if e.kind == "start"}
-        known_on = rt.on
+        want_on = o.action == "on"
 
-        def record(e, started_by="=", real_start=False):
-            def f(p):
-                p["last_done"].setdefault(e.interval_id, {})[e.kind] = e.at.isoformat()
-                if started_by != "=":
-                    p["started_by"] = started_by
-                if real_start:
-                    cur = _parse_iso(p["last_start_at"])
-                    if cur is None or e.at > cur:
-                        p["last_start_at"] = e.at.isoformat()
-            self._mut(pid, f)
+        def consume(p):
+            cur = _parse_iso(p["last_event_at"])
+            if cur is None or o.at > cur:
+                p["last_event_at"] = o.at.isoformat()
 
         # Daca ceva se intampla (esec, lock, disc), reincercarea se programeaza oricum.
-        pending = True
+        retry = True
         try:
-            for e in edges:
-                iv = ivs[e.interval_id]
-                if e.kind == "start":
-                    if (latest_start[e.interval_id] is not e or self._window_end(iv, now) is None
-                            or (last_manual is not None and last_manual > e.at)):
-                        record(e)             # nu mai poate / nu mai trebuie executat: consumat
-                        continue
-                    if known_on is not True:
-                        if not self._auto_switch(pid, now, True):
-                            break             # reincercam cat timp suntem in interval
-                        known_on = True
-                    holder = iv.id
-                    last_start = e.at if last_start is None or e.at > last_start else last_start
-                    record(e, started_by=iv.id, real_start=True)
-                else:
-                    if (known_on is False
-                            or (last_manual is not None and last_manual > e.at)
-                            or (last_start is not None and last_start > e.at)
-                            or (holder is not None and holder != e.interval_id)):
-                        record(e)             # deja oprita / anulat de ceva mai nou / tinuta de alt interval
-                        continue
-                    if not self._auto_switch(pid, now, False):
-                        break                 # stop-ul se reincearca fara limita
-                    known_on, holder = False, None
-                    record(e, started_by=None)
-            else:
-                pending = False
+            if not ((last_manual is not None and last_manual > o.at) or rt.on is want_on):
+                if not self._auto_switch(pid, now, want_on):
+                    return                # se reincearca: ramane cel mai recent pana reuseste sau vine altul
+            self._mut(pid, consume)
+            retry = False
         finally:
-            if pending:
+            if retry:
                 self._set(pid, retry_at=now + timedelta(seconds=RETRY_S))
 
     # ------------------------------------------------------------------ termen de oprire in priza
@@ -758,7 +746,7 @@ class Controller:
             return
         remaining = (nd.at - now).total_seconds()
         if remaining <= 0:
-            return                        # scadent: il executa frontul sau _due_*
+            return                        # scadent: il executa evenimentul sau _due_*
         value = max(1, min(DP_MAX_S, int(remaining)))
         capped = remaining > DP_MAX_S
         if rt.cd_written is not None and (
