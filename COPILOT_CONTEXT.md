@@ -2066,7 +2066,7 @@ Digi de la poartă e alimentat din Enel, nu din invertor, deci internetul pică 
 Corectează §13.73: căderea de internet din 28 oct începe în același minut cu pana de rețea.
 De aceea penele le ține minte serverul, iar telefonul află la reconectare, cu orele reale.
 
-- API: `GET /grid-outage`, `group_outages()` (`api/app.py`), `GRID_DOWN_V` 100, gol 30 s, minim 3 s, ultimele 24 h, ~30 ms.
+- API: `GET /grid-outage`, `group_outages()` (`api/app.py`), `GRID_DOWN_V` 100, gol 180 s (era 30 s), minim 3 s, citește 48 h și arată penele terminate în ultimele 24 h (era o citire pe 24 h: începutul alunecă și telefonul dădea 2–3 „revenit” în plus, reparat 2026-11-07), ~30 ms.
 - Aplicație: `GridOutage.kt` (parser, `evaluateGridOutages`, texte), `SolarRepository.fetchGridOutages`, `gridDown` din
   `/latest`, poll la 30 s în `SolarAlarmService`, id de notificare din `start` (revenirea înlocuiește mesajul de început).
 - SETARI: `RetroGridAlertRow`; cardurile s-au micșorat puțin, iar valorile „5000 W"/„300 s" au trecut pe dp (la font 130% erau tăiate).

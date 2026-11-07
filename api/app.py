@@ -7,7 +7,7 @@ NU vorbeste cu invertorul; doar cu InfluxDB. Singurul lucru pe care il scrie e e
 cer date (masuratoarea `app_client` in `history`, o data pe minut; vezi app_clients.py).
 """
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, request
 from influxdb_client import InfluxDBClient
@@ -31,9 +31,16 @@ SOC_FULL_V = float(os.getenv("BAT_SOC_FULL_V", "57.0"))
 # Penele de retea Enel le tine minte serverul, nu telefonul: odata cu reteaua cade si internetul casei (2-4 minute la
 # penele din 2026-11-02, mai mult decat au durat ele), deci telefonul afla abia dupa ce se reconecteaza.
 GRID_DOWN_V = 100.0        # invertorul citeste 0 V fara retea; o tensiune mica dar prezenta nu e pana
-GRID_OUTAGE_GAP_S = 30     # probe joase mai apropiate de atat sunt aceeasi pana
+# O revenire mai scurta de 3 min intre doua caderi e aceeasi pana: 2026-11-06 01:35-01:47 reteaua a revenit
+# 72 s si a cazut iar, iar telefonul a primit doua mesaje "revenit" (Florin: unul ajunge).
+GRID_OUTAGE_GAP_S = 180    # probe joase mai apropiate de atat sunt aceeasi pana
 GRID_OUTAGE_MIN_S = 3      # una-doua citiri de 0 V nu sunt pana
 GRID_OUTAGE_KEEP = 20
+# Se citesc 48 h (toata retentia bucket-ului live) si se arata doar penele terminate in ultimele 24 h. Cu o fereastra
+# de 24 h citita direct, o pana care iesea din ea parea sa inceapa tot mai tarziu, iar telefonul o lua drept pana
+# noua la fiecare sondare: 2-3 mesaje "revenit" la 24 h dupa pana din 2026-11-06.
+GRID_OUTAGE_READ = "-48h"
+GRID_OUTAGE_SHOW_S = 24 * 3600
 
 # Campurile expuse aplicatiei (acelasi set ca diagrama de flux + cateva extra).
 FIELDS = [
@@ -187,8 +194,9 @@ def latest():
     return jsonify(out)
 
 
-def group_outages(low_times, down_now):
-    """Probele de 1 s cu reteaua lipsa, grupate in pene. `end` e None la pana care inca dureaza."""
+def group_outages(low_times, down_now, since=None):
+    """Probele de 1 s cu reteaua lipsa, grupate in pene. `end` e None la pana care inca dureaza.
+    Cu `since`, penele terminate inainte de el nu se mai arata (inceputul ramane cel adevarat)."""
     spans = []
     for moment in sorted(low_times):
         ts = moment.timestamp()
@@ -197,23 +205,26 @@ def group_outages(low_times, down_now):
         else:
             spans.append([ts, ts])
     out = []
+    limit = since.timestamp() if since else None
     for index, (start, end) in enumerate(spans):
         seconds = int(round(end - start)) + 1
+        ongoing = down_now and index == len(spans) - 1
+        if limit is not None and not ongoing and end < limit:
+            continue
         if seconds >= GRID_OUTAGE_MIN_S:
-            ongoing = down_now and index == len(spans) - 1
             out.append({"start": int(start), "end": None if ongoing else int(end), "seconds": seconds})
     return out[-GRID_OUTAGE_KEEP:]
 
 
 @app.get("/grid-outage")
 def grid_outage():
-    """Penele de retea din ultimele 24 h (epoch in secunde) si starea de acum, din tensiunea citita de invertor."""
+    """Penele de retea terminate in ultimele 24 h (epoch in secunde) si starea de acum, din tensiunea citita de invertor."""
     base = (f'from(bucket: "{BUCKET_LIVE}") |> range(start: {{start}}) '
             f'|> filter(fn: (r) => r._measurement == "inverter" and r._field == "grid_voltage")')
     try:
         low = [rec.get_time()
                for table in client.query_api().query(
-                   base.format(start="-24h") + f' |> filter(fn: (r) => r._value < {GRID_DOWN_V})', org=ORG)
+                   base.format(start=GRID_OUTAGE_READ) + f' |> filter(fn: (r) => r._value < {GRID_DOWN_V})', org=ORG)
                for rec in table.records]
         now = [rec for table in client.query_api().query(base.format(start="-15s") + ' |> last()', org=ORG)
                for rec in table.records]
@@ -222,7 +233,7 @@ def grid_outage():
     down = bool(now) and now[-1].get_value() < GRID_DOWN_V
     return jsonify({
         "down": down,
-        "outages": group_outages(low, down),
+        "outages": group_outages(low, down, since=datetime.now(timezone.utc) - timedelta(seconds=GRID_OUTAGE_SHOW_S)),
         "timestamp": now[-1].get_time().isoformat() if now else None,
     })
 

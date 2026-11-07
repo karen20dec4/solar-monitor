@@ -315,8 +315,9 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   grid drops, replaced by "Curent Enel revenit" with the times and the duration when it returns. **The server remembers the
   outages, not the phone:** the house's internet falls with the grid, because the Digi router/media converter at the gate is powered from Enel, not from the inverter (2026-11-02: 2–4 min offline for outages of 35–40 s), so
   a phone comparing `/latest` would never see 0 V. `GET /solar/grid-outage` -> `{down, outages: [{start, end, seconds}],
-  timestamp}` (last 24 h from `live`, epoch seconds, `end` null while it lasts, `grid_voltage` < 100 V, ≥ 3 s, samples ≤ 30 s
-  apart are one outage). `SolarAlarmService` polls it every 30 s and `evaluateGridOutages` (`GridOutage.kt`) decides what is
+  timestamp}` (outages that ended in the last 24 h, read from 48 h of `live` so a start never slides with the window, epoch
+  seconds, `end` null while it lasts, `grid_voltage` < 100 V, ≥ 3 s, samples ≤ 180 s apart are one outage; fixed 2026-11-07:
+  a 24 h read made an expiring outage look new at each poll, 2–3 extra "revenit", and a 72 s return gave two messages). `SolarAlarmService` polls it every 30 s and `evaluateGridOutages` (`GridOutage.kt`) decides what is
   new against a mark kept in prefs; the first run stays quiet about the past. So the message can arrive minutes late, but
   says the real times. SETARI: row "MESAJ REȚEA ENEL", `AlarmSettings.gridEnabled`, **default on**, so the foreground
   service now runs on every phone (with only this on it loops every 30 s, not 5 s) and the app asks for the notification

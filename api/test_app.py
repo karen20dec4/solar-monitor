@@ -64,13 +64,15 @@ class _ScriptedClient:
 
 
 class _OutageQueryApi:
-    """Raspunde separat la probele joase (24 h) si la ultima citire (15 s)."""
+    """Raspunde separat la probele joase (48 h) si la ultima citire (15 s)."""
 
     def __init__(self, low, last):
         self.low, self.last = low, last
+        self.queries = []
 
     def query(self, query, org=None):
-        return [_Table(self.low if "-24h" in query else self.last)]
+        self.queries.append(query)
+        return [_Table(self.low if "-48h" in query else self.last)]
 
 
 class _OutageClient:
@@ -458,6 +460,31 @@ class GridOutageTest(unittest.TestCase):
         body = self.client.get("/grid-outage").get_json()
         self.assertTrue(body["down"])
         self.assertIsNone(body["outages"][0]["end"])
+
+    def test_a_return_shorter_than_three_minutes_is_the_same_outage(self):
+        # 2026-11-06 01:35-01:47: reteaua a revenit 72 s intre doua pene; un singur mesaj "revenit" ajunge
+        out = api_module.group_outages(self.seconds(0, 547) + self.seconds(619, 75), False)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["end"], int(self.T0.timestamp()) + 693)
+
+    def test_an_outage_cut_by_the_window_keeps_its_real_start(self):
+        # Fereastra de 24 h taia pana pe la mijloc: inceputul parea sa alunece, iar telefonul o lua drept
+        # pana noua la fiecare sondare (3 mesaje "revenit" la 24 h dupa pana din 2026-11-06).
+        low = self.seconds(0, 75)
+        since = self.T0 + timedelta(seconds=30)
+        out = api_module.group_outages(low, False, since=since)
+        self.assertEqual(out[0]["start"], int(self.T0.timestamp()))
+        self.assertEqual(out[0]["seconds"], 75)
+
+    def test_outages_ended_before_the_window_are_dropped(self):
+        low = self.seconds(0, 10) + self.seconds(1000, 10)
+        out = api_module.group_outages(low, False, since=self.T0 + timedelta(seconds=500))
+        self.assertEqual([o["start"] for o in out], [int(self.T0.timestamp()) + 1000])
+
+    def test_route_reads_48h_so_outage_starts_do_not_slide(self):
+        api_module.client = _OutageClient([], [])
+        self.client.get("/grid-outage")
+        self.assertTrue(any("-48h" in q for q in api_module.client.api.queries))
 
     def test_route_without_fresh_data_is_not_down(self):
         api_module.client = _OutageClient([], [])

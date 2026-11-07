@@ -401,8 +401,10 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
   rețeaua, înlocuită de „Curent Enel revenit" cu orele și durata când revine. **Penele le ține minte serverul, nu telefonul:**
   internetul casei cade odată cu rețeaua, pentru că routerul/media-convertorul Digi de la poartă e alimentat din Enel, nu din invertor (2026-11-02: 2–4 min offline la pene de 35–40 s), deci un telefon care compară
   `/latest` n-ar vedea niciodată 0 V. `GET /solar/grid-outage` -> `{down, outages: [{start, end, seconds}], timestamp}`
-  (ultimele 24 h din `live`, epoch în secunde, `end` null cât durează, `grid_voltage` < 100 V, ≥ 3 s, probe la ≤ 30 s = aceeași
-  pană). `SolarAlarmService` îl cere la 30 s, iar `evaluateGridOutages` (`GridOutage.kt`) decide ce e nou față de un marcaj din
+  (penele terminate în ultimele 24 h, citite din 48 h de `live` ca începutul să nu alunece cu fereastra, epoch în secunde,
+  `end` null cât durează, `grid_voltage` < 100 V, ≥ 3 s, probe la ≤ 180 s = aceeași pană; reparat 2026-11-07: citirea pe 24 h
+  făcea o pană pe cale să iasă din fereastră să pară nouă la fiecare sondare, 2–3 mesaje „revenit” în plus, iar o revenire
+  de 72 s dădea două mesaje). `SolarAlarmService` îl cere la 30 s, iar `evaluateGridOutages` (`GridOutage.kt`) decide ce e nou față de un marcaj din
   prefs; la prima rulare trecutul nu se anunță. Mesajul poate veni cu minute întârziere, dar spune orele reale. SETARI: rândul
   „MESAJ REȚEA ENEL", `AlarmSettings.gridEnabled`, **pornit din oficiu**, deci serviciul din prim-plan merge acum pe orice
   telefon (doar cu asta pornit bucla e la 30 s, nu 5 s), iar aplicația cere permisiunea de notificări la pornire. Dashboard:
