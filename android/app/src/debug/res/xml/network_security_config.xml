@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Doar build-ul debug: ca si config-ul principal (CA-ul Caddy se accepta numai pentru vyra.go.ro), plus
+  cleartext spre 10.0.2.2 (gazda emulatorului), pentru un server CASA demo local. Release nu include fisierul.
+-->
+<network-security-config>
+    <domain-config>
+        <domain includeSubdomains="false">vyra.go.ro</domain>
+        <trust-anchors>
+            <certificates src="@raw/vyra_root_ca" />
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

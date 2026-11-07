@@ -22,8 +22,10 @@ android {
         applicationId = "com.rolling7.solar"
         minSdk = 26
         targetSdk = 34
-        versionCode = 47
-        versionName = "3.43"
+        versionCode = 48
+        versionName = "3.44"
+        // Serverul CASA; numai build-ul debug il poate schimba (vezi mai jos), release il pastreaza mereu.
+        buildConfigField("String", "CASA_BASE", "\"https://vyra.go.ro:31443/solar/casa\"")
     }
 
     signingConfigs {
@@ -44,6 +46,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Doar pentru verificarea in emulator cu un server demo local: -PcasaBase=http://10.0.2.2:18100
+            // (cleartext permis numai spre 10.0.2.2, vezi src/debug/res/xml/network_security_config.xml).
+            (project.findProperty("casaBase") as String?)?.let {
+                buildConfigField("String", "CASA_BASE", "\"$it\"")
+            }
+        }
         release {
             isMinifyEnabled = true       // R8: scoate cod nefolosit
             isShrinkResources = true     // scoate resurse nefolosite

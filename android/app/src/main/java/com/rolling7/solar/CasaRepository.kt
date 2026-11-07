@@ -45,7 +45,8 @@ internal fun casaFailure(code: Int, body: String, authenticated: Boolean = true)
  * Parola si jetonul nu se scriu niciodata in log.
  */
 object CasaRepository {
-    private const val BASE = "https://vyra.go.ro:31443/solar/casa"
+    // Productie; doar build-ul debug poate primi alt URL (-PcasaBase), vezi app/build.gradle.kts.
+    private val BASE = BuildConfig.CASA_BASE
     private const val READ_MS = 8000
     // Cel mai rau caz teoretic pe server e ~45 s (coada prizei); Caddy asteapta 60 s.
     private const val COMMAND_READ_MS = 50000

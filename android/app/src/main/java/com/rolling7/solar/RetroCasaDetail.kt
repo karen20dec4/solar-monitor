@@ -5,6 +5,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -24,11 +27,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
-import androidx.compose.material3.TimePicker
-import androidx.compose.material3.TimePickerDefaults
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -42,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -50,16 +50,21 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -169,6 +174,30 @@ internal fun casaDeadlineText(seconds: Long): String {
 }
 
 internal fun casaHm(h: Int, m: Int): String = "%02d:%02d".format(Locale.US, h, m)
+
+/**
+ * "HH:MM" deplasat cu [dh] ore si [dm] minute, peste miezul noptii in ambele sensuri (23:59 + 1 min = 00:00,
+ * 00:00 - 1 h = 23:00). Un minut care trece de :59 duce si ora. O ora stricata se citeste ca 00:00.
+ */
+internal fun casaStepTime(time: String, dh: Int, dm: Int): String {
+    val h = time.substringBefore(':').toIntOrNull() ?: 0
+    val m = time.substringAfter(':', "0").toIntOrNull() ?: 0
+    val total = Math.floorMod(h * 60 + m + dh * 60 + dm, 1440)
+    return casaHm(total / 60, total % 60)
+}
+
+/** Ora implicita a unui eveniment nou: ora fixa de dupa cea curenta (ora Bucurestiului), ex. 14:07 -> 15:00. */
+internal fun casaDefaultEventTime(nowEpoch: Long, zone: ZoneId = BucharestZone): String {
+    val now = Instant.ofEpochSecond(nowEpoch).atZone(zone)
+    return casaHm((now.hour + 1) % 24, 0)
+}
+
+/** Zilele de trimis la server: null (zilnic) cand e ales ZILNIC sau toate cele 7 zile; altfel lista sortata. */
+internal fun casaEventDays(daily: Boolean, picked: Set<Int>): List<Int>? =
+    if (daily || picked.size == 7) null else picked.sorted()
+
+/** Un eveniment se poate salva daca e zilnic sau are cel putin o zi aleasa. */
+internal fun casaEventDaysValid(daily: Boolean, picked: Set<Int>): Boolean = daily || picked.isNotEmpty()
 
 internal fun casaBatteryText(b: Double?): String =
     if (b == null) "BATERIE ?" else "BATERIE ${b.roundToInt()}%"
@@ -485,10 +514,11 @@ private fun CasaDialogButtons(
     okText: String,
     okEnabled: Boolean = true,
     onCancel: () -> Unit,
-    onOk: () -> Unit
+    onOk: () -> Unit,
+    cancelText: String = "RENUNTA"
 ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        CasaKey("RENUNTA", Modifier.weight(1f).height(44.dp), onClick = onCancel)
+        CasaKey(cancelText, Modifier.weight(1f).height(44.dp), onClick = onCancel)
         CasaKey(okText, Modifier.weight(1f).height(44.dp), selected = true, enabled = okEnabled, onClick = onOk)
     }
 }
@@ -502,35 +532,6 @@ private fun CasaStepper(label: String, value: String, onMinus: () -> Unit, onPlu
             CasaText(value, 20f, RetroSage, Modifier.align(Alignment.Center), bold = true, spacing = 1f)
         }
         CasaKey("+", Modifier.size(48.dp), size = 18f, description = "Mai mult $label", onClick = onPlus)
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun CasaTimeDialog(title: String, initial: String, onCancel: () -> Unit, onOk: (String) -> Unit) {
-    val state = rememberTimePickerState(
-        initialHour = initial.substringBefore(':').toIntOrNull() ?: 8,
-        initialMinute = initial.substringAfter(':', "0").toIntOrNull() ?: 0,
-        is24Hour = true
-    )
-    CasaDialog(title, onCancel) {
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            TimePicker(
-                state = state,
-                colors = TimePickerDefaults.colors(
-                    containerColor = Color.Transparent,
-                    clockDialColor = RetroInstrument,
-                    clockDialSelectedContentColor = Color(0xFF1B1707),
-                    clockDialUnselectedContentColor = RetroText,
-                    selectorColor = CasaOrange,
-                    timeSelectorSelectedContainerColor = CasaOrange,
-                    timeSelectorUnselectedContainerColor = RetroInstrument,
-                    timeSelectorSelectedContentColor = Color(0xFF1B1707),
-                    timeSelectorUnselectedContentColor = RetroText
-                )
-            )
-        }
-        CasaDialogButtons("OK", onCancel = onCancel, onOk = { onOk(casaHm(state.hour, state.minute)) })
     }
 }
 
@@ -578,12 +579,17 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
     var message by remember { mutableStateOf<String?>(null) }
     var messageStamp by remember { mutableLongStateOf(0L) }
     var pendingOn by remember { mutableStateOf<Boolean?>(null) }
+    var pendingEnabled by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var pendingInching by remember { mutableStateOf<Int?>(null) }
     // Grupurile de comenzi aflate in zbor: "power", "countdown", "inching" (atingerile lor se ignora).
     var busy by remember { mutableStateOf<Set<String>>(emptySet()) }
     var action by remember { mutableStateOf<String?>(null) }
     var showDuration by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    // Editorul de evenimente (null = inchis) si evenimentul de sters (dupa confirmare).
+    var editor by remember { mutableStateOf<CasaEventDraft?>(null) }
+    var editorError by remember { mutableStateOf<String?>(null) }
+    var deleteTarget by remember { mutableStateOf<CasaEvent?>(null) }
     val stale by remember { derivedStateOf { clock.value - lastGoodMs > PlugsStaleMs } }
 
     fun lose(r: CasaResult<*>) {
@@ -638,7 +644,14 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
     }
 
     /** Trimite o comanda; comenzile unei prize se succed una dupa alta (serverul limiteaza ~1/s). */
-    fun command(group: String? = null, onDone: () -> Unit = {}, call: (String) -> CasaResult<CasaPlug>) {
+    fun command(
+        group: String? = null,
+        onDone: () -> Unit = {},
+        onSuccess: () -> Unit = {},
+        // Fara [onFailure], eroarea apare in subtitlul antetului; editorul de evenimente si-o arata singur.
+        onFailure: ((String) -> Unit)? = null,
+        call: (String) -> CasaResult<CasaPlug>
+    ) {
         if (group != null) busy = busy + group
         freshness.commandStarted()
         scope.launch {
@@ -649,13 +662,16 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
             }
             if (group != null) busy = busy - group
             onDone()
-            if (group == "power") {
+            if (group == "power" || group == "events") {
                 if (r is CasaResult.Ok) CasaHaptics.confirm(context) else if (r is CasaResult.Error) CasaHaptics.reject(context)
             }
             when (r) {
-                is CasaResult.Ok -> accept(r.value)
+                is CasaResult.Ok -> {
+                    accept(r.value)
+                    onSuccess()
+                }
                 is CasaResult.Unauthorized -> lose(r)
-                is CasaResult.Error -> show(r.message)
+                is CasaResult.Error -> if (onFailure != null) onFailure(r.message) else show(r.message)
             }
         }
     }
@@ -745,6 +761,29 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
             onMore = { showDuration = true },
             onCancel = { command("countdown") { CasaRepository.cancelCountdown(it, plugId) } }
         )
+        PlugEventsCard(
+            plug = p,
+            nowEpoch = clock.value / 1000,
+            usable = usable,
+            pendingEnabled = pendingEnabled,
+            onToggle = { e ->
+                val target = !(pendingEnabled[e.id] ?: e.enabled)
+                pendingEnabled = pendingEnabled + (e.id to target)
+                command(onDone = { pendingEnabled = pendingEnabled - e.id }) {
+                    CasaRepository.updateEvent(it, plugId, e.id, enabled = target)
+                }
+            },
+            onEdit = { e ->
+                editorError = null
+                editor = CasaEventDraft(e.id, e.action, e.time, e.days)
+            },
+            onDelete = { deleteTarget = it },
+            onAdd = { action ->
+                editorError = null
+                editor = CasaEventDraft(null, action, casaDefaultEventTime(clock.value / 1000), null)
+            },
+            modifier = Modifier.weight(1f)
+        )
         PlugInchingCard(
             enabled = p.inchingEnabled,
             minutes = inchingMinutes,
@@ -800,6 +839,40 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
         CasaRenameDialog(current = p.name, onDismiss = { renaming = false }) { name ->
             renaming = false
             command { CasaRepository.renamePlug(it, plugId, name) }
+        }
+    }
+    editor?.let { draft ->
+        CasaEventEditor(
+            draft = draft,
+            saving = "events" in busy,
+            error = editorError,
+            onTouched = { editorError = null },
+            onDismiss = { editor = null },
+            onSave = { time, eventAction, days ->
+                command(
+                    group = "events",
+                    onSuccess = { editor = null },
+                    onFailure = { editorError = it }
+                ) {
+                    if (draft.id == null) {
+                        CasaRepository.addEvent(it, plugId, time, eventAction, days)
+                    } else {
+                        CasaRepository.updateEvent(it, plugId, draft.id, time, eventAction, days, daily = days == null)
+                    }
+                }
+            }
+        )
+    }
+    deleteTarget?.let { e ->
+        CasaDialog("STERGI EVENIMENTUL?", onDismiss = { deleteTarget = null }) {
+            CasaText(
+                "${e.time} ${casaActionText(e.action)} ${casaDaysText(e.days)}", 15f, CasaOrange,
+                Modifier.fillMaxWidth(), bold = true, align = TextAlign.Center
+            )
+            CasaDialogButtons(okText = "STERGE", onCancel = { deleteTarget = null }, onOk = {
+                deleteTarget = null
+                command("events") { CasaRepository.deleteEvent(it, plugId, e.id) }
+            })
         }
     }
 }
@@ -943,6 +1016,326 @@ private fun PlugCountdownCard(
                     fill = CasaRedFillTop to CasaRedFillBottom, enabled = usable, size = 11f, onClick = onCancel)
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Evenimente (PORNESTE / OPRESTE la o ora, in anumite zile)
+// ---------------------------------------------------------------------------------------------
+
+/** Ce se editeaza in dialog: [id] null = eveniment nou; [days] null = zilnic. */
+private data class CasaEventDraft(val id: String?, val action: String, val time: String, val days: List<Int>?)
+
+private val CasaChipOnFill = Color(0xFF1E3410)
+private val CasaChipOnEdge = Color(0xFF4F8A27)
+private val CasaChipOnText = Color(0xFFB8F27A)
+private val CasaChipOffFill = Color(0xFF3E120C)
+private val CasaChipOffEdge = Color(0xFF8A3326)
+private val CasaChipOffText = Color(0xFFFFA89A)
+
+@Composable
+private fun PlugEventsCard(
+    plug: CasaPlug,
+    nowEpoch: Long,
+    usable: Boolean,
+    pendingEnabled: Map<String, Boolean>,
+    onToggle: (CasaEvent) -> Unit,
+    onEdit: (CasaEvent) -> Unit,
+    onDelete: (CasaEvent) -> Unit,
+    onAdd: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    RetroPanelSurface(
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+        fillContent = true,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        CasaSectionTitle("PROGRAMARI", "EVENIMENTE", RetroMuted, 12f)
+        CasaNextEventLine(plug.nextEvent, nowEpoch)
+        // Lista deruleaza in interior cand nu incap toate randurile (pagina in sine nu deruleaza niciodata).
+        val scroll = rememberScrollState()
+        val events = plug.events.sortedWith(compareBy({ it.time }, { it.action }))
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .drawWithContent {
+                    drawContent()
+                    if (scroll.maxValue > 0) {
+                        val total = size.height + scroll.maxValue
+                        val barH = (size.height * size.height / total).coerceAtLeast(14.dp.toPx())
+                        val y = (size.height - barH) * scroll.value / scroll.maxValue
+                        drawRoundRect(
+                            RetroBrassLight.copy(alpha = 0.75f),
+                            topLeft = Offset(size.width - 4.dp.toPx(), y),
+                            size = androidx.compose.ui.geometry.Size(4.dp.toPx(), barH),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+                        )
+                    }
+                }
+        ) {
+            Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
+                if (events.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
+                        CasaText("ADAUGA O PORNIRE SAU O OPRIRE", 10f, RetroMuted, spacing = 1f)
+                    }
+                }
+                events.forEachIndexed { i, e ->
+                    if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(RetroBrassLight.copy(alpha = 0.25f)))
+                    val enabled = pendingEnabled[e.id] ?: e.enabled
+                    CasaEventRow(e, enabled, usable, onToggle = { onToggle(e) }, onEdit = { onEdit(e) }, onDelete = { onDelete(e) })
+                }
+            }
+        }
+        if (casaCanAddEvent(plug.events.size)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CasaKey("+ PORNIRE", Modifier.weight(1f).height(40.dp), enabled = usable, size = 12f,
+                    description = "Adauga pornire", onClick = { onAdd("on") })
+                CasaKey("+ OPRIRE", Modifier.weight(1f).height(40.dp), enabled = usable, size = 12f,
+                    description = "Adauga oprire", onClick = { onAdd("off") })
+            }
+        } else {
+            Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
+                CasaText("MAXIM $MaxEvents EVENIMENTE", 10f, RetroMuted, spacing = 1f)
+            }
+        }
+    }
+}
+
+/** "URMATORUL: OPRESTE 16:00 · IN 2H 14M" sau "NICIUN EVENIMENT" cand nimic nu e programat. */
+@Composable
+private fun CasaNextEventLine(next: CasaNextEvent?, nowEpoch: Long) {
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(30.dp)
+            .clip(shape)
+            .background(Color(0xFF0C0F07).copy(alpha = 0.75f))
+            .border(1.dp, RetroBrassLight.copy(alpha = 0.30f), shape)
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        if (next == null) {
+            CasaText("NICIUN EVENIMENT", 11f, RetroMuted, spacing = 1f)
+        } else {
+            val text = casaNextEventText(next, nowEpoch, BucharestZone)
+            val head = text.substringBefore(" · ")
+            val tail = text.substringAfter(" · ", "")
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = RetroMuted)) { append("URMATORUL: ") }
+                    withStyle(SpanStyle(color = CasaBlue, fontWeight = FontWeight.Bold)) { append(head) }
+                    if (tail.isNotEmpty()) withStyle(SpanStyle(color = RetroMuted)) { append(" · $tail") }
+                },
+                fontFamily = RetroMono,
+                fontSize = fixedSp(11f),
+                letterSpacing = fixedSp(0.5f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun CasaActionChip(action: String) {
+    val on = action == "on"
+    val shape = RoundedCornerShape(6.dp)
+    Box(
+        Modifier
+            .clip(shape)
+            .background(if (on) CasaChipOnFill else CasaChipOffFill)
+            .border(1.5.dp, if (on) CasaChipOnEdge else CasaChipOffEdge, shape)
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+    ) {
+        CasaText(casaActionText(action), 10f, if (on) CasaChipOnText else CasaChipOffText, bold = true, spacing = 0.8f)
+    }
+}
+
+@Composable
+private fun CasaEventRow(
+    e: CasaEvent,
+    enabled: Boolean,
+    usable: Boolean,
+    onToggle: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val what = "${e.time} ${casaActionText(e.action)} ${casaDaysText(e.days)}"
+    Row(
+        Modifier.fillMaxWidth().height(54.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // Partea din stanga (LED, ora, eticheta, zilele) deschide editorul; comutatorul si X sunt separate.
+        Row(
+            Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .alpha(if (enabled) 1f else 0.5f)
+                .semantics { contentDescription = "Editeaza evenimentul $what" }
+                .clickable(enabled = usable, onClick = onEdit),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            RetroLed(color = RetroSage, active = enabled, modifier = Modifier.size(24.dp))
+            CasaText(e.time, 20f, CasaOrange, bold = true, spacing = 1f)
+            CasaActionChip(e.action)
+            CasaText(casaDaysText(e.days), 9f, RetroMuted, Modifier.weight(1f), maxLines = 2, spacing = 0.3f)
+        }
+        CasaToggle(
+            checked = enabled,
+            description = "Eveniment $what: ${if (enabled) "dezactiveaza" else "activeaza"}",
+            modifier = Modifier.width(56.dp).height(28.dp),
+            enabled = usable,
+            onClick = onToggle
+        )
+        Box(
+            Modifier
+                .size(44.dp)
+                .semantics { contentDescription = "Sterge evenimentul $what" }
+                .clickable(enabled = usable, onClick = onDelete),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(Modifier.size(24.dp)) {
+                drawCircle(RetroBrassLight.copy(alpha = 0.5f), style = Stroke(1.dp.toPx()))
+                val a = size.minDimension * 0.22f
+                val w = 1.8.dp.toPx()
+                drawLine(RetroMuted, Offset(center.x - a, center.y - a), Offset(center.x + a, center.y + a), w, StrokeCap.Round)
+                drawLine(RetroMuted, Offset(center.x - a, center.y + a), Offset(center.x + a, center.y - a), w, StrokeCap.Round)
+            }
+        }
+    }
+}
+
+private const val CasaRepeatStartMs = 400L
+
+/**
+ * Buton +/- cu repetare: o apasare scurta = un pas, apasarea lunga repeta (mai repede dupa cateva pasi).
+ * Gestul se citeste in trecerea Initial, deci butonul metalic de dedesubt isi pastreaza aspectul fara sa
+ * fure atingerea.
+ */
+@Composable
+private fun CasaRepeatKey(text: String, description: String, modifier: Modifier, onStep: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val step by androidx.compose.runtime.rememberUpdatedState(onStep)
+    RetroMetalButton(
+        modifier = modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                step()
+                val repeat = scope.launch {
+                    delay(CasaRepeatStartMs)
+                    var n = 0
+                    while (true) {
+                        step()
+                        n++
+                        delay(if (n < 12) 90L else 45L)
+                    }
+                }
+                try {
+                    waitForUpOrCancellation(PointerEventPass.Initial)
+                } finally {
+                    repeat.cancel()
+                }
+            }
+        },
+        selected = false,
+        description = description,
+        onClick = {}
+    ) {
+        CasaText(text, 20f, RetroText, Modifier.align(Alignment.Center), bold = true, align = TextAlign.Center)
+    }
+}
+
+@Composable
+private fun CasaEditorLabel(text: String) {
+    CasaText(text, 10f, RetroMuted, Modifier.fillMaxWidth(), spacing = 2f)
+}
+
+/** Editorul unui eveniment nou sau existent; eroarea serverului (ex. conflict) apare in dialog. */
+@Composable
+private fun CasaEventEditor(
+    draft: CasaEventDraft,
+    saving: Boolean,
+    error: String?,
+    onTouched: () -> Unit,
+    onDismiss: () -> Unit,
+    onSave: (time: String, action: String, days: List<Int>?) -> Unit
+) {
+    var action by remember { mutableStateOf(draft.action) }
+    var time by remember { mutableStateOf(draft.time) }
+    var daily by remember { mutableStateOf(draft.days == null) }
+    var picked by remember { mutableStateOf(draft.days?.toSet() ?: emptySet()) }
+    val valid = casaEventDaysValid(daily, picked)
+
+    CasaDialog(if (draft.id == null) "EVENIMENT NOU" else "EDITEAZA EVENIMENTUL", onDismiss = onDismiss) {
+        CasaEditorLabel("CE FACE")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            CasaKey("PORNESTE", Modifier.weight(1f).height(44.dp), selected = action == "on", size = 13f,
+                onClick = { action = "on"; onTouched() })
+            CasaKey("OPRESTE", Modifier.weight(1f).height(44.dp), selected = action == "off", size = 13f,
+                onClick = { action = "off"; onTouched() })
+        }
+
+        CasaEditorLabel("LA ORA")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                CasaRepeatKey("+", "Ore mai multe", Modifier.width(52.dp).height(40.dp)) { time = casaStepTime(time, 1, 0); onTouched() }
+                CasaRepeatKey("−", "Ore mai putine", Modifier.width(52.dp).height(40.dp)) { time = casaStepTime(time, -1, 0); onTouched() }
+            }
+            RetroInsetSurface(Modifier.weight(1f).height(86.dp)) {
+                CasaText(time, 44f, RetroSage, Modifier.align(Alignment.Center), bold = true, spacing = 2f, align = TextAlign.Center)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                CasaRepeatKey("+", "Minute mai multe", Modifier.width(52.dp).height(40.dp)) { time = casaStepTime(time, 0, 1); onTouched() }
+                CasaRepeatKey("−", "Minute mai putine", Modifier.width(52.dp).height(40.dp)) { time = casaStepTime(time, 0, -1); onTouched() }
+            }
+        }
+        CasaText("ORE · MINUTE (APASARE LUNGA = RAPID)", 9f, RetroMuted, Modifier.fillMaxWidth(), spacing = 0.5f, align = TextAlign.Center)
+
+        CasaEditorLabel("IN CE ZILE")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            CasaKey("ZILNIC", Modifier.weight(1f).height(40.dp), selected = daily, size = 12f,
+                onClick = { daily = true; onTouched() })
+            CasaKey("ALEG ZILELE", Modifier.weight(1f).height(40.dp), selected = !daily, size = 12f,
+                onClick = { daily = false; onTouched() })
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            CasaDayShort.forEachIndexed { i, label ->
+                val day = i + 1
+                CasaKey(
+                    label,
+                    // La ZILNIC zilele sunt estompate; o atingere trece pe ALEG ZILELE cu acea zi.
+                    Modifier.weight(1f).height(40.dp).alpha(if (daily) 0.45f else 1f),
+                    selected = !daily && day in picked,
+                    size = 11f,
+                    description = "Ziua $label",
+                    onClick = {
+                        if (daily) {
+                            daily = false
+                            picked = setOf(day)
+                        } else {
+                            picked = if (day in picked) picked - day else picked + day
+                        }
+                        onTouched()
+                    }
+                )
+            }
+        }
+
+        if (error != null) {
+            CasaText(error, 10f, RetroRed, Modifier.fillMaxWidth(), bold = true, spacing = 0.5f, align = TextAlign.Center, maxLines = 3)
+        }
+        CasaDialogButtons(
+            okText = if (saving) "SE SALVEAZA" else "SALVEAZA",
+            okEnabled = valid && !saving,
+            cancelText = "ANULEAZA",
+            onCancel = onDismiss,
+            onOk = { onSave(time, action, casaEventDays(daily, picked)) }
+        )
     }
 }
 

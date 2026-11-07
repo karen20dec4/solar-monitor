@@ -31,6 +31,46 @@ class CasaDetailTest {
     }
 
     @Test
+    fun `event time steps wrap around midnight both ways`() {
+        assertEquals("00:00", casaStepTime("23:59", 0, 1))
+        assertEquals("23:00", casaStepTime("00:00", -1, 0))
+        assertEquals("16:25", casaStepTime("16:20", 0, 5))
+        assertEquals("23:59", casaStepTime("00:00", 0, -1))
+        assertEquals("00:30", casaStepTime("23:30", 1, 0))
+        assertEquals("12:00", casaStepTime("11:59", 0, 1))
+        assertEquals("11:58", casaStepTime("11:59", 0, -1))
+    }
+
+    @Test
+    fun `event time step tolerates a malformed time`() {
+        assertEquals("01:00", casaStepTime("", 1, 0))
+        assertEquals("00:01", casaStepTime("xx:yy", 0, 1))
+    }
+
+    @Test
+    fun `new event time is the next full hour in Bucharest`() {
+        assertEquals("15:00", casaDefaultEventTime(epoch(2026, 11, 7, 14, 7), zone))
+        assertEquals("15:00", casaDefaultEventTime(epoch(2026, 11, 7, 14, 59), zone))
+        assertEquals("00:00", casaDefaultEventTime(epoch(2026, 11, 7, 23, 30), zone))
+        assertEquals("15:00", casaDefaultEventTime(epoch(2026, 11, 7, 14, 0), zone))
+    }
+
+    @Test
+    fun `chosen days become null when daily or all seven are picked`() {
+        assertNull(casaEventDays(true, setOf(1, 2)))
+        assertNull(casaEventDays(false, setOf(1, 2, 3, 4, 5, 6, 7)))
+        assertEquals(listOf(6, 7), casaEventDays(false, setOf(7, 6)))
+        assertEquals(listOf(1), casaEventDays(false, setOf(1)))
+    }
+
+    @Test
+    fun `an event can be saved when daily or at least one day is picked`() {
+        assertTrue(casaEventDaysValid(true, emptySet()))
+        assertTrue(casaEventDaysValid(false, setOf(3)))
+        assertFalse(casaEventDaysValid(false, emptySet()))
+    }
+
+    @Test
     fun `countdown defaults to the opposite action and validates 1 to 1440`() {
         assertEquals("off", casaCountdownDefaultAction(true))
         assertEquals("on", casaCountdownDefaultAction(false))
