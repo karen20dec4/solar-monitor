@@ -2195,3 +2195,10 @@ Apoi merge în `main` și livrare APK pe Telegram.
 - Tot azi: `/grid-outage` reparat (citire pe 48 h, reveniri sub 3 min = aceeași pană; 2–3 „Curent Enel revenit” în plus),
   priza „Living sus” găsită scoasă din priză (nu IP schimbat), 4 prize Tasmota Eightree ET28 comandate (vor înlocui
   prizele Tuya; Tuya rămân de rezervă), pană de curent ~14:47 (suprasarcină invertor 7.3 kW), serverul a pornit curat.
+- Revizia finală (Opus) a găsit două cazuri de siguranță, reparate înainte de livrare (`a7c01d1`): un OPREȘTE ratat cât
+  priza e offline nu mai e consumat pe o stare „oprită” veche (și countdown-ul „oprește”), iar editarea/ștergerea unui
+  OPREȘTE nu mai readuce un PORNEȘTE vechi neexecutat. Server redeployat 2026-11-07 20:59 (copie
+  `casa/data/state.json.bak-2026-11-07b`), toate 5 prizele online.
+- Livrat: `SolarMonitor-v3.44.apk` (versionCode 48), 7535347 octeți, SHA-256
+  `aa3fc51f1425492281127d7058a14ac89450a105c99045a47e43078533ce5221` (identic cu cel descărcat din Telegram), mesaj 171 pe
+  @sun_tattva_access_bot. Verificat: APK-ul release nu conține URL-ul de debug; pornit pe emulator (v3.44, date live, fără crash).
