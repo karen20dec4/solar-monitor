@@ -2177,3 +2177,21 @@ Apoi merge în `main` și livrare APK pe Telegram.
 - Independență de cloud: comanda e deja locală; Tuya rămâne doar pentru asociere și pentru senzori. Probă: Lumina Curte
   fără internet (Parental Controls, profil „Prize fara internet”; Access Control taie și LAN-ul, nu se folosește).
   Pe viitor: senzori Zigbee, OpenBeken pe prizele actuale, prize ESPHome/Tasmota (asociere din aplicația noastră).
+
+### 13.80 Programări pe evenimente, ordinea prizelor, v3.44 (2026-11-07)
+
+- Cererea userului: în loc de intervale `start → stop`, **evenimente** independente (oră + PORNEȘTE/OPREȘTE, zilnic sau pe
+  zile alese), ca să poată pune doar „OPREȘTE 17:00” pe o priză pornită de mână la soare. Design aprobat:
+  `docs/superpowers/specs/2026-11-07-casa-evenimente-design.md` (schițele A + editor trimise pe Telegram), plan:
+  `docs/superpowers/plans/2026-11-07-casa-evenimente.md`, implementat cu agenți Sonnet + revizie per sarcină.
+- Server (`casa`, live din 2026-11-07 14:31): `schedule.py` (Event, apariții pe zile/DST), `controller.py` (cea mai recentă
+  apariție scadentă, manualul câștigă, butonul fizic = manual, OPREȘTE ratat oricât de târziu, PORNEȘTE ratat doar până la
+  următorul eveniment, termen în DP-ul prizei doar sub 24 h), rute `/plugs/<id>/events`, `PUT /plug-order`. Migrare unică:
+  intervalul caloriferului de pe „Priza cam Georgi” 07:00–07:30 → `4a95s`/`4a95e`; copie `casa/data/state.json.bak-2026-11-07`.
+- Aplicația v3.44 (versionCode 48): secțiunea „PROGRAMARI · EVENIMENTE” cu „URMATORUL: … · IN 2H 14M”, editor (CE FACE,
+  LA ORA cu +/−, ZILNIC / ALEG ZILELE), ecusonul următorului eveniment în listele CASA; ordinea prizelor prin apăsare lungă
+  + tragere, aceeași pe toate telefoanele. Capturile de emulator s-au făcut pe un container casa demo de unică folosință
+  (`-PcasaBase`, doar debug): crearea unui token temporar pe serverul real a fost refuzată de sistemul de permisiuni.
+- Tot azi: `/grid-outage` reparat (citire pe 48 h, reveniri sub 3 min = aceeași pană; 2–3 „Curent Enel revenit” în plus),
+  priza „Living sus” găsită scoasă din priză (nu IP schimbat), 4 prize Tasmota Eightree ET28 comandate (vor înlocui
+  prizele Tuya; Tuya rămân de rezervă), pană de curent ~14:47 (suprasarcină invertor 7.3 kW), serverul a pornit curat.

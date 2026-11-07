@@ -52,10 +52,12 @@ va exista dar va da mereu eroare.
 POST   /solar/casa/register               {password, device} -> {token, phone_id}   (singura rută fără token în afară de /health; 401 parola greșită, 429 + retry_after, 503 parola nesetată)
 GET    /solar/casa/me                     -> {phone_id, device}
 GET    /solar/casa/plugs                  -> {plugs:[{id,name,online,on,metered,power,voltage,current,energy_today,
-                                              schedules[{id,start,stop,enabled}],countdown,inching,off_deadline,error}], timestamp}
+                                              events[{id,time,action,days,enabled}],next_event,schedules[] (gol, pt. ≤3.43),
+                                              countdown,inching,off_deadline,error}], timestamp}   (în ordinea plug_order)
 POST   /solar/casa/plugs/<id>/switch      {on}
 PUT    /solar/casa/plugs/<id>/countdown   {action:"on"|"off", minutes}   DELETE: anulează
-POST   /solar/casa/plugs/<id>/schedules   {start:"HH:MM", stop:"HH:MM", enabled?}   PUT/DELETE .../schedules/<sid>
+POST   /solar/casa/plugs/<id>/events      {time:"HH:MM", action:"on"|"off", days?:null|[1..7], enabled?}   PUT/DELETE .../events/<eid>
+PUT    /solar/casa/plug-order             {order:[id,...]} -> {plugs, timestamp}   (ordinea prizelor, aceeași pe toate telefoanele)
 PUT    /solar/casa/plugs/<id>/inching     {enabled, minutes}      (fiecare întoarce priza actualizată; 502 {error, plug} dacă nu răspunde;
                                                                   priza cu DP `switch_inching` primește setarea în firmware)
 PUT    /solar/casa/plugs/<id>/name        {name}  (1-24 caractere; salvat în devices.local.json) -> priza

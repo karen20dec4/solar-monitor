@@ -158,7 +158,13 @@ Useful subcommands are `doctor`, `start`, `wait`, `build`, `install`, `launch`, 
 `profile`, `layout-check`, `pinch`, `status` and `stop`. `verify` and `layout-check` apply the user's phone profile
 (`note9-large`: Galaxy Note 9, 1080×2220, 420 dpi, three-button navigation, font 130%) by themselves;
 `SOLAR_EMULATOR_PROFILE=none` skips it. The user will move to a Samsung S22 FE later and will send a screenshot.
-`pinch` checks the two-finger zoom. `retro-tabs` captures all four Retro pages and rejects accidental scrolling. The
+`pinch` checks the two-finger zoom. CASA screens without touching the real server (the emulator has no casa token, and
+none may be minted on the real server): build the debug APK with `-PcasaBase=http://10.0.2.2:18100` (debug-only BuildConfig
+`CASA_BASE`; release always uses production) and run a throwaway demo container
+(`docker run -d --rm --name casa-emu-demo -p 127.0.0.1:18100:8100 -e CASA_DEMO=1 -e CASA_DATA_DIR=/data -v <temp dir>:/data
+solar-monitor-casa`, then `python -m casa demo-devices` and `set-password --stdin` with a throwaway password).
+`src/debug/res/xml/network_security_config.xml` allows cleartext only to 10.0.2.2 and repeats the vyra.go.ro trust anchors
+(keep it in step with the main one). `retro-tabs` captures all four Retro pages and rejects accidental scrolling. The
 emulator is intentionally started on demand rather than as a boot service. A successful Gradle build is
 not enough for UI work: inspect the captured PNG after `verify`.
 
@@ -446,25 +452,33 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   **not** get the whole `.env`: `docker-compose.yml` passes only `INFLUX_*`, `NTFY_URL`, `CASA_DEMO` (default 0),
   `CASA_POLL_S` (default 5) and `CASA_DATA_DIR`. A new `CASA_*` variable must be added there too. If the state file is
   demo-marked, real mode exits with gunicorn's code 4 (app load error), so gunicorn halts and Docker's restart backoff applies.
-- **Semantics** (spec §4.4 + the rulings of the build): times in Europe/Bucharest. A schedule is a daily interval
-  `start → stop`; it acts **on edges only** (a manual off mid-interval stays off until the next edge). After a
-  restart/reconnect a missed **stop is executed, however late, unless the plug is known to be off or a newer manual
-  command or start exists**; a missed **start is recovered only inside the window**. At the same instant **stops run
-  before starts**, and only the interval that holds the plug can stop it (back-to-back windows work); after a manual
-  "on" nobody holds the plug, so any interval's stop acts. Spring DST gap (03:00–04:00 does not exist): start and stop land on 04:00; a collapsed
-  window makes no edges. While a plug is on, the **nearest off deadline** (end of the interval that started it, inching,
-  countdown "off") is written to the plug's own countdown DP (seconds; dp 9 is only the fallback, the real DP number comes
-  from `sync`), so it switches off even if the server is down; the app shows "OPRIRE IN …". Editing the interval that holds the plug: still contains now → new end; no longer
-  contains now → off now; **disable/delete → the plug stays on until the OLD stop** (countdown-off). A manual "on" after
-  the holder was deleted is unbounded unless inching applies (the user's decision). A manual command cancels a running
-  countdown. Per-plug locks and throttle: one dead plug never delays another's stop; a dead plug ties one thread for a command ≈ 25 s typical / 45 s theoretical worst case.
+- **Semantics — events (since 2026-11-07, v3.44; spec `docs/superpowers/specs/2026-11-07-casa-evenimente-design.md`):**
+  times in Europe/Bucharest. A plug has up to **12 events**, each `HH:MM` + PORNESTE/OPRESTE (`action` on/off), **daily**
+  (`days: null`) or on chosen ISO weekdays (1=Mon..7=Sun), active/inactive; two active events at the same time with
+  overlapping days are refused ("conflict"). An event acts **only at its time**; between events the plug obeys the app and
+  its own button. Missed events (server down, plug offline, failed command): only the **latest pending occurrence** counts
+  (`last_event_at`); a newer manual command consumes it; a missed **OFF runs however late** (2-day lookback) and is retried
+  without limit; a missed **ON runs only until the next event** of that plug. An event added/edited/enabled at a time already
+  passed today does not fire today (`event_cutoff`). **The plug's physical button counts as manual** (an on/off change seen
+  between two online readings that the server did not command within 15 s; a press made while the plug is offline is
+  invisible). While a plug is on (from any source), the **nearest off deadline** (next active OFF event, inching, countdown
+  "off") is written to the plug's countdown DP (dp 9 only as fallback; real DP from `sync`), so it switches off even if the
+  server is down — but **only once it is ≤ 24 h away** (a weekday OFF days ahead is not written; a capped 24 h countdown would
+  switch off too early). Deleting an OFF while the plug is on leaves it on. A manual command cancels a running countdown.
+  The old intervals were migrated once into ON/OFF event pairs (backup `casa/data/state.json.bak-2026-11-07`). Per-plug
+  locks and throttle: one dead plug never delays another's stop; a dead plug ties one thread for a command ≈ 25 s typical /
+  45 s theoretical worst case. Routes: `POST /plugs/<id>/events` `{time, action, days?, enabled?}`, `PUT`/`DELETE
+  /plugs/<id>/events/<eid>`; `GET /plugs` items carry `events`, `next_event` and an empty `schedules: []` (for apps ≤ 3.43).
+- **Plug order (v3.44):** the same on every phone: `state.json` top-level `plug_order`, `PUT /plug-order` `{"order": [ids]}`
+  (unknown/duplicate → 400; missing ids appended) returns the `GET /plugs` body. App: long-press a plug row on SISTEM → CASA →
+  vibration, rows wiggle, drag to reorder, saved on drop, "GATA" or a tap outside leaves the mode.
 - **InfluxDB:** `casa_plug` (tags `device_id`, `name`; fields `on`, `online`, `power`, `voltage`, `current` in A) and
   `casa_sensor` (fields `temperature`, `humidity`, `battery`) in `live` and `history`. Sensors are written **on every
   change** to both buckets (not 60 s means); plug history is per minute: `on`/`online` = minimum, `power`/`voltage`/
   `current` = mean. Written by one flusher thread, so a down InfluxDB never delays plug commands. The API energy today = integral of `power` since local midnight.
   Grafana: row "🏠 Casa: prize si senzori" (panels 142–147: plug power, plugs on, sensor temperature/humidity, sensors now).
-- **App (v3.40, versionCode 44; v3.41 stale poll fix, v3.42 haptics, v3.43/47 compact list + rename):** Retro SISTEM page has a SISTEM | CASA selector; CASA = 5 plug plates + sensors, tap
-  opens plug detail (switch, countdown 30M/1H/2H/6H/other, schedules, inching) or sensor detail (2h/1d/7d charts). Simple
+- **App (v3.40, versionCode 44; v3.41 stale poll fix, v3.42 haptics, v3.43/47 compact list + rename; v3.44/48 events editor + plug order):** Retro SISTEM page has a SISTEM | CASA selector; CASA = 5 plug plates + sensors, tap
+  opens plug detail (switch, countdown 30M/1H/2H/6H/other, events list "PROGRAMARI · EVENIMENTE" with "URMATORUL: …" and an editor, inching) or sensor detail (2h/1d/7d charts). Simple
   theme: a CASA card. SETARI: row "ACCES CASA" with "UITA TELEFONUL" (deletes only the local token; the server keeps the phone until `revoke`). The password plate shows on first open.
   Command timeout 50 s; commands stay enabled when a plug looks offline. Files: `CasaModel.kt`, `CasaRepository.kt`,
   `CasaAccess.kt`, `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt`. **Poll vs. command order (v3.41):** a

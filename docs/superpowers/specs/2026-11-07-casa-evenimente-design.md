@@ -1,6 +1,6 @@
 # CASA: programări pe evenimente în loc de intervale (design)
 
-Data: 2026-11-07. Stare: propus, aștept aprobarea userului.
+Data: 2026-11-07. Stare: aprobat și implementat (server 2026-11-07, aplicația v3.44).
 Mockup aprobat: **A, listă de evenimente** (+ ecranul de adăugare), în
 `android/build/emulator-artifacts/mock-evenimente/` (gitignored; `a.html`/`a.png`, `editor.html`/`editor.png`; B a fost respins).
 Designul de bază al CASA: `2026-11-05-casa-prize-senzori-design.md` (§4.4 semantica de azi).
@@ -96,8 +96,9 @@ Protecția la server căzut lipsește doar pentru termenele aflate la peste 24 h
 ### 4.2b Butonul fizic e comandă manuală
 O schimbare de stare văzută la citire (pornit↔oprit) pe care **n-a cauzat-o serverul** (nicio comandă trimisă de el în
 ultimele câteva secunde pentru starea respectivă) contează ca o comandă manuală: `last_manual_at` = momentul observării.
-Doar cât priza e online (o reconectare nu e apăsare de buton: prima citire după offline nu contează ca manual). Exemplu:
-PORNEȘTE 11:00 ratat (priză offline), userul o oprește de la buton la 11:10, se reconectează la 11:30 → nu o repornește.
+Doar cât priza e online (o reconectare nu e apăsare de buton: prima citire după offline nu contează ca manual; o apăsare
+făcută cât priza e offline nu se poate vedea — limită acceptată la implementare). Exemplu: PORNEȘTE 11:00 executat, userul
+o oprește de la buton la 11:10 cu priza online → un PORNEȘTE reîncercat nu o mai repornește.
 Ca la comenzile din aplicație, anulează un countdown în curs. Răspunde direct anti-obiectivului 1 (userul folosește des
 butonul).
 

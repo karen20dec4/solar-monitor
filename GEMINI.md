@@ -308,6 +308,12 @@ Subcomenzi: `doctor`, `start`, `wait`, `build`, `install`, `launch`, `screenshot
   `profile reset` la final (suprascrierile rămân în datele AVD). Vezi `COPILOT_CONTEXT.md` §13.56, §13.66.
   Zoom-ul cu două degete se verifică cu `emulator-check.sh pinch` (`zoom-held.png` mărit,
   `zoom-after.png` revenit).
+  Ecranele CASA fără serverul real (emulatorul nu are token casa și nu se creează unul pe serverul real): APK debug cu
+  `-PcasaBase=http://10.0.2.2:18100` (BuildConfig `CASA_BASE` doar în debug; release-ul folosește mereu producția) și un
+  container demo de unică folosință (`docker run -d --rm --name casa-emu-demo -p 127.0.0.1:18100:8100 -e CASA_DEMO=1
+  -e CASA_DATA_DIR=/data -v <dir temporar>:/data solar-monitor-casa`, apoi `python -m casa demo-devices` și
+  `set-password --stdin` cu o parolă de test). `src/debug/res/xml/network_security_config.xml` permite cleartext doar
+  către 10.0.2.2 și repetă ancorele vyra.go.ro (se ține la zi cu cel din main).
 - **La finalul oricărei sarcini cu emulatorul rulează `stop`** și verifică oprirea. AVD-ul
   idle mănâncă mai multe nuclee CPU și ~5 GB RAM.
 
@@ -541,26 +547,34 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   (implicit 5) și `CASA_DATA_DIR`. O variabilă `CASA_*` nouă trebuie adăugată și acolo. Dacă fișierul de stare e marcat
   demo, modul real iese cu codul 4 al gunicorn (eroare la încărcarea aplicației), deci gunicorn se oprește și se aplică
   backoff-ul de restart al Docker.
-- **Semantică** (spec §4.4 + deciziile din construcție): ora Europe/Bucharest. O programare e un interval zilnic
-  `start → stop` și acționează **doar pe fronturi** (o oprire manuală în interval rămâne oprită până la următorul front).
-  După repornire/reconectare un **stop ratat se execută, oricât de târziu, în afară de cazul în care priza se știe oprită
-  sau există o comandă manuală ori un start mai nou**; un **start ratat se recuperează doar în interiorul ferestrei**. În
-  același moment **stop-urile rulează înaintea start-urilor**, iar stop-ul îl dă doar intervalul care ține priza (ferestre
-  cap la cap merg); după un „pornit" manual nu o ține nimeni, deci stop-ul oricărui interval acționează. Golul de primăvară (03:00–04:00 nu există): start și stop
-  cad la 04:00; o fereastră prăbușită nu produce fronturi. Cât timp priza e pornită, **cel mai apropiat termen de oprire**
-  (sfârșitul intervalului care a pornit-o, inching, countdown „oprește") se scrie în DP-ul de countdown al prizei (în
-  secunde; dp 9 e doar varianta de rezervă, numărul real al DP vine din `sync`), ca priza să se stingă și dacă serverul cade; aplicația arată „OPRIRE IN …". Editarea intervalului care ține
-  priza: încă conține acum → sfârșit nou; nu mai conține acum → oprire acum; **dezactivare/ștergere → priza rămâne
-  pornită până la VECHIUL stop** (countdown-oprire). Un „pornit" manual după ștergerea intervalului e nelimitat, dacă nu
-  se aplică inching (decizia utilizatorului). O comandă manuală anulează countdown-ul în curs. Lock-uri și throttle per
-  priză: o priză moartă nu întârzie niciodată oprirea alteia; ține blocat un fir cât durează o comandă: ≈ 25 s în mod obișnuit, 45 s în cel mai rău caz teoretic.
+- **Semantică — evenimente (din 2026-11-07, v3.44; spec `docs/superpowers/specs/2026-11-07-casa-evenimente-design.md`):**
+  ora Europe/Bucharest. O priză are cel mult **12 evenimente**: `HH:MM` + PORNEȘTE/OPREȘTE (`action` on/off), **zilnic**
+  (`days: null`) sau în zilele ISO alese (1=luni..7=duminică), activ/inactiv; două evenimente active la aceeași oră cu zile
+  suprapuse sunt refuzate („conflict"). Un eveniment acționează **doar la ora lui**; între evenimente priza ascultă de aplicație și
+  de butonul ei. Evenimente ratate (server oprit, priză offline, comandă eșuată): contează doar **cea mai recentă apariție
+  scadentă** (`last_event_at`); o comandă manuală mai nouă o consumă; un **OPREȘTE ratat se execută oricât de târziu** (lookback 2
+  zile) și se reîncearcă fără limită; un **PORNEȘTE ratat doar până la următorul eveniment** al prizei. Un eveniment adăugat/editat/
+  activat la o oră deja trecută azi nu acționează azi (`event_cutoff`). **Butonul fizic al prizei contează ca manual** (o schimbare
+  pornit/oprit văzută între două citiri online pe care serverul n-a comandat-o în ultimele 15 s; o apăsare cât priza e offline nu se
+  vede). Cât timp priza e pornită (din orice sursă), **cel mai apropiat termen de oprire** (următorul OPREȘTE activ, inching,
+  countdown „oprește") se scrie în DP-ul de countdown al prizei (dp 9 doar de rezervă; DP-ul real vine din `sync`), ca priza să se
+  stingă și dacă serverul cade — dar **doar când e la ≤ 24 h** (un OPREȘTE pe zile, peste câteva zile, nu se scrie; un countdown
+  plafonat la 24 h ar opri-o prea devreme). Ștergerea unui OPREȘTE cât priza e pornită o lasă pornită. O comandă manuală anulează
+  countdown-ul în curs. Intervalele vechi au fost convertite o dată în perechi PORNEȘTE/OPREȘTE (copie
+  `casa/data/state.json.bak-2026-11-07`). Lock-uri și throttle per priză: o priză moartă nu întârzie oprirea alteia; ține un fir ≈ 25 s
+  obișnuit / 45 s în cel mai rău caz. Rute: `POST /plugs/<id>/events` `{time, action, days?, enabled?}`, `PUT`/`DELETE
+  /plugs/<id>/events/<eid>`; elementele din `GET /plugs` au `events`, `next_event` și `schedules: []` gol (pentru aplicațiile ≤ 3.43).
+- **Ordinea prizelor (v3.44):** aceeași pe toate telefoanele: cheia `plug_order` în `state.json`, `PUT /plug-order` `{"order": [id-uri]}`
+  (necunoscute/duplicate → 400; cele lipsă se pun la sfârșit) întoarce corpul lui `GET /plugs`. Aplicația: apăsare lungă pe un rând
+  de priză în SISTEM → CASA → vibrație, rândurile tremură, tragi ca să muți, se salvează la ridicarea degetului, „GATA" sau o
+  atingere în afara listei ies din mod.
 - **InfluxDB:** `casa_plug` (tag-uri `device_id`, `name`; câmpuri `on`, `online`, `power`, `voltage`, `current` în A) și
   `casa_sensor` (câmpuri `temperature`, `humidity`, `battery`) în `live` și `history`. Senzorii se scriu **la fiecare
   schimbare** în ambele găleți (nu medii pe 60 s); istoricul prizelor e pe minut: `on`/`online` = minimul, `power`/
   `voltage`/`current` = media. Le scrie un singur fir de flush, deci un InfluxDB căzut nu întârzie comenzile. Energia azi din API = integrala lui `power` de la miezul
   nopții local. Grafana: rândul „🏠 Casa: prize si senzori" (panourile 142–147: putere prize, prize pornite,
   temperatură/umiditate senzori, senzori acum).
-- **Aplicația (v3.40, versionCode 44; v3.41 sondarea veche, v3.42 vibrație, v3.43/47 listă compactă + redenumire):** pagina SISTEM din Retro are comutatorul SISTEM | CASA; CASA = 5 plăci de priză +
+- **Aplicația (v3.40, versionCode 44; v3.41 sondarea veche, v3.42 vibrație, v3.43/47 listă compactă + redenumire; v3.44/48 editor de evenimente + ordinea prizelor):** pagina SISTEM din Retro are comutatorul SISTEM | CASA; CASA = 5 plăci de priză +
   senzori, atingerea deschide detaliul prizei (comutator, countdown 30M/1H/2H/6H/altă durată, programări, inching) sau al
   senzorului (grafice 2h/1d/7d). Tema Simple: un card CASA. SETARI: rândul „ACCES CASA" cu „UITA TELEFONUL" (șterge doar
   token-ul local; serverul ține telefonul până la `revoke`). Placa de parolă apare la prima deschidere. Timeout comandă 50 s;
