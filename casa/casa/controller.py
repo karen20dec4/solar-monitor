@@ -19,6 +19,7 @@ Reguli de siguranta:
 """
 import copy
 import logging
+import math
 import secrets
 import threading
 from dataclasses import dataclass
@@ -644,6 +645,9 @@ class Controller:
                 changed = ev.to_dict() != Event.from_dict(cur).to_dict()
             except (AttributeError, KeyError, TypeError, ValueError):
                 changed = True                                      # evenimentul stocat era stricat
+            # aparitia scadenta a versiunii vechi depasea aparitiile mai vechi ale celorlalte: ramane
+            # consumata si dupa taierea ei, ca un PORNESTE/OPRESTE vechi sa nu devina cel mai recent
+            sup = self._superseded_by(st, cur, now) if changed else None
 
             def f(p):
                 p["events"] = [ev.to_dict() if isinstance(e, dict) and e.get("id") == event_id else e
@@ -651,6 +655,7 @@ class Controller:
                 if changed:
                     # editat/activat: aparitiile lui de pana acum nu se mai executa (nimic retroactiv)
                     p["event_cutoff"][event_id] = now.isoformat()
+                    self._consume_until(p, sup)
             self._mut(pid, f)
             self._after(pid)
         return self.plug_view(pid)
@@ -658,13 +663,18 @@ class Controller:
     def delete_event(self, pid: str, event_id: str) -> dict:
         self._dev(pid)
         with self._plock[pid]:
-            if self._find_event(self._get(pid), event_id) is None:
+            now = self.clock()
+            st = self._get(pid)
+            cur = self._find_event(st, event_id)
+            if cur is None:
                 raise KeyError(f"eveniment necunoscut: {event_id}")
+            sup = self._superseded_by(st, cur, now)       # vezi update_event
 
             def f(p):
                 p["events"] = [e for e in p["events"]
                                if not (isinstance(e, dict) and e.get("id") == event_id)]
                 p["event_cutoff"].pop(event_id, None)
+                self._consume_until(p, sup)
             self._mut(pid, f)
             self._after(pid)
         return self.plug_view(pid)
@@ -706,6 +716,12 @@ class Controller:
     def _throttled(rt: _Rt, now: datetime) -> bool:
         return rt.next_cmd_try is not None and now < rt.next_cmd_try
 
+    @staticmethod
+    def _state_known(rt: _Rt) -> bool:
+        """Starea pornit/oprit a prizei e de incredere? Doar cat e online: offline, `rt.on` ramane la
+        ultima valoare si poate fi veche (butonul fizic, repornirea curentului nu se vad)."""
+        return rt.online is True and rt.on is not None
+
     def _due_countdown(self, pid: str, now: datetime) -> None:
         cd = self._get(pid)["countdown"]
         if not cd:
@@ -719,7 +735,10 @@ class Controller:
         def clear(p):
             if p["countdown"] and p["countdown"].get("at") == cd["at"]:
                 p["countdown"] = None
-        if (action == "off" and rt.on is False) or (action == "on" and rt.on is True):
+        # OPRESTE se sare ca "deja oprita" doar pe o stare de incredere (online); pe una veche, de cand
+        # priza e offline, ar fi consumat un OPRESTE desi priza a putut fi pornita intre timp.
+        if ((action == "off" and rt.on is False and self._state_known(rt))
+                or (action == "on" and rt.on is True)):
             self._mut(pid, clear)
             return
         if action == "on" and now - at > ON_COUNTDOWN_GIVE_UP:
@@ -747,13 +766,43 @@ class Controller:
             self._mut(pid, lambda p: p.__setitem__(key, None))
 
     # ------------------------------------------------------------------ evenimente
+    @staticmethod
+    def _window_start(st: dict, now: datetime) -> datetime:
+        """Inceputul (exclusiv) ferestrei aparitiilor neconsumate: max(last_event_at, now - LOOKBACK)."""
+        lo = now - LOOKBACK
+        last = _parse_iso(st["last_event_at"])
+        return last if last is not None and last > lo else lo
+
+    def _superseded_by(self, st: dict, old: dict, now: datetime) -> Optional[datetime]:
+        """Cea mai recenta aparitie scadenta si neconsumata a evenimentului `old` (cum era inainte de
+        o editare/stergere), sau None. Cat timp exista, ea depaseste aparitiile mai vechi ale celorlalte
+        evenimente; taiata de cutoff-ul noii versiuni (sau scoasa odata cu evenimentul), le-ar
+        readuce in joc. Se consuma deci pana la ea."""
+        try:
+            ev = Event.from_dict(old)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return None
+        cut = _parse_iso(st["event_cutoff"].get(ev.id))
+        due = [o.at for o in occurrences_between([ev], self._window_start(st, now), now, self.tz)
+               if not (cut and o.at <= cut)]
+        return max(due, default=None)
+
+    @staticmethod
+    def _consume_until(p: dict, at: Optional[datetime]) -> None:
+        if at is None:
+            return
+        cur = _parse_iso(p["last_event_at"])
+        if cur is None or at > cur:
+            p["last_event_at"] = at.isoformat()
+
     def _process_events(self, pid: str, now: datetime) -> None:
         """Executa evenimentul scadent cel mai recent (live, ratat sau esuat), dupa last_event_at.
 
         Se iau aparitiile active din (max(last_event_at, now - LOOKBACK), now] care nu sunt taiate de
         event_cutoff; conteaza doar cea mai recenta (la aceeasi ora, PORNESTE dupa OPRESTE), cele mai
         vechi sunt depasite de ea si se consuma odata cu ea. O comanda manuala mai noua o anuleaza.
-        OPRESTE: nimic de trimis daca priza e sigur oprita, altfel se reincearca la 30 s fara limita.
+        OPRESTE: nimic de trimis daca priza e sigur oprita (online si oprita), altfel se reincearca la 30 s
+        fara limita; cat e offline ramane in asteptare, ca o oprire sa nu fie consumata pe o stare veche.
         PORNESTE: la fel, dar nu mai e reincercat cand o aparitie mai noua devine cea mai recenta.
         Consumat = last_event_at = momentul aparitiei."""
         rt = self._rt[pid]
@@ -761,12 +810,8 @@ class Controller:
         with self._rt_lock:
             rt.needs_missed = False
             rt.retry_at = None
-        lo = now - LOOKBACK
-        last = _parse_iso(st["last_event_at"])
-        if last is not None and last > lo:
-            lo = last
         cutoff = {i: _parse_iso(v) for i, v in st["event_cutoff"].items()}
-        pending = [o for o in occurrences_between(self._events(st), lo, now, self.tz)
+        pending = [o for o in occurrences_between(self._events(st), self._window_start(st, now), now, self.tz)
                    if not (cutoff.get(o.event_id) and o.at <= cutoff[o.event_id])]
         if not pending:
             return
@@ -775,14 +820,15 @@ class Controller:
         want_on = o.action == "on"
 
         def consume(p):
-            cur = _parse_iso(p["last_event_at"])
-            if cur is None or o.at > cur:
-                p["last_event_at"] = o.at.isoformat()
+            self._consume_until(p, o.at)
 
         # Daca ceva se intampla (esec, lock, disc), reincercarea se programeaza oricum.
         retry = True
         try:
-            if not ((last_manual is not None and last_manual > o.at) or rt.on is want_on):
+            # PORNESTE e sarit pe "deja pornita" (cel mult o pornire pierduta, niciodata una in plus);
+            # OPRESTE doar pe o stare de incredere: offline, `rt.on` poate fi veche.
+            already = rt.on is want_on and (want_on or self._state_known(rt))
+            if not ((last_manual is not None and last_manual > o.at) or already):
                 if not self._auto_switch(pid, now, want_on):
                     return                # se reincearca: ramane cel mai recent pana reuseste sau vine altul
             self._mut(pid, consume)
@@ -833,7 +879,9 @@ class Controller:
         remaining = (nd.at - now).total_seconds()
         if remaining <= 0:
             return                        # scadent: il executa evenimentul sau _due_*
-        value = max(1, int(remaining))
+        # rotunjit in sus: countdown-ul prizei nu are voie sa traga inaintea evenimentului (ar parea
+        # o apasare de buton chiar inainte de el)
+        value = max(1, math.ceil(remaining))
         if rt.cd_written is not None and abs(_epoch(nd.at) - rt.cd_written) <= DP_TOLERANCE_S:
             return
         if self._write_dp(pid, dp, value, now):

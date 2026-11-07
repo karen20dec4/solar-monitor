@@ -466,7 +466,9 @@ class RetryTest(ControllerBase):
         self.assertGreater(len(r.worker.submitted), 3)
         r.driver.fail_set = 0
         n = len(r.worker.submitted)
-        r.tick_to(loc(17), step=timedelta(seconds=30))
+        # cu citiri online intre tick-uri (workerul real o face la ~5 s): OPRESTE nu se mai consuma
+        # pe o stare veche de offline, ci pe una proaspata, deci tot fara comanda
+        r.tick_to(loc(17), step=timedelta(seconds=30), poll=True)
         self.assertFalse(r.on)             # OPRESTE 16:00 e cel mai recent: priza e oprita, PORNESTE nu se mai incearca
         self.assertEqual(len(r.worker.submitted), n)
         self.assertIsNone(r.c._rt[PID].retry_at)
@@ -2013,6 +2015,194 @@ class NativeInchingTest(ControllerBase):
         r.c.set_inching(PID, True, 10)
         self.assertNotIn("44", r.driver.dps)
         self.assertEqual(r.c.plug_view(PID)["inching"], {"enabled": True, "minutes": 10})
+
+
+OFFLINE = PlugReading(False, None, None, None, None, None, "x", 0)
+
+
+class StaleStateWhileOfflineTest(ControllerBase):
+    """Cat priza e offline, `rt.on` ramane la ultima valoare cunoscuta si poate fi veche (butonul fizic
+    nu se vede). Un OPRESTE scadent nu are voie sa fie consumat pe o astfel de stare (spec §2,
+    anti-obiectivul 2); un PORNESTE ramane neschimbat."""
+
+    def drop(self, r):
+        """Priza cade: comenzile esueaza, citirea e offline."""
+        r.driver.fail_next = 10 ** 6
+        r.worker.on_reading(PID, OFFLINE)
+
+    def reconnect(self, r):
+        r.driver.fail_next = 0
+        r.worker.poll()
+
+    def test_off_event_due_while_offline_is_not_consumed_on_a_stale_off(self):
+        r = self.rig(loc(9))                     # priza oprita
+        self.event(r, "16:00", "off")
+        r.tick_to(loc(14))
+        self.drop(r)
+        r.driver.dps["1"] = True                 # butonul fizic, cat priza e offline: nu se vede
+        r.tick_to(loc(16, 30))
+        self.assertIsNone(r.c._get(PID)["last_event_at"])       # OPRESTE-ul asteapta
+        n = len(r.worker.submitted)
+        r.clock.advance(seconds=10)
+        r.c.tick()
+        self.assertEqual(len(r.worker.submitted), n)             # ritm de 30 s: nu la fiecare tick
+        self.reconnect(r)
+        self.assertTrue(r.on)
+        r.c.tick()
+        self.assertFalse(r.on)
+        self.assertEqual(r.c._get(PID)["last_event_at"], loc(16).isoformat())
+
+    def test_off_event_due_while_offline_on_a_really_off_plug_is_consumed_after_reconnect(self):
+        r = self.rig(loc(9))
+        self.event(r, "16:00", "off")
+        r.tick_to(loc(14))
+        self.drop(r)
+        r.tick_to(loc(16, 30))
+        self.assertIsNone(r.c._get(PID)["last_event_at"])
+        self.reconnect(r)
+        n = len(r.worker.submitted)
+        r.c.tick()
+        self.assertFalse(r.on)
+        self.assertEqual(len(r.worker.submitted), n)            # oprita deja: nicio comanda
+        self.assertEqual(r.c._get(PID)["last_event_at"], loc(16).isoformat())
+
+    def test_on_event_still_consumed_on_a_stale_on_while_offline(self):
+        r = self.rig(loc(9), dps={"1": True})
+        r.worker.poll()
+        self.event(r, "10:30", "on")
+        r.tick_to(loc(10))
+        self.drop(r)
+        r.tick_to(loc(11))
+        self.assertEqual(r.c._get(PID)["last_event_at"], loc(10, 30).isoformat())
+
+    def test_countdown_off_due_while_offline_is_not_cleared_on_a_stale_off(self):
+        r = self.rig(loc(14))                    # priza oprita
+        r.c.set_countdown(PID, "off", 30)        # oprire la 14:30
+        self.drop(r)
+        r.driver.dps["1"] = True                 # pornita de la buton cat era offline
+        r.tick_to(loc(14, 40))
+        self.assertIsNotNone(r.c._get(PID)["countdown"])
+        self.reconnect(r)
+        r.c.tick()
+        self.assertFalse(r.on)
+        self.assertIsNone(r.c._get(PID)["countdown"])
+
+    def test_countdown_off_due_while_offline_on_a_really_off_plug_is_cleared_after_reconnect(self):
+        r = self.rig(loc(14))
+        r.c.set_countdown(PID, "off", 30)
+        self.drop(r)
+        r.tick_to(loc(14, 40))
+        self.assertIsNotNone(r.c._get(PID)["countdown"])
+        self.reconnect(r)
+        n = len(r.worker.submitted)
+        r.c.tick()
+        self.assertIsNone(r.c._get(PID)["countdown"])
+        self.assertEqual(len(r.worker.submitted), n)
+
+
+class EditSupersedesOldOccurrenceTest(ControllerBase):
+    """Editarea/dezactivarea/stergerea unui eveniment cu aparitie scadenta si neconsumata nu are
+    voie sa readuca in joc un eveniment mai vechi (cutoff-ul taie aparitia lui, deci ar deveni
+    brusc cel mai recent)."""
+
+    def restarted_offline(self, start=loc(9)):
+        """Evenimente PORNESTE 10:30 + OPRESTE 16:00; serverul reporneste cu priza offline."""
+        r = self.rig(start)
+        on, off = self.on_off(r)
+        r.clock.set(loc(9, 30))
+        r.restart(poll=False)
+        r.driver.fail_next = 10 ** 6
+        r.worker.on_reading(PID, OFFLINE)
+        r.tick_to(loc(17))
+        self.assertFalse(r.on)
+        self.assertIsNone(r.c._get(PID)["last_event_at"])       # nimic consumat: priza n-a raspuns
+        return r, on, off
+
+    def back_online(self, r, minutes=5):
+        r.driver.fail_next = 0
+        r.clock.advance(minutes=minutes)
+        r.worker.poll()
+        r.c.tick()
+
+    def test_without_edit_the_plug_stays_off(self):
+        r, _, _ = self.restarted_offline()
+        self.back_online(r)
+        self.assertFalse(r.on)
+        self.assertEqual(r.c._get(PID)["last_event_at"], loc(16).isoformat())
+
+    def test_delete_pending_off_does_not_resurrect_the_old_on(self):
+        r, _, off = self.restarted_offline()
+        r.c.delete_event(PID, off)
+        self.back_online(r)
+        self.assertFalse(r.on)
+        r.tick_to(loc(18))
+        self.assertFalse(r.on)
+
+    def test_disable_pending_off_does_not_resurrect_the_old_on(self):
+        r, _, off = self.restarted_offline()
+        r.c.update_event(PID, off, enabled=False)
+        self.back_online(r)
+        self.assertFalse(r.on)
+
+    def test_move_pending_off_does_not_resurrect_the_old_on(self):
+        r, _, off = self.restarted_offline()
+        r.c.update_event(PID, off, time="18:00")
+        self.back_online(r)
+        self.assertFalse(r.on)
+        r.driver.dps["1"] = True                  # pornita de user dupa reconectare
+        r.worker.poll()
+        r.tick_to(loc(18))
+        self.assertFalse(r.on)                    # OPRESTE mutat la 18:00 actioneaza la ora lui
+
+    def test_another_newer_pending_off_still_runs(self):
+        r = self.rig(loc(9))
+        on, off = self.on_off(r)
+        off2 = self.event(r, "16:30", "off")
+        r.clock.set(loc(9, 30))
+        r.restart(poll=False)
+        r.driver.fail_next = 10 ** 6
+        r.worker.on_reading(PID, OFFLINE)
+        r.tick_to(loc(17))
+        r.c.delete_event(PID, off)                # 16:00 depasit de 16:30, care ramane scadent
+        r.driver.dps["1"] = True                  # pornita de la buton cat era offline
+        self.back_online(r)
+        self.assertFalse(r.on)
+        self.assertEqual(r.c._get(PID)["last_event_at"], loc(16, 30).isoformat())
+        self.assertIn(off2, [e["id"] for e in r.c._get(PID)["events"]])
+
+    def test_editing_a_pending_on_does_not_expose_an_older_off(self):
+        r = self.rig(loc(9))
+        off = self.event(r, "09:30", "off")
+        on = self.event(r, "10:30", "on")
+        r.clock.set(loc(9, 10))
+        r.restart(poll=False)
+        r.driver.fail_next = 10 ** 6
+        r.worker.on_reading(PID, OFFLINE)
+        r.tick_to(loc(11))
+        r.c.update_event(PID, on, time="12:00")   # PORNESTE 10:30 era cel mai recent
+        r.driver.dps["1"] = True                  # pornita de la buton cat era offline
+        self.back_online(r)
+        self.assertTrue(r.on)                     # OPRESTE 09:30 nu mai are voie sa o opreasca
+        self.assertEqual(r.c._get(PID)["last_event_at"], loc(10, 30).isoformat())
+
+    def test_edit_without_a_pending_occurrence_leaves_last_event_at_alone(self):
+        r = self.rig(loc(9))
+        on, off = self.on_off(r)
+        r.tick_to(loc(11))
+        before = r.c._get(PID)["last_event_at"]
+        r.c.update_event(PID, off, time="17:00")  # 16:00 inca nu a venit
+        self.assertEqual(r.c._get(PID)["last_event_at"], before)
+        r.c.delete_event(PID, off)
+        self.assertEqual(r.c._get(PID)["last_event_at"], before)
+
+
+class DpValueRoundingTest(ControllerBase):
+    def test_dp_value_is_rounded_up_so_the_plug_never_fires_before_the_event(self):
+        start = loc(15, 58, 29).replace(microsecond=500000)      # pana la 16:00 raman 90,5 s
+        r = self.rig(start, dps={"1": True})
+        r.worker.poll()
+        self.event(r, "16:00", "off")
+        self.assertEqual(r.dp9, 91)
 
 
 if __name__ == "__main__":
