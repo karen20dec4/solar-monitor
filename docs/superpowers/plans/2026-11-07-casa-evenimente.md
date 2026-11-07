@@ -176,3 +176,22 @@ Execution rule (`_process_events(pid, now)`, replaces `_process_missed`): pendin
 - [ ] Backup: `cp casa/data/state.json casa/data/state.json.bak-2026-11-07` (mode 600), then `docker compose up -d --build casa`; check logs, `state.json` migrated, plugs online.
 - [ ] Build release APK and deliver per `docs/DEZVOLTARE.md` (Telegram).
 - [ ] Commit docs.
+
+---
+
+### Task 8: Plug order shared by all phones (spec §11)
+
+**Files:** Modify `casa/casa/controller.py` (`plugs_view` order, `set_order`), `casa/casa/web.py` (route), Android `CasaRepository.kt`, `RetroCasa.kt` (reorder mode on the CASA plug rows), `CasaModel.kt` (pure helper); Tests `casa/tests/test_controller.py`, `casa/tests/test_web.py`, `android/.../CasaModelTest.kt`.
+
+**Interfaces — Produces:**
+- Persistent top-level key in `state.json`: `"plug_order": list[str]` (sibling of `"plugs"`; the demo marker stays untouched).
+- `Controller.set_order(order: list[str]) -> list[dict]` — ValueError on unknown id or duplicate; stores the given ids followed by missing known ids in current order; returns `plugs_view()`.
+- `Controller.plugs_view()` returns plugs sorted by `plug_order`, unknown/missing ids appended in device order.
+- `PUT /plug-order` body `{"order": [..]}` → 200 JSON list (same shape as `GET /plugs`); 400 on bad body/unknown/duplicate. `@require_token`, same command throttle as other non-GET routes.
+- Android: `CasaRepository.setPlugOrder(token: String, ids: List<String>): CasaResult<List<CasaPlug>>`; pure `internal fun casaMove(ids: List<String>, from: Int, to: Int): List<String>`.
+- UI (Retro CASA rows, `CompactPlugRows`): long-press a row → `CasaHaptics` short vibration → reorder mode; rows wiggle (small rotation ±1°, ~120 ms loop); drag a row vertically, others shift; on drop: optimistic local reorder + `setPlugOrder` via the existing command path (`CasaFreshness.commandStarted/Finished`; on failure revert and double-vibrate); "GATA" button (or tap outside the rows) leaves the mode; in reorder mode taps don't open details and switches don't command. Simple's CASA card simply renders the server order.
+
+- [ ] **Step 1: Failing tests:** controller `test_order_applied_in_view`, `test_order_missing_ids_appended`, `test_order_rejects_unknown_and_duplicates`, `test_order_survives_restart` (new Controller on same store); web `test_put_plug_order`, `test_put_plug_order_400`, auth required; Android `casaMove` (move down, move up, same index, out-of-range clamps).
+- [ ] **Step 2–4:** run (FAIL), implement, run casa suite twice + Android tests (PASS).
+- [ ] **Step 5: Visual check** with the emulator skill: reorder mode screenshot (wiggle frame + GATA), layout-check passes, no page scrolling.
+- [ ] **Step 6: Commit** `feat(casa): ordinea prizelor, aceeasi pe toate telefoanele (apasare lunga + tragere)`.

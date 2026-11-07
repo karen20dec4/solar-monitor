@@ -182,3 +182,16 @@ Forma exactă a stării de execuție și a funcțiilor din `schedule.py`; numele
 - Termen de oprire la peste 24 h: nu se scrie în priză până nu intră sub 24 h (fără protecție la server căzut până atunci).
 - Butonul fizic al prizei contează ca o comandă manuală (vezi §4.2b).
 - În listele CASA apare doar următorul eveniment.
+
+## 11. Adăugat 2026-11-07: ordinea prizelor (aprobat de user)
+
+Pe SISTEM → CASA, userul vrea să schimbe ordinea prizelor ca la iconițele Android:
+- apăsare lungă pe un rând de priză → vibrație scurtă → **modul de mutare**: toate rândurile tremură ușor;
+- tragi rândul în sus/jos, celelalte se dau la o parte; la ridicarea degetului ordinea se salvează;
+- ieșire: butonul „GATA” sau atingere în afara listei; în modul de mutare atingerea scurtă nu deschide priza și
+  comutatoarele nu comandă nimic;
+- cardul CASA din tema Simple folosește aceeași ordine; o priză nouă apare la sfârșit.
+- **Ordinea e aceeași pe toate telefoanele** (user): ține de server, în `state.json` (`plug_order`: listă de id-uri),
+  nu în telefon. `GET /plugs` întoarce prizele în ordinea asta (id-urile necunoscute sau lipsă: la sfârșit, în ordinea
+  de azi). `PUT /plug-order` `{"order": [id, ...]}` (id-uri cunoscute, fără duplicate; cele lipsă se pun la sfârșit) →
+  lista de prize. Aceeași autentificare și același ritm de comenzi ca celelalte rute non-GET.
