@@ -102,24 +102,35 @@ private fun parseStat(o: JSONObject?, key: String): Pair<Double, Long>? {
     return v to t
 }
 
-/** `days` al unui eveniment: null (lipsa sau JSON null) = zilnic, altfel lista zilelor ISO. */
-private fun parseDays(o: JSONObject): List<Int>? {
-    val a = o.optJSONArray("days") ?: return null
-    return (0 until a.length()).map { a.getInt(it) }
+/** Zilele unui eveniment: null (lipsa sau JSON null) = zilnic, altfel lista zilelor ISO; `bad` = stricat. */
+private class ParsedDays(val days: List<Int>?, val bad: Boolean = false)
+
+private fun parseDays(o: JSONObject): ParsedDays {
+    if (!o.has("days") || o.isNull("days")) return ParsedDays(null)
+    val a = o.optJSONArray("days") ?: return ParsedDays(null, bad = true)
+    val out = ArrayList<Int>(a.length())
+    for (i in 0 until a.length()) {
+        val d = a.opt(i) as? Int ?: return ParsedDays(null, bad = true)
+        if (d !in 1..7) return ParsedDays(null, bad = true)
+        out += d
+    }
+    return if (out.isEmpty()) ParsedDays(null, bad = true) else ParsedDays(out)
+}
+
+/** Un eveniment; null daca e stricat (camp lipsa, zile invalide): se sare peste el, priza ramane valida. */
+private fun parseEvent(o: JSONObject): CasaEvent? {
+    val id = o.stringOrNull("id") ?: return null
+    val time = o.stringOrNull("time") ?: return null
+    val action = o.stringOrNull("action") ?: return null
+    val days = parseDays(o)
+    if (days.bad) return null
+    return CasaEvent(id, time, action, days.days, o.optBoolean("enabled", true))
 }
 
 internal fun parsePlugObject(j: JSONObject): CasaPlug {
     // Un raspuns fara `events` (server vechi) nu are evenimente: lista goala, nu eroare.
     val events = j.optJSONArray("events")?.let { a ->
-        (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map {
-            CasaEvent(
-                id = it.requiredString("id"),
-                time = it.requiredString("time"),
-                action = it.requiredString("action"),
-                days = parseDays(it),
-                enabled = it.optBoolean("enabled", true)
-            )
-        }
+        (0 until a.length()).mapNotNull { a.optJSONObject(it) }.mapNotNull { parseEvent(it) }
     } ?: emptyList()
     val inching = j.objOrNull("inching")
     return CasaPlug(
@@ -248,9 +259,23 @@ internal fun casaNextEventShort(e: CasaNextEvent, nowEpoch: Long, zone: ZoneId):
     return "${casaActionText(e.action)} $prefix${e.time}"
 }
 
-/** "OPRESTE 16:00 · IN 2H 14" (rand "URMATORUL" din detaliu); in alta zi, ziua scurta inaintea orei. */
+/**
+ * Cat mai e pana la eveniment, pentru rand "URMATORUL": minutele se rotunjesc in sus (niciodata "0M"),
+ * "ACUM" cand ora a venit sau a trecut (sondare veche); "IN 59M", "IN 2H 5M" (sub 24 h), "IN 3Z 2H".
+ */
+internal fun casaNextEventIn(seconds: Long): String {
+    if (seconds <= 0) return "ACUM"
+    val tot = (seconds + 59) / 60
+    return when {
+        tot < 60 -> "IN ${tot}M"
+        tot < 1440 -> "IN ${tot / 60}H ${tot % 60}M"
+        else -> "IN ${tot / 1440}Z ${(tot % 1440) / 60}H"
+    }
+}
+
+/** "OPRESTE 16:00 · IN 2H 14M" (rand "URMATORUL" din detaliu); in alta zi, ziua scurta inaintea orei. */
 internal fun casaNextEventText(e: CasaNextEvent, nowEpoch: Long, zone: ZoneId): String =
-    "${casaNextEventShort(e, nowEpoch, zone)} · IN ${formatDuration(e.at - nowEpoch)}"
+    "${casaNextEventShort(e, nowEpoch, zone)} · ${casaNextEventIn(e.at - nowEpoch)}"
 
 /** Corpul `POST /plugs/<id>/events`: `days` null = zilnic (trimis ca null explicit). */
 internal fun casaEventBody(time: String, action: String, days: List<Int>?): JSONObject =

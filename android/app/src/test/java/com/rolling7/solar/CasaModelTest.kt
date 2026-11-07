@@ -137,17 +137,17 @@ class CasaModelTest {
         val now = epoch(2026, 11, 5, 14, 7) // joi
         // azi: fara zi
         assertEquals(
-            "OPRESTE 16:00 · IN 1H 53",
+            "OPRESTE 16:00 · IN 1H 53M",
             casaNextEventText(CasaNextEvent("e", "16:00", "off", epoch(2026, 11, 5, 16, 0)), now, zone)
         )
         // maine (vineri): ziua scurta inaintea orei
         assertEquals(
-            "PORNESTE V 09:00 · IN 18H 53",
+            "PORNESTE V 09:00 · IN 18H 53M",
             casaNextEventText(CasaNextEvent("e", "09:00", "on", epoch(2026, 11, 6, 9, 0)), now, zone)
         )
-        // luni 17:00, peste 99 h 53 min (formatDuration, ca la celelalte insigne)
+        // luni 17:00, peste 4 zile 2 ore 53 min: zile si ore
         assertEquals(
-            "OPRESTE L 17:00 · IN 98H 53",
+            "OPRESTE L 17:00 · IN 4Z 2H",
             casaNextEventText(CasaNextEvent("e", "17:00", "off", epoch(2026, 11, 9, 17, 0)), now, zone)
         )
     }
@@ -158,9 +158,68 @@ class CasaModelTest {
         val now = epoch(2026, 11, 5, 22, 0)
         val at = epoch(2026, 11, 6, 0, 30)
         assertEquals(
-            "OPRESTE V 00:30 · IN 2H 30",
+            "OPRESTE V 00:30 · IN 2H 30M",
             casaNextEventText(CasaNextEvent("e", "00:30", "off", at), now, zone)
         )
+    }
+
+    @Test
+    fun `next event countdown rounds up and has its own units`() {
+        val min = 60L
+        val h = 3600L
+        // rotunjit in sus: niciodata 0M
+        assertEquals("IN 1M", casaNextEventIn(30))
+        assertEquals("IN 1M", casaNextEventIn(1))
+        assertEquals("IN 1M", casaNextEventIn(min))
+        assertEquals("IN 2M", casaNextEventIn(min + 1))
+        assertEquals("IN 59M", casaNextEventIn(59 * min))
+        // de la o ora: ore si minute, fara zero in fata
+        assertEquals("IN 1H 0M", casaNextEventIn(h))
+        assertEquals("IN 1H 1M", casaNextEventIn(h + 1))
+        assertEquals("IN 2H 5M", casaNextEventIn(2 * h + 5 * min))
+        assertEquals("IN 23H 59M", casaNextEventIn(23 * h + 59 * min))
+        // de la 24 h: zile si ore
+        assertEquals("IN 1Z 0H", casaNextEventIn(24 * h))
+        assertEquals("IN 1Z 0H", casaNextEventIn(24 * h + 59 * min))
+        assertEquals("IN 3Z 2H", casaNextEventIn(3 * 24 * h + 2 * h))
+        // trecut sau chiar acum (sondare veche): ACUM
+        assertEquals("ACUM", casaNextEventIn(0))
+        assertEquals("ACUM", casaNextEventIn(-5))
+        assertEquals("ACUM", casaNextEventIn(-3 * h))
+    }
+
+    @Test
+    fun `next event text says ACUM when the time has come`() {
+        val now = epoch(2026, 11, 5, 16, 0)
+        assertEquals(
+            "OPRESTE 16:00 · ACUM",
+            casaNextEventText(CasaNextEvent("e", "16:00", "off", epoch(2026, 11, 5, 16, 0)), now, zone)
+        )
+        assertEquals(
+            "PORNESTE 15:59 · ACUM",
+            casaNextEventText(CasaNextEvent("e", "15:59", "on", epoch(2026, 11, 5, 15, 59)), now, zone)
+        )
+    }
+
+    @Test
+    fun `a malformed event is skipped and the plug still parses`() {
+        val p = parsePlug(
+            """{"id":"bf7","name":"x","online":true,"on":false,"metered":false,
+            "events":[
+              {"id":"ok1","time":"17:00","action":"off","days":null,"enabled":true},
+              {"id":"bad1","time":"17:00","action":"off","days":["L","MA"],"enabled":true},
+              {"id":"bad2","time":"18:00","action":"off","days":[],"enabled":true},
+              {"id":"bad3","time":"19:00","action":"off","days":"1,2","enabled":true},
+              {"id":"bad4","time":"19:00","action":"off","days":[1,2.5],"enabled":true},
+              {"id":"bad5","time":"19:00","action":"off","days":[0,9],"enabled":true},
+              {"time":"20:00","action":"off"},
+              {"id":"bad6","action":"off"},
+              {"id":"ok2","time":"09:00","action":"on","days":[6,7]}],
+            "next_event":null,"countdown":null,"inching":{"enabled":false,"minutes":30},
+            "off_deadline":null,"error":null}"""
+        )
+        assertEquals(listOf("ok1", "ok2"), p.events.map { it.id })
+        assertEquals(listOf(6, 7), p.events[1].days)
     }
 
     @Test
