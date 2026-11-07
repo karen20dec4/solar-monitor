@@ -6,6 +6,7 @@ import threading
 import unittest
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 from casa.controller import CommandError, Controller, migrate_state
@@ -1304,6 +1305,236 @@ class SameInstantEventsTest(ControllerBase):
             r.c.tick()
             self.assertTrue(r.on)
 
+    def test_back_to_back_shared_instant_is_not_armed_in_the_plug(self):
+        # OPRESTE 16:00 urmat de PORNESTE 16:00 nu opreste nimic: termenul din priza e urmatorul
+        # OPRESTE real (18:00). Altfel priza s-ar opri singura la 16:00, serverul ar vedea o apasare
+        # de buton si PORNESTE 16:00 ar fi consumat cu priza oprita.
+        r = self.back_to_back("0000", "ffff")
+        r.tick_to(loc(10, 30))
+        self.assertTrue(r.on)
+        self.assertEqual(r.dp9, int((loc(18) - loc(10, 30)).total_seconds()))
+        v = r.c.plug_view(PID)
+        self.assertEqual(v["off_deadline"]["at"], int(loc(18).timestamp()))
+        self.assertEqual(v["off_deadline"]["reason"], "schedule")
+
+    def test_off_and_on_at_the_same_time_on_different_days_is_still_a_deadline(self):
+        r = self.rig(loc(9))
+        self.event(r, "16:00", "off", days=[1, 2, 3, 4, 5])    # joi 5 nov
+        self.event(r, "16:00", "on", days=[6, 7])             # alte zile: nu se suprapun
+        r.tick_to(loc(10))
+        v = r.c.switch(PID, True)
+        self.assertEqual(v["off_deadline"]["at"], int(loc(16).timestamp()))
+
+    def test_off_seen_at_the_shared_instant_is_a_button_press_and_wins(self):
+        # DP-ul nu e armat pe 16:00, deci o oprire vazuta atunci vine de la buton: userul castiga,
+        # PORNESTE 16:00 e consumat fara comanda (documenteaza comportamentul ales)
+        r = self.back_to_back("0000", "ffff")
+        r.tick_to(loc(15, 59))
+        self.assertTrue(r.on)
+        n = len(r.switch_commands())
+        r.clock.set(loc(16, 0, 3))
+        r.driver.dps["1"] = False
+        r.worker.poll()
+        r.c.tick()
+        self.assertFalse(r.on)
+        self.assertEqual(r.c._get(PID)["last_manual_at"], loc(16, 0, 3).isoformat())
+        r.tick_to(loc(17, 59), step=timedelta(minutes=10))
+        self.assertFalse(r.on)
+        self.assertEqual(len(r.switch_commands()), n)
+
+
+class ButtonPressTest(ControllerBase):
+    """Butonul fizic = comanda manuala (spec 4.2b): o schimbare de stare vazuta la citire, cat priza
+    e online, pe care n-a cauzat-o serverul, pune last_manual_at si anuleaza countdown-ul."""
+
+    @staticmethod
+    def press(r, on):
+        r.driver.dps["1"] = on
+        r.worker.poll()
+
+    @staticmethod
+    def manual(r):
+        return r.c._get(PID)["last_manual_at"]
+
+    @staticmethod
+    def offline(r):
+        r.worker.on_reading(PID, PlugReading(False, None, None, None, None, None, "x", 0))
+
+    def test_button_press_sets_last_manual_at_both_ways(self):
+        r = self.rig(loc(9))
+        self.assertIsNone(self.manual(r))
+        r.clock.set(loc(9, 5))
+        self.press(r, True)
+        self.assertEqual(self.manual(r), loc(9, 5).isoformat())
+        r.clock.set(loc(9, 7))
+        self.press(r, False)
+        self.assertEqual(self.manual(r), loc(9, 7).isoformat())
+
+    def test_button_press_cancels_countdown(self):
+        r = self.rig(loc(9))
+        r.c.set_countdown(PID, "on", 30)         # priza oprita: ar porni peste 30 min
+        r.clock.set(loc(9, 5))
+        self.press(r, True)                      # userul o porneste de la buton
+        self.assertIsNone(r.c._get(PID)["countdown"])
+        r.clock.set(loc(9, 6))
+        self.press(r, False)                     # si o opreste: countdown-ul nu mai revine
+        r.tick_to(loc(9, 40))
+        self.assertFalse(r.on)
+        self.assertEqual(r.switch_commands(), [])
+
+    def test_button_off_blocks_retried_on(self):
+        # PORNESTE 11:00 nu poate fi trimis (comenzile esueaza) si ramane de reincercat la 30 s;
+        # pana atunci userul o porneste si o opreste de la buton: reincercarea nu o mai porneste
+        r = self.rig(loc(10, 50))
+        self.event(r, "11:00", "on")
+        r.driver.fail_set = 10 ** 6
+        r.tick_to(loc(11, 0))
+        self.assertFalse(r.on)
+        self.assertIsNotNone(r.c._rt[PID].retry_at)
+        r.clock.set(loc(11, 0, 10))
+        r.worker.poll()                          # revine online (reconectare, nu apasare)
+        self.assertIsNone(self.manual(r))
+        r.clock.set(loc(11, 0, 20))
+        self.press(r, True)
+        r.clock.set(loc(11, 0, 25))
+        self.press(r, False)
+        self.assertEqual(self.manual(r), loc(11, 0, 25).isoformat())
+        r.driver.fail_set = 0
+        n = len(r.worker.submitted)
+        r.tick_to(loc(11, 5))
+        self.assertFalse(r.on)
+        self.assertEqual(len(r.worker.submitted), n)
+        self.assertEqual(r.c._get(PID)["last_event_at"], loc(11).isoformat())   # consumat, nu repornit
+
+    def test_reconnect_is_not_a_press(self):
+        r = self.rig(loc(9), dps={"1": True})    # prima citire de dupa pornire
+        self.assertIsNone(self.manual(r))
+        r.c.set_countdown(PID, "on", 600)
+        self.offline(r)
+        r.clock.set(loc(9, 10))
+        self.press(r, False)                     # prima citire dupa offline: alta stare, nu conteaza
+        self.assertIsNone(self.manual(r))
+        self.assertIsNotNone(r.c._get(PID)["countdown"])     # countdown-ul nu e anulat de reconectare
+        self.offline(r)
+        r.clock.set(loc(9, 20))
+        self.press(r, True)
+        self.assertIsNone(self.manual(r))
+        r.clock.set(loc(9, 21))
+        self.press(r, False)                     # intre doua citiri online conteaza
+        self.assertEqual(self.manual(r), loc(9, 21).isoformat())
+
+    def test_first_reading_with_a_known_state_after_an_unknown_one_is_not_a_press(self):
+        r = self.rig(loc(9))
+        r.restart(poll=False)
+        r.worker.on_reading(PID, PlugReading(True, None, None, None, None, None, None, 0))
+        r.clock.set(loc(9, 1))
+        self.press(r, True)                      # starea dinainte nu era cunoscuta
+        self.assertIsNone(self.manual(r))
+
+    def test_server_command_echo_is_not_a_press(self):
+        # comanda trimisa de server: citirea care o confirma (inainte sau dupa ce serverul consemneaza
+        # singur starea noua) nu e apasare. Un countdown care ar fi anulat de o apasare ramane.
+        for defer in (False, True):
+            with self.subTest(defer=defer):
+                r = self.rig(loc(10, 29), defer=defer)
+                self.event(r, "10:30", "on")
+                r.c.set_countdown(PID, "off", 120)
+                r.tick_to(loc(10, 30))
+                r.worker.flush()
+                self.assertTrue(r.on)
+                self.assertIsNone(self.manual(r))
+                self.assertIsNotNone(r.c._get(PID)["countdown"])
+                r2 = self.rig(loc(16, 59), dps={"1": True}, defer=defer)
+                r2.worker.poll()
+                self.event(r2, "17:00", "off")
+                r2.c.set_countdown(PID, "on", 600)
+                r2.tick_to(loc(17, 0))
+                r2.worker.flush()
+                self.assertFalse(r2.on)
+                self.assertIsNone(self.manual(r2))
+                self.assertIsNotNone(r2.c._get(PID)["countdown"])
+
+    def stuck_worker(self, r):
+        """Workerul nu raspunde la timp: comanda intra in coada, future-ul ramane nerezolvat."""
+        def submit(dp, value):
+            r.worker.submitted.append((dp, value))
+            return Future()
+        r.worker.submit = submit
+
+    @staticmethod
+    def working_again(r):
+        del r.worker.submit
+
+    def test_server_command_echo_is_not_a_press_when_the_command_timed_out(self):
+        # future-ul expira (CommandError), dar priza executa comanda: citirea de dupa, in 15 s de la
+        # trimitere, arata starea ceruta si nu e apasare
+        r = self.rig(loc(10, 29))
+        self.event(r, "10:30", "on")
+        r.c.set_countdown(PID, "off", 120)
+        self.stuck_worker(r)
+        with mock.patch("casa.controller.CMD_TIMEOUT_S", 0.01):
+            r.tick_to(loc(10, 30))
+        self.assertEqual(r.switch_commands(), [(1, True)])
+        self.assertIn("timeout", r.c.plug_view(PID)["error"])
+        self.working_again(r)
+        r.clock.set(loc(10, 30, 12))
+        self.press(r, True)                      # priza a executat comanda
+        self.assertTrue(r.c.plug_view(PID)["on"])
+        self.assertIsNone(self.manual(r))
+        self.assertIsNotNone(r.c._get(PID)["countdown"])
+        r.tick_to(loc(11), step=timedelta(seconds=30))
+        self.assertEqual(r.switch_commands(), [(1, True)])   # PORNESTE consumat, fara a doua comanda
+
+    def test_command_echo_window_is_15_seconds(self):
+        for secs, counts in ((15, False), (16, True)):
+            with self.subTest(secs=secs):
+                r = self.rig(loc(10, 29))
+                self.event(r, "10:30", "on")
+                self.stuck_worker(r)
+                with mock.patch("casa.controller.CMD_TIMEOUT_S", 0.01):
+                    r.tick_to(loc(10, 30))
+                r.clock.set(loc(10, 30, secs))
+                self.press(r, True)
+                self.assertEqual(self.manual(r) is not None, counts)
+
+    def test_press_to_the_other_state_right_after_a_command_counts(self):
+        r = self.rig(loc(10, 29))
+        self.event(r, "10:30", "on")
+        r.tick_to(loc(10, 30))
+        self.assertTrue(r.on)
+        r.clock.set(loc(10, 30, 5))
+        self.press(r, False)                     # serverul a cerut PORNIT; cineva a oprit-o
+        self.assertEqual(self.manual(r), loc(10, 30, 5).isoformat())
+
+    def test_store_error_while_saving_a_press_does_not_break_the_reading(self):
+        r = self.rig(loc(9), dps={"1": True}, store_cls=FlakyStore)
+        r.worker.poll()
+        self.event(r, "17:00", "off")
+        self.assertEqual(r.dp9, 8 * 3600)
+        r.clock.set(loc(9, 5))
+        r.store.fail_updates = 1               # prima scriere (apasarea) esueaza
+        self.press(r, False)
+        self.assertFalse(r.c.plug_view(PID)["on"])
+        r.c.tick()
+        self.assertEqual(r.dp9, 0)             # restul prelucrarii (DP-ul armat anulat) s-a facut
+
+    def test_dp_fired_off_is_harmless(self):
+        # priza se opreste singura la termenul scris in DP; serverul o vede ca apasare, dar
+        # priza e deja oprita: OPRESTE 17:00 e consumat fara comanda, DP-ul ramas e anulat
+        r = self.rig(loc(9), dps={"1": True})
+        r.worker.poll()
+        self.event(r, "17:00", "off")
+        self.assertEqual(r.dp9, 8 * 3600)
+        r.tick_to(loc(16, 59), step=timedelta(minutes=30))
+        r.clock.set(loc(17, 0, 3))
+        r.driver.dps["9"] = 0
+        self.press(r, False)
+        r.c.tick()
+        self.assertFalse(r.on)
+        self.assertEqual(r.switch_commands(), [])
+        self.assertEqual(r.c._get(PID)["last_event_at"], loc(17).isoformat())
+        self.assertEqual(r.dp9, 0)
+
 
 class FailSafeResyncTest(ControllerBase):
     def test_dp_rewritten_after_plug_reconnect(self):
@@ -1518,6 +1749,66 @@ class NextOffEventAsDeadlineTest(ControllerBase):
         v = r.c.switch(PID, True)
         self.assertEqual(v["off_deadline"]["at"], int(loc(16, day=6).timestamp()))
         self.assertEqual(r.dp9, 23 * 3600)
+
+
+class FarDeadlineTest(ControllerBase):
+    """Termen de oprire la peste 24 h (spec 4.3): nu se scrie nimic in priza (un countdown plafonat
+    ar opri-o prea devreme); se scrie abia cand intra sub 24 h. Serverul tot il executa."""
+
+    @staticmethod
+    def nonzero_dp_writes(r):
+        return [x for x in r.worker.submitted if x[0] == 9 and x[1] != 0]
+
+    def weekday_off(self, r):
+        self.event(r, "17:00", "off", days=(1, 2, 3, 4, 5))
+
+    def test_far_off_deadline_not_written(self):
+        r = self.rig(loc(18, 0, day=6))                       # vineri 2026-11-06 18:00
+        self.weekday_off(r)
+        v = r.c.switch(PID, True)                             # urmatorul OPRESTE: luni 17:00 (71 h)
+        self.assertEqual(self.nonzero_dp_writes(r), [])
+        self.assertEqual(v["off_deadline"]["at"], int(loc(17, day=9).timestamp()))   # se vede, serverul il executa
+        r.tick_to(loc(16, 30, day=8), step=timedelta(minutes=30))     # duminica 16:30: 24,5 h
+        self.assertEqual(self.nonzero_dp_writes(r), [])
+        self.assertTrue(r.on)
+        r.clock.set(loc(17, 30, day=8))                       # duminica 17:30: 23,5 h
+        r.c.tick()
+        self.assertEqual(r.dp9, 84600)
+        self.assertEqual(r.c._rt[PID].cd_written, int(loc(17, day=9).timestamp()))
+        r.tick_to(loc(17, day=9), step=timedelta(minutes=30))
+        self.assertFalse(r.on)                                # luni 17:00
+
+    def test_far_deadline_is_written_when_it_comes_within_24_h(self):
+        r = self.rig(loc(16, 59, 30, day=8), dps={"1": True})     # duminica, OPRESTE luni 17:00 la 24 h 30 s
+        r.worker.poll()
+        self.weekday_off(r)
+        r.tick_to(loc(16, 59, 55, day=8), step=timedelta(seconds=5))
+        self.assertEqual(self.nonzero_dp_writes(r), [])
+        r.tick_to(loc(17, 0, 5, day=8), step=timedelta(seconds=5))
+        self.assertEqual(r.dp9, 86400)                        # exact 24 h: intra sub plafon
+        self.assertEqual(len(self.nonzero_dp_writes(r)), 1)
+
+    def test_far_deadline_clears_previous_dp(self):
+        r = self.rig(loc(18, 0, day=6))
+        self.weekday_off(r)
+        r.c.set_inching(PID, True, 10)
+        r.c.switch(PID, True)
+        self.assertEqual(r.dp9, 600)                          # inching 10 min
+        v = r.c.set_inching(PID, False, 10)
+        self.assertEqual(r.dp9, 0)                            # singurul termen ramas e la peste 24 h
+        self.assertIsNone(r.c._rt[PID].cd_written)
+        self.assertEqual(v["off_deadline"]["at"], int(loc(17, day=9).timestamp()))
+
+    def test_far_deadline_replaces_a_near_one_with_nothing(self):
+        r = self.rig(loc(18, 0, day=6))
+        self.weekday_off(r)
+        r.c.switch(PID, True)
+        r.c.set_countdown(PID, "off", 60)
+        self.assertEqual(r.dp9, 3600)
+        r.c.cancel_countdown(PID)
+        self.assertEqual(r.dp9, 0)
+        r.tick_to(loc(19), step=timedelta(minutes=10))
+        self.assertEqual(self.nonzero_dp_writes(r), [(9, 3600)])
 
 
 class DpCountdownRealismTest(ControllerBase):

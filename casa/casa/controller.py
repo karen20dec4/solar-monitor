@@ -11,8 +11,11 @@ Reguli de siguranta:
   * oprirea conteaza mai mult decat pornirea: un OPRESTE ratat se executa oricat de tarziu (in
     lookback) si se reincearca la 30 s fara limita cat timp e cel mai recent eveniment; un PORNESTE
     ratat doar cat timp e inca cel mai recent eveniment scadent;
+  * butonul fizic (pornit<->oprit vazut intre doua citiri online, necerut de server) e o comanda
+    manuala: bate evenimentele mai vechi si anuleaza countdown-ul;
   * orice comanda catre priza trece prin worker-ul ei (o singura conexiune);
-  * termenul de oprire cel mai apropiat se scrie si in countdown-ul intern al prizei.
+  * termenul de oprire cel mai apropiat se scrie si in countdown-ul intern al prizei, dar numai
+    daca e la cel mult 24 h (DP_MAX_S); unul mai departe il executa doar serverul.
 """
 import copy
 import logging
@@ -41,12 +44,17 @@ INCHING_MAX_MIN = 720
 DP_MAX_S = 86400
 DP_TOLERANCE_S = 5
 GRACE_S = 10                      # cat lasam DP-ul prizei sa opreasca singur inainte sa o oprim noi
+# O schimbare de stare vazuta la citire e ecoul unei comenzi a serverului daca serverul a cerut
+# aceeasi stare in ultimele 15 s (GRACE_S + CASA_POLL_S): include comanda expirata pe care priza
+# a executat-o totusi. Altfel e butonul fizic.
+CMD_ECHO_S = 15
 RESYNC_TOL_S = 60                 # cat de mult poate diferi DP-ul citit de cel scris
 RESYNC_EVERY = timedelta(seconds=60)
 # Un countdown "porneste" care nu a putut fi executat se abandoneaza dupa 30 min de intarziere
 # (o pornire tarzie dupa o pana lunga ar fi o surpriza); se afiseaza o eroare.
 ON_COUNTDOWN_GIVE_UP = timedelta(minutes=30)
 LOOKBACK = timedelta(days=2)      # cat de veche poate fi o aparitie ratata si totusi executata
+OFF_HORIZON = timedelta(days=8)   # cat cautam in fata urmatorul OPRESTE (ca schedule.next_occurrence)
 
 _DEFAULT = {"plugs": {}}
 
@@ -154,7 +162,9 @@ class _Rt:
     needs_missed: bool = True            # la pornire si la fiecare reconectare
     retry_at: Optional[datetime] = None  # reincercare eveniment esuat
     cd_written: Optional[int] = None     # termenul (epoch) scris in DP-ul de countdown
-    cd_capped: bool = False
+    # ultima comanda PORNESTE/OPRESTE trimisa de server: (stare ceruta, momentul trimiterii); setata
+    # INAINTE de trimitere, ca citirea care o confirma sa nu fie luata drept apasare de buton
+    last_cmd: Optional[tuple] = None
     cd_dirty: bool = False               # priza oprita cu un DP scris: de anulat (0)
     next_dp_try: Optional[datetime] = None
     next_resync: Optional[datetime] = None
@@ -279,6 +289,10 @@ class Controller:
             raise CommandError(msg)
 
     def _send_switch(self, pid: str, on: bool) -> None:
+        # Notam comanda inainte s-o trimitem: workerul poate citi starea noua (si o poate raporta
+        # prin on_reading) inainte ca future-ul sa ajunga la noi, iar o comanda expirata poate fi
+        # executata totusi de priza.
+        self._set(pid, last_cmd=(bool(on), self.clock()))
         self._send(pid, self.devices[pid].dps.get("switch", 1), bool(on))
         # Workerul rezolva future-ul INAINTE sa citeasca starea: nu asteptam citirea, ci
         # consemnam acum noua stare (si tranzitia), ca nimic din acelasi tick sa nu mai
@@ -297,10 +311,10 @@ class Controller:
         elif not on and prev is not False:
             self._became_off(pid)
 
-    def _auto_switch(self, pid: str, now: datetime, on: bool, force: bool = False) -> bool:
+    def _auto_switch(self, pid: str, now: datetime, on: bool) -> bool:
         """Comanda automata, cu ritm unic de reincercare. False = nu s-a trimis / a esuat."""
         rt = self._rt[pid]
-        if not force and self._throttled(rt, now):
+        if self._throttled(rt, now):
             return False
         try:
             self._send_switch(pid, on)
@@ -315,6 +329,7 @@ class Controller:
             return
         now = self.clock()
         trans = None
+        press = False
         with self._rt_lock:
             rt = self._rt[pid]
             prev_online, prev_on = rt.online, rt.on
@@ -344,11 +359,19 @@ class Controller:
                         trans = "on" if prev_on is False else "first_on"
                     elif prev_on is True and not r.on:
                         trans = "off"
+                    # Butonul fizic: pornit<->oprit vazut intre doua citiri online (o reconectare nu
+                    # conteaza) si pe care nu l-a cerut serverul. Si DP-ul prizei care o opreste singura
+                    # ajunge aici: priza e deja oprita, nu strica nimic.
+                    if (prev_online is True and prev_on is not None and r.on != prev_on
+                            and not self._is_cmd_echo(rt, r.on, now)):
+                        press = True
                 rt.offline_since = None
             else:
                 rt.poll_error = r.error or "offline"
                 if rt.offline_since is None:
                     rt.offline_since = now
+        if press:
+            self._manual_press(pid, now)
         if r.online and r.inching is not None and "inching" in self.devices[pid].dps:
             self._sync_native_inching(pid, r.inching)
         if trans == "on":
@@ -357,6 +380,24 @@ class Controller:
             self._became_on(pid, now, only_if_unset=True)
         elif trans == "off":
             self._became_off(pid)
+
+    @staticmethod
+    def _is_cmd_echo(rt: _Rt, on: bool, now: datetime) -> bool:
+        """Starea citita e cea pe care a cerut-o serverul de curand?"""
+        return (rt.last_cmd is not None and rt.last_cmd[0] == on
+                and timedelta(0) <= now - rt.last_cmd[1] <= timedelta(seconds=CMD_ECHO_S))
+
+    def _manual_press(self, pid: str, now: datetime) -> None:
+        """Butonul fizic e o comanda manuala (spec 4.2b): bate orice eveniment mai vechi si anuleaza
+        countdown-ul, ca `switch()`. Nu atinge evenimentele."""
+        def f(p):
+            p["countdown"] = None
+            p["last_manual_at"] = now.isoformat()
+        try:
+            self._mut(pid, f)
+        except (CorruptStore, OSError):
+            # nu lasam o eroare de disc sa sara peste restul prelucrarii citirii (_became_*)
+            log.exception("apasarea de buton pe %s nu a putut fi salvata", self.devices[pid].name)
 
     def _sync_native_inching(self, pid: str, native: tuple) -> None:
         """Setarea de inching din priza (setata si din SmartLife) e sursa de adevar pentru `st["inching"]`."""
@@ -394,11 +435,21 @@ class Controller:
         self._mut(pid, f)
 
     # ------------------------------------------------------------------ vederi
+    def _next_real_off(self, events: list, now: datetime):
+        """Urmatorul OPRESTE activ care chiar opreste priza. Unul cu un PORNESTE la acelasi instant
+        (intervale lipite, doar din date migrate) lasa priza pornita, la fel ca in `_process_events`
+        (la egalitate PORNESTE e mai nou): nu e termen. Altfel DP-ul prizei ar opri-o singura la
+        acel instant, serverul ar vedea o oprire fara comanda lui (apasare de buton) si PORNESTE-ul
+        de la acelasi instant ar fi consumat cu priza oprita."""
+        occ = occurrences_between(events, now, now + OFF_HORIZON, self.tz)
+        ons = {o.at for o in occ if o.action == "on"}
+        return next((o for o in occ if o.action == "off" and o.at not in ons), None)
+
     def _candidates(self, st: dict, now: datetime) -> list:
         """Termenele la care serverul va opri priza (cel mai apropiat castiga): urmatorul eveniment
         OPRESTE activ, inching, countdown "opreste"."""
         c = []
-        o = next_occurrence(self._events(st), now, self.tz, action="off")
+        o = self._next_real_off(self._events(st), now)
         if o is not None:
             c.append(OffDeadline(o.at, "schedule"))
         if st["inching_off_at"] is not None:
@@ -625,14 +676,14 @@ class Controller:
     def _throttled(rt: _Rt, now: datetime) -> bool:
         return rt.next_cmd_try is not None and now < rt.next_cmd_try
 
-    def _due_countdown(self, pid: str, now: datetime, force: bool = False) -> None:
+    def _due_countdown(self, pid: str, now: datetime) -> None:
         cd = self._get(pid)["countdown"]
         if not cd:
             return
         rt = self._rt[pid]
         at = _from_epoch(cd["at"])
         action = cd["action"]
-        grace = self._grace(pid) if (action == "off" and not force) else timedelta(0)
+        grace = self._grace(pid) if action == "off" else timedelta(0)
         if now < at + grace:
             return
         def clear(p):
@@ -646,10 +697,10 @@ class Controller:
                 rt.cmd_error = "countdown pornire expirat: priza n-a raspuns"
             self._mut(pid, clear)
             return
-        if self._auto_switch(pid, now, action == "on", force=force):
+        if self._auto_switch(pid, now, action == "on"):
             self._mut(pid, clear)
 
-    def _due_off(self, pid: str, now: datetime, key: str, force: bool = False) -> None:
+    def _due_off(self, pid: str, now: datetime, key: str) -> None:
         """Termen de oprire scadent din starea persistenta (`inching_off_at`)."""
         off_at = self._get(pid)[key]
         rt = self._rt[pid]
@@ -660,9 +711,9 @@ class Controller:
             # de DP-ul prizei) nu are voie sa supravietuiasca si sa opreasca urmatoarea pornire.
             self._mut(pid, lambda p: p.__setitem__(key, None))
             return
-        if now < _from_epoch(off_at) + (timedelta(0) if force else self._grace(pid)):
+        if now < _from_epoch(off_at) + self._grace(pid):
             return
-        if self._auto_switch(pid, now, False, force=force):
+        if self._auto_switch(pid, now, False):
             self._mut(pid, lambda p: p.__setitem__(key, None))
 
     # ------------------------------------------------------------------ evenimente
@@ -738,19 +789,22 @@ class Controller:
         if rt.off_sent_at is not None and now - rt.off_sent_at < timedelta(seconds=GRACE_S):
             return
         nd = nearest_off(self._candidates(self._get(pid), now))
+        if nd is not None and (nd.at - now).total_seconds() > DP_MAX_S:
+            # Peste 24 h: in priza nu scriem nimic (un countdown plafonat ar opri-o prea devreme);
+            # serverul tot il executa, iar DP-ul se scrie abia cand termenul intra sub 24 h. Un
+            # termen mai apropiat scris inainte se anuleaza mai jos (0).
+            nd = None
         if nd is None:
             if rt.cd_written is None:
                 return
             if self._write_dp(pid, dp, 0, now):
-                self._set(pid, cd_written=None, cd_capped=False)
+                self._set(pid, cd_written=None)
             return
         remaining = (nd.at - now).total_seconds()
         if remaining <= 0:
             return                        # scadent: il executa evenimentul sau _due_*
-        value = max(1, min(DP_MAX_S, int(remaining)))
-        capped = remaining > DP_MAX_S
-        if rt.cd_written is not None and (
-                abs(_epoch(nd.at) - rt.cd_written) <= DP_TOLERANCE_S or (capped and rt.cd_capped)):
+        value = max(1, int(remaining))
+        if rt.cd_written is not None and abs(_epoch(nd.at) - rt.cd_written) <= DP_TOLERANCE_S:
             return
         if self._write_dp(pid, dp, value, now):
-            self._set(pid, cd_written=_epoch(now) + value, cd_capped=capped, cd_dirty=False)
+            self._set(pid, cd_written=_epoch(now) + value, cd_dirty=False)
