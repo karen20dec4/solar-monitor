@@ -842,26 +842,32 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
         }
     }
     editor?.let { draft ->
-        CasaEventEditor(
-            draft = draft,
-            saving = "events" in busy,
-            error = editorError,
-            onTouched = { editorError = null },
-            onDismiss = { editor = null },
-            onSave = { time, eventAction, days ->
-                command(
-                    group = "events",
-                    onSuccess = { editor = null },
-                    onFailure = { editorError = it }
-                ) {
-                    if (draft.id == null) {
-                        CasaRepository.addEvent(it, plugId, time, eventAction, days)
-                    } else {
-                        CasaRepository.updateEvent(it, plugId, draft.id, time, eventAction, days, daily = days == null)
+        // Fiecare deschidere creeaza un CasaEventDraft nou: raspunsul tarziu al unui salvari se leaga de
+        // editorul care l-a trimis (identitate), nu de cel deschis intre timp.
+        androidx.compose.runtime.key(draft) {
+            CasaEventEditor(
+                draft = draft,
+                saving = "events" in busy,
+                error = editorError,
+                onTouched = { editorError = null },
+                onDismiss = { editor = null },
+                onSave = { time, eventAction, days ->
+                    command(
+                        group = "events",
+                        // Editorul a fost inchis (sau inlocuit) cat timp cererea era in zbor: succesul nu inchide
+                        // editorul nou, iar eroarea apare in antetul paginii ca la celelalte comenzi.
+                        onSuccess = { if (editor === draft) editor = null },
+                        onFailure = { msg -> if (editor === draft) editorError = msg else show(msg) }
+                    ) {
+                        if (draft.id == null) {
+                            CasaRepository.addEvent(it, plugId, time, eventAction, days)
+                        } else {
+                            CasaRepository.updateEvent(it, plugId, draft.id, time, eventAction, days, daily = days == null)
+                        }
                     }
                 }
-            }
-        )
+            )
+        }
     }
     deleteTarget?.let { e ->
         CasaDialog("STERGI EVENIMENTUL?", onDismiss = { deleteTarget = null }) {
@@ -1214,8 +1220,9 @@ private const val CasaRepeatStartMs = 400L
 
 /**
  * Buton +/- cu repetare: o apasare scurta = un pas, apasarea lunga repeta (mai repede dupa cateva pasi).
- * Gestul se citeste in trecerea Initial, deci butonul metalic de dedesubt isi pastreaza aspectul fara sa
- * fure atingerea.
+ * Atingerea se citeste in trecerea Initial, iar ridicarea degetului se consuma, deci `onClick` al butonului
+ * metalic NU se declanseaza si pentru atingere (un singur pas, nu doi). `onClick` ramane pentru actiunea de
+ * accesibilitate (TalkBack "activeaza"), care nu trece prin gest: face un pas.
  */
 @Composable
 private fun CasaRepeatKey(text: String, description: String, modifier: Modifier, onStep: () -> Unit) {
@@ -1236,7 +1243,7 @@ private fun CasaRepeatKey(text: String, description: String, modifier: Modifier,
                     }
                 }
                 try {
-                    waitForUpOrCancellation(PointerEventPass.Initial)
+                    waitForUpOrCancellation(PointerEventPass.Initial)?.consume()
                 } finally {
                     repeat.cancel()
                 }
@@ -1244,7 +1251,7 @@ private fun CasaRepeatKey(text: String, description: String, modifier: Modifier,
         },
         selected = false,
         description = description,
-        onClick = {}
+        onClick = { step() }
     ) {
         CasaText(text, 20f, RetroText, Modifier.align(Alignment.Center), bold = true, align = TextAlign.Center)
     }
@@ -1306,13 +1313,14 @@ private fun CasaEventEditor(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             CasaDayShort.forEachIndexed { i, label ->
                 val day = i + 1
+                val chosen = !daily && day in picked
                 CasaKey(
                     label,
                     // La ZILNIC zilele sunt estompate; o atingere trece pe ALEG ZILELE cu acea zi.
                     Modifier.weight(1f).height(40.dp).alpha(if (daily) 0.45f else 1f),
-                    selected = !daily && day in picked,
+                    selected = chosen,
                     size = 11f,
-                    description = "Ziua $label",
+                    description = "Ziua $label: ${if (chosen) "aleasa" else "neselectata"}",
                     onClick = {
                         if (daily) {
                             daily = false
