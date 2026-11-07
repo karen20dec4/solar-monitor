@@ -24,6 +24,7 @@ from .auth import Auth, BadPassword, NoPassword, RateLimited, RateLimiter
 from .config import Config
 from .controller import COUNTDOWN_MAX_MIN, INCHING_MAX_MIN, CommandError, Controller
 from .devices import NAME_MAX, clean_user_name, load_devices, local_names, set_local_name
+from .schedule import normalize_days
 from .store import CorruptStore, JsonStore
 
 log = logging.getLogger("casa.web")
@@ -217,6 +218,27 @@ def _hhmm(data: dict, key: str) -> str:
     if not isinstance(v, str) or not HHMM.fullmatch(v):
         raise ApiError(400, f"{key}: ora trebuie sa fie HH:MM")
     return v
+
+
+def _action(data: dict, key: str) -> str:
+    v = data[key]
+    if not isinstance(v, str) or v not in ("on", "off"):
+        raise ApiError(400, f"{key}: on sau off")
+    return v
+
+
+def _days(data: dict, key: str):
+    """null (zilnic) sau lista de zile ISO 1..7 (intregi; bool, text si float se resping).
+    Intoarce None sau tuplul sortat si unic (cele 7 zile = None, ca in controller)."""
+    v = data[key]
+    if v is None:
+        return None
+    if not isinstance(v, list):
+        raise ApiError(400, f"{key}: null sau lista de zile 1..7")
+    try:
+        return normalize_days(v)
+    except ValueError as e:
+        raise ApiError(400, f"{key}: {e}")
 
 
 def _client_ip() -> str:
@@ -454,6 +476,34 @@ def create_app(services: Optional[Services] = None) -> Flask:
         enabled = _bool(data, "enabled")
         minutes = _minutes(data, "minutes", INCHING_MAX_MIN)
         return run(pid, lambda: controller.set_inching(pid, enabled, minutes))
+
+    # -- evenimente (programari) --
+    @app.post("/plugs/<pid>/events")
+    @require_token
+    def event_add(pid):
+        known_plug(pid)
+        data = _body(("time", "action"), ("days", "enabled"))
+        time_, action = _hhmm(data, "time"), _action(data, "action")
+        days = _days(data, "days") if "days" in data else None
+        enabled = _bool(data, "enabled") if "enabled" in data else True
+        return run(pid, lambda: controller.add_event(pid, time_, action, days, enabled))
+
+    @app.put("/plugs/<pid>/events/<eid>")
+    @require_token
+    def event_update(pid, eid):
+        known_plug(pid)
+        data = _body(optional=("time", "action", "days", "enabled"), at_least_one=True)
+        changes = {}
+        for key, check in (("time", _hhmm), ("action", _action), ("days", _days), ("enabled", _bool)):
+            if key in data:
+                changes[key] = check(data, key)
+        return run(pid, lambda: controller.update_event(pid, eid, **changes))
+
+    @app.delete("/plugs/<pid>/events/<eid>")
+    @require_token
+    def event_delete(pid, eid):
+        known_plug(pid)
+        return run(pid, lambda: controller.delete_event(pid, eid))
 
     # -- senzori --
     @app.get("/sensors")

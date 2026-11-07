@@ -15,8 +15,8 @@ from casa.web import Services, StateIsDemo, build_services, create_app
 
 PASSWORD = "parola-de-test"
 VIEW = {"id": "p1", "name": "Boiler", "online": True, "on": False, "metered": True, "power": 0.0,
-        "voltage": 230.0, "current": 0.0, "schedules": [], "countdown": None,
-        "inching": {"enabled": False, "minutes": 30}, "off_deadline": None, "error": None}
+        "voltage": 230.0, "current": 0.0, "schedules": [], "events": [], "next_event": None,
+        "countdown": None, "inching": {"enabled": False, "minutes": 30}, "off_deadline": None, "error": None}
 
 
 class FakeController:
@@ -25,6 +25,7 @@ class FakeController:
         self.calls = []
         self.fail = False
         self.raise_value = None
+        self.raise_key = None
 
     def _view(self, pid):
         return dict(VIEW, id=pid, metered=(pid == "p1"), online=pid not in getattr(self, "offline", ()))
@@ -41,6 +42,8 @@ class FakeController:
             raise CommandError("timeout: priza nu raspunde")
         if self.raise_value:
             raise ValueError(self.raise_value)
+        if self.raise_key:
+            raise KeyError(self.raise_key)
         return self._view(pid)
 
     def switch(self, pid, on):
@@ -56,6 +59,15 @@ class FakeController:
 
     def set_inching(self, pid, enabled, minutes):
         return self._do("inching", pid, enabled, minutes)
+
+    def add_event(self, pid, time, action, days, enabled=True):
+        return self._do("add_event", pid, time, action, days, enabled)
+
+    def update_event(self, pid, event_id, **changes):
+        return self._do("update_event", pid, event_id, **changes)
+
+    def delete_event(self, pid, event_id):
+        return self._do("delete_event", pid, event_id)
 
     def rename(self, pid, name):
         return dict(self._do("rename", pid, name), name=name)
@@ -147,7 +159,7 @@ class TestAuthRoutes(WebCase):
                 self.assertEqual(r.headers.get("WWW-Authenticate"), 'Bearer realm="casa"',
                                  f"{method} {url}")
                 checked += 1
-        self.assertEqual(checked, 10)
+        self.assertEqual(checked, 13)
 
     def test_bad_and_malformed_token_is_401(self):
         for hdr in ({"Authorization": "Bearer nu-exista"}, {"Authorization": "Basic abc"},
@@ -330,6 +342,152 @@ class TestPlugRoutes(WebCase):
         # alt telefon are limita proprie
         h2 = self.h(self.register(c, ip="10.0.0.6"))
         self.assertEqual(c.post("/plugs/p1/switch", json={"on": True}, headers=h2).status_code, 200)
+
+
+class TestEventRoutes(WebCase):
+    def test_add_event_defaults_to_daily_and_enabled(self):
+        r = self.c.post("/plugs/p1/events", json={"time": "07:00", "action": "on"}, headers=self.h())
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["id"], "p1")
+        self.assertEqual(self.ctl.calls, [("add_event", "p1", ("07:00", "on", None, True), {})])
+
+    def test_add_event_with_days_and_enabled(self):
+        h = self.h()
+        cases = [([1, 3, 5], (1, 3, 5)), ([5, 1, 1, 3], (1, 3, 5)), ([7], (7,)),
+                 ([1, 2, 3, 4, 5, 6, 7], None), (None, None)]
+        for sent, expected in cases:
+            self.ctl.calls.clear()
+            r = self.c.post("/plugs/p2/events", headers=h,
+                            json={"time": "23:59", "action": "off", "days": sent, "enabled": False})
+            self.assertEqual(r.status_code, 200, sent)
+            self.assertEqual(self.ctl.calls, [("add_event", "p2", ("23:59", "off", expected, False), {})], sent)
+
+    def test_update_event_passes_only_the_sent_fields(self):
+        h = self.h()
+        cases = [({"enabled": False}, {"enabled": False}),
+                 ({"time": "08:15"}, {"time": "08:15"}),
+                 ({"action": "off"}, {"action": "off"}),
+                 ({"days": None}, {"days": None}),
+                 ({"days": [6, 7]}, {"days": (6, 7)}),
+                 ({"time": "00:00", "action": "on", "days": [2], "enabled": True},
+                  {"time": "00:00", "action": "on", "days": (2,), "enabled": True})]
+        for body, changes in cases:
+            self.ctl.calls.clear()
+            r = self.c.put("/plugs/p1/events/ab12", json=body, headers=h)
+            self.assertEqual(r.status_code, 200, body)
+            self.assertEqual(r.get_json()["id"], "p1")
+            self.assertEqual(self.ctl.calls, [("update_event", "p1", ("ab12",), changes)], body)
+
+    def test_delete_event(self):
+        r = self.c.delete("/plugs/p1/events/ab12", headers=self.h())
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["id"], "p1")
+        self.assertEqual(self.ctl.calls, [("delete_event", "p1", ("ab12",), {})])
+
+    def test_add_validation_errors_are_400(self):
+        h = self.h()
+        ok = {"time": "07:00", "action": "on"}
+        bad = [
+            {"action": "on"},                                  # lipseste ora
+            {"time": "07:00"},                                 # lipseste actiunea
+            {},
+            dict(ok, time="7:00"), dict(ok, time="24:00"), dict(ok, time="07:60"), dict(ok, time="07:00:00"),
+            dict(ok, time=700), dict(ok, time=None), dict(ok, time=" 07:00"), dict(ok, time="07:00\n"),
+            dict(ok, action="toggle"), dict(ok, action="ON"), dict(ok, action=True), dict(ok, action=None),
+            dict(ok, days=[]), dict(ok, days=[0]), dict(ok, days=[8]), dict(ok, days=[-1]),
+            dict(ok, days=[1.0]), dict(ok, days=[1.5]), dict(ok, days=[True]), dict(ok, days=["1"]),
+            dict(ok, days=[None]), dict(ok, days=[[1]]), dict(ok, days="1"), dict(ok, days="12"),
+            dict(ok, days=3), dict(ok, days=True), dict(ok, days={"1": 1}),
+            dict(ok, enabled="false"), dict(ok, enabled=0), dict(ok, enabled=None),
+            dict(ok, extra=1),
+        ]
+        for body in bad:
+            r = self.c.post("/plugs/p1/events", json=body, headers=h)
+            self.assertEqual(r.status_code, 400, body)
+            self.assertIn("error", r.get_json(), body)
+        r = self.c.post("/plugs/p1/events", data="nu-json", content_type="text/plain", headers=h)
+        self.assertEqual(r.status_code, 400)
+        r = self.c.post("/plugs/p1/events", json=[ok], headers=h)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.ctl.calls, [])
+
+    def test_update_validation_errors_are_400(self):
+        h = self.h()
+        bad = [
+            {},                                                # nimic de modificat
+            {"time": "7:00"}, {"time": 700}, {"time": None}, {"time": "24:00"},
+            {"action": "toggle"}, {"action": None}, {"action": 1},
+            {"days": []}, {"days": [0]}, {"days": [8]}, {"days": [1.0]}, {"days": [True]}, {"days": ["1"]},
+            {"days": "1"}, {"days": 3},
+            {"enabled": "false"}, {"enabled": 1}, {"enabled": None},
+            {"id": "zz99"}, {"extra": 1},                      # id-ul nu se schimba
+            {"enabled": False, "time": "99:99"},               # un camp bun nu salveaza unul rau
+        ]
+        for body in bad:
+            r = self.c.put("/plugs/p1/events/ab12", json=body, headers=h)
+            self.assertEqual(r.status_code, 400, body)
+            self.assertIn("error", r.get_json(), body)
+        r = self.c.put("/plugs/p1/events/ab12", json=["enabled"], headers=h)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.ctl.calls, [])
+
+    def test_days_error_names_the_field(self):
+        r = self.c.post("/plugs/p1/events", json={"time": "07:00", "action": "on", "days": [9]},
+                        headers=self.h())
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(r.get_json()["error"].startswith("days:"), r.get_json())
+
+    def test_controller_value_errors_reach_the_client_as_400_with_the_message(self):
+        h = self.h()
+        for msg in ("conflict: exista deja un eveniment activ la 07:00 in aceleasi zile",
+                    "cel mult 12 evenimente pe priza"):
+            self.ctl.raise_value = msg
+            for method, url, body in (("post", "/plugs/p1/events", {"time": "07:00", "action": "on"}),
+                                      ("put", "/plugs/p1/events/ab12", {"enabled": True})):
+                r = getattr(self.c, method)(url, json=body, headers=h)
+                self.assertEqual(r.status_code, 400, (method, msg))
+                self.assertEqual(r.get_json(), {"error": msg})
+
+    def test_unknown_event_is_404(self):
+        h = self.h()
+        self.ctl.raise_key = "eveniment necunoscut: zz99"
+        for method, body in (("put", {"enabled": True}), ("delete", None)):
+            r = getattr(self.c, method)("/plugs/p1/events/zz99", json=body, headers=h)
+            self.assertEqual(r.status_code, 404, method)
+            self.assertEqual(r.get_json(), {"error": "eveniment necunoscut: zz99"})
+
+    def test_other_key_error_is_not_masked_as_404(self):
+        # un KeyError care nu e "eveniment necunoscut" e defect: 500, nu "negasit"
+        self.app.config["PROPAGATE_EXCEPTIONS"] = False
+        self.ctl.raise_key = "state"
+        with self.assertLogs("casa.web", level="ERROR"):
+            r = self.c.put("/plugs/p1/events/ab12", json={"enabled": True}, headers=self.h())
+        self.assertEqual(r.status_code, 500)
+
+    def test_unknown_plug_is_404_before_the_controller_is_called(self):
+        h = self.h()
+        for method, url, body in (("post", "/plugs/zzz/events", {"time": "07:00", "action": "on"}),
+                                  ("put", "/plugs/zzz/events/ab12", {"enabled": True}),
+                                  ("delete", "/plugs/zzz/events/ab12", None)):
+            r = getattr(self.c, method)(url, json=body, headers=h)
+            self.assertEqual(r.status_code, 404, url)
+            self.assertIn("error", r.get_json())
+        self.assertEqual(self.ctl.calls, [])
+
+    def test_event_routes_share_the_command_throttle(self):
+        self.limiter = RateLimiter(3, 3.0)
+        app = self.make_app()
+        c = app.test_client()
+        h = self.h(self.register(c))
+        for _ in range(3):
+            self.assertEqual(c.post("/plugs/p1/events", json={"time": "07:00", "action": "on"},
+                                    headers=h).status_code, 200)
+        for method, url, body in (("post", "/plugs/p1/events", {"time": "07:00", "action": "on"}),
+                                  ("put", "/plugs/p1/events/ab12", {"enabled": False}),
+                                  ("delete", "/plugs/p1/events/ab12", None)):
+            r = getattr(c, method)(url, json=body, headers=h)
+            self.assertEqual(r.status_code, 429, url)
+        self.assertEqual(len(self.ctl.calls), 3)
 
 
 class TestRenameRoutes(WebCase):
@@ -550,6 +708,99 @@ class TestBuildServices(unittest.TestCase):
         with mock.patch("casa.influx.CasaInflux", boom), mock.patch("casa.cloud.CloudSession", boom):
             with self.assertRaises(StateIsDemo):
                 build_services(self.cfg(False))
+
+
+class TestEventRoutesWithController(unittest.TestCase):
+    """Rutele de evenimente pe controllerul real (modul demo): mesajele si codurile ajung asa cum le vede telefonul."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        plug = DeviceInfo(id="bfplug1", name="Boiler", kind="plug", local_key=None, ip=None, version=None,
+                          dps={"switch": 1, "countdown": 9}, scales={})
+        save_devices(self.tmp.name, [plug])
+        cfg = Config(data_dir=self.tmp.name, influx_url="http://127.0.0.1:1", influx_token="t", influx_org="o",
+                     bucket_live="live", bucket_history="history", ntfy_url="", poll_s=0.2, demo=True)
+        svc = build_services(cfg)
+        self.addCleanup(svc.shutdown)
+        svc.command_limiter = RateLimiter(1000, 1.0)
+        svc.auth.set_password(PASSWORD)
+        self.c = create_app(svc).test_client()
+        r = self.c.post("/register", json={"password": PASSWORD, "device": "Pixel 8"},
+                        headers={"X-Forwarded-For": "10.0.0.5"})
+        self.h = {"Authorization": "Bearer " + r.get_json()["token"]}
+
+    def add(self, time, action="on", **extra):
+        return self.c.post("/plugs/bfplug1/events", json=dict(time=time, action=action, **extra), headers=self.h)
+
+    def test_add_update_delete_round_trip_and_plug_list(self):
+        r = self.add("07:00", "on", days=[1, 2, 3, 4, 5])
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        view = r.get_json()
+        self.assertEqual(len(view["events"]), 1)
+        ev = view["events"][0]
+        self.assertEqual((ev["time"], ev["action"], ev["days"], ev["enabled"]), ("07:00", "on", [1, 2, 3, 4, 5], True))
+        self.assertEqual(view["schedules"], [])
+        self.assertEqual(view["next_event"]["id"], ev["id"])
+        self.assertIsInstance(view["next_event"]["at"], (int, float))
+
+        r = self.c.put(f"/plugs/bfplug1/events/{ev['id']}", json={"days": None, "time": "08:30"}, headers=self.h)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        ev2 = r.get_json()["events"][0]
+        self.assertEqual((ev2["id"], ev2["time"], ev2["days"]), (ev["id"], "08:30", None))
+
+        listed = self.c.get("/plugs", headers=self.h).get_json()["plugs"][0]
+        self.assertEqual(listed["events"], [ev2])
+        self.assertEqual(listed["schedules"], [])
+        self.assertEqual(listed["next_event"]["time"], "08:30")
+
+        r = self.c.put(f"/plugs/bfplug1/events/{ev['id']}", json={"enabled": False}, headers=self.h)
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.get_json()["next_event"])
+
+        r = self.c.delete(f"/plugs/bfplug1/events/{ev['id']}", headers=self.h)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["events"], [])
+        self.assertIsNone(r.get_json()["next_event"])
+
+    def test_conflict_is_400_with_the_controller_message(self):
+        self.assertEqual(self.add("07:00", "on", days=[1, 2]).status_code, 200)
+        r = self.add("07:00", "off", days=[2, 3])
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(r.get_json()["error"].startswith("conflict"), r.get_json())
+        # zile disjuncte sau eveniment dezactivat: nu e conflict
+        self.assertEqual(self.add("07:00", "off", days=[3]).status_code, 200)
+        self.assertEqual(self.add("07:00", "off", enabled=False).status_code, 200)
+
+    def test_update_into_a_conflict_is_400(self):
+        self.add("07:00", "on")
+        eid = self.add("08:00", "off").get_json()["events"][-1]["id"]
+        r = self.c.put(f"/plugs/bfplug1/events/{eid}", json={"time": "07:00"}, headers=self.h)
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(r.get_json()["error"].startswith("conflict"), r.get_json())
+
+    def test_limit_of_12_events_is_400_with_the_message(self):
+        for i in range(12):
+            self.assertEqual(self.add(f"{i:02d}:00", "on").status_code, 200, i)
+        r = self.add("13:00", "on")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json(), {"error": "cel mult 12 evenimente pe priza"})
+
+    def test_unknown_event_is_404(self):
+        r = self.c.put("/plugs/bfplug1/events/zz99", json={"enabled": False}, headers=self.h)
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(r.get_json()["error"].startswith("eveniment necunoscut"), r.get_json())
+        r = self.c.delete("/plugs/bfplug1/events/zz99", headers=self.h)
+        self.assertEqual(r.status_code, 404)
+        self.assertTrue(r.get_json()["error"].startswith("eveniment necunoscut"), r.get_json())
+
+    def test_events_are_listed_by_time_then_days(self):
+        self.add("18:00", "off")
+        self.add("07:00", "on", days=[6, 7])
+        self.add("07:00", "on", days=[1, 2])
+        times = [(e["time"], e["days"]) for e in
+                 self.c.get("/plugs", headers=self.h).get_json()["plugs"][0]["events"]]
+        self.assertEqual(times, [("07:00", [1, 2]), ("07:00", [6, 7]), ("18:00", None)])
 
 
 if __name__ == "__main__":
