@@ -56,6 +56,7 @@ ON_COUNTDOWN_GIVE_UP = timedelta(minutes=30)
 LOOKBACK = timedelta(days=2)      # cat de veche poate fi o aparitie ratata si totusi executata
 OFF_HORIZON = timedelta(days=8)   # cat cautam in fata urmatorul OPRESTE (ca schedule.next_occurrence)
 
+# `plug_order` (lista de id-uri, frate cu `plugs`): ordinea prizelor in aplicatie, aceeasi pe toate telefoanele.
 _DEFAULT = {"plugs": {}}
 
 
@@ -499,8 +500,37 @@ class Controller:
             "error": error,
         }
 
+    def _ordered_ids(self, raw) -> list:
+        """Id-urile prizelor in ordinea salvata (`plug_order`); necunoscutele, dublurile si orice nu e
+        text se ignora, iar prizele lipsa vin la sfarsit, in ordinea dispozitivelor."""
+        out: list = []
+        if isinstance(raw, list):
+            for pid in raw:
+                if isinstance(pid, str) and pid in self.devices and pid not in out:
+                    out.append(pid)
+        out.extend(pid for pid in self.devices if pid not in out)
+        return out
+
     def plugs_view(self) -> list:
-        return [self.plug_view(pid) for pid in self.devices]
+        order = self._ordered_ids(self.store.load(_DEFAULT).get("plug_order"))
+        return [self.plug_view(pid) for pid in order]
+
+    def set_order(self, order: list) -> list:
+        """Ordinea prizelor (aceeasi pentru toate telefoanele). ValueError la id necunoscut sau repetat.
+        Ce lipseste din `order` se pune la sfarsit, in ordinea de acum; intoarce `plugs_view()`."""
+        if not isinstance(order, list) or not all(isinstance(pid, str) for pid in order):
+            raise ValueError("ordine: asteptat o lista de id-uri de prize")
+        unknown = [pid for pid in order if pid not in self.devices]
+        if unknown:
+            raise ValueError(f"priza necunoscuta: {unknown[0]}")
+        if len(set(order)) != len(order):
+            raise ValueError("ordine: id repetat")
+
+        def apply(d: dict) -> None:
+            current = self._ordered_ids(d.get("plug_order"))
+            d["plug_order"] = list(order) + [pid for pid in current if pid not in order]
+        self.store.update(apply, _DEFAULT)
+        return self.plugs_view()
 
     # ------------------------------------------------------------------ comenzi publice
     def switch(self, pid: str, on: bool) -> dict:

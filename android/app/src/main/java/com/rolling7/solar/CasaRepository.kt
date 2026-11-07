@@ -131,6 +131,13 @@ object CasaRepository {
     fun plugs(token: String): CasaResult<List<CasaPlug>> =
         call("GET", "/plugs", token, null, READ_MS) { parsePlugs(it) }
 
+    /**
+     * Ordinea prizelor, aceeasi pe toate telefoanele. Raspunsul e lista prizelor in noua ordine (ca `GET /plugs`).
+     * Nu trece prin coada unei prize, deci asteapta ca o citire obisnuita, nu cat o comanda.
+     */
+    fun setPlugOrder(token: String, ids: List<String>): CasaResult<List<CasaPlug>> =
+        call("PUT", "/plug-order", token, casaOrderBody(ids), READ_MS) { parsePlugs(it) }
+
     fun switch(token: String, id: String, on: Boolean): CasaResult<CasaPlug> =
         command("POST", token, id, "/switch", JSONObject().put("on", on))
 

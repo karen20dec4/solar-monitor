@@ -26,6 +26,7 @@ class FakeController:
         self.fail = False
         self.raise_value = None
         self.raise_key = None
+        self.fail_store = False
 
     def _view(self, pid):
         return dict(VIEW, id=pid, metered=(pid == "p1"), online=pid not in getattr(self, "offline", ()))
@@ -34,7 +35,7 @@ class FakeController:
         return self._view(pid)
 
     def plugs_view(self):
-        return [self._view(p) for p in self.devices]
+        return [self._view(p) for p in getattr(self, "order", self.devices)]
 
     def _do(self, name, pid, *args, **kw):
         self.calls.append((name, pid, args, kw))
@@ -71,6 +72,17 @@ class FakeController:
 
     def rename(self, pid, name):
         return dict(self._do("rename", pid, name), name=name)
+
+    def set_order(self, order):
+        self.calls.append(("set_order", None, (order,), {}))
+        if self.fail_store:
+            raise CorruptStore("fisier JSON corupt")
+        if self.raise_value:
+            raise ValueError(self.raise_value)
+        known = list(self.devices)
+        first = [i for i in order if i in known]
+        self.order = first + [i for i in getattr(self, "order", known) if i not in first]
+        return [self._view(p) for p in self.order]
 
 
 class FakeCloud:
@@ -159,7 +171,7 @@ class TestAuthRoutes(WebCase):
                 self.assertEqual(r.headers.get("WWW-Authenticate"), 'Bearer realm="casa"',
                                  f"{method} {url}")
                 checked += 1
-        self.assertEqual(checked, 13)
+        self.assertEqual(checked, 14)
 
     def test_bad_and_malformed_token_is_401(self):
         for hdr in ({"Authorization": "Bearer nu-exista"}, {"Authorization": "Basic abc"},
@@ -342,6 +354,74 @@ class TestPlugRoutes(WebCase):
         # alt telefon are limita proprie
         h2 = self.h(self.register(c, ip="10.0.0.6"))
         self.assertEqual(c.post("/plugs/p1/switch", json={"on": True}, headers=h2).status_code, 200)
+
+
+class TestPlugOrderRoute(WebCase):
+    def put(self, body, token=True, **kw):
+        return self.c.put("/plug-order", json=body, headers=self.h() if token else {}, **kw)
+
+    def test_put_plug_order(self):
+        r = self.put({"order": ["p2", "p1"]})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        body = r.get_json()
+        # aceeasi forma ca GET /plugs: lista de prize + marca de timp + energia de azi
+        self.assertIsInstance(body["timestamp"], (int, float))
+        self.assertEqual([p["id"] for p in body["plugs"]], ["p2", "p1"])
+        plugs = {p["id"]: p for p in body["plugs"]}
+        self.assertEqual(plugs["p1"]["energy_today"], 2.4)
+        self.assertIsNone(plugs["p2"]["energy_today"])
+        self.assertEqual(self.ctl.calls[-1], ("set_order", None, (["p2", "p1"],), {}))
+        # GET /plugs urmeaza aceeasi ordine
+        again = self.c.get("/plugs", headers=self.h()).get_json()
+        self.assertEqual([p["id"] for p in again["plugs"]], ["p2", "p1"])
+
+    def test_put_plug_order_partial_list(self):
+        r = self.put({"order": ["p2"]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([p["id"] for p in r.get_json()["plugs"]], ["p2", "p1"])
+
+    def test_put_plug_order_400(self):
+        for body in ({}, {"order": "p1"}, {"order": None}, {"order": {"p1": 1}}, {"order": [1, 2]},
+                     {"order": ["p1", None]}, {"order": [["p1"]]}, {"order": ["p1"], "extra": 1},
+                     {"ordine": ["p1"]}, ["p1"], None):
+            r = self.put(body)
+            self.assertEqual(r.status_code, 400, body)
+            self.assertIn("error", r.get_json())
+        r = self.c.put("/plug-order", data="nu-json", content_type="text/plain", headers=self.h())
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.ctl.calls, [])              # nimic nu ajunge la controller
+
+    def test_put_plug_order_controller_value_error_is_400(self):
+        self.ctl.raise_value = "priza necunoscuta: zzz"
+        r = self.put({"order": ["zzz"]})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json(), {"error": "priza necunoscuta: zzz"})
+
+    def test_put_plug_order_corrupt_state_is_500_not_400(self):
+        self.ctl.fail_store = True
+        r = self.put({"order": ["p1"]})
+        self.assertEqual(r.status_code, 500)
+
+    def test_put_plug_order_requires_a_token(self):
+        for hdr in ({}, {"Authorization": "Bearer nu-exista"}, {"Authorization": "Basic abc"}):
+            r = self.c.put("/plug-order", json={"order": ["p1"]}, headers=hdr)
+            self.assertEqual(r.status_code, 401, hdr)
+            self.assertEqual(r.headers.get("WWW-Authenticate"), 'Bearer realm="casa"')
+        self.assertEqual(self.ctl.calls, [])
+
+    def test_get_is_not_allowed_on_the_order_route(self):
+        self.assertEqual(self.c.get("/plug-order", headers=self.h()).status_code, 405)
+
+    def test_put_plug_order_shares_the_command_rate_limit(self):
+        self.limiter = RateLimiter(2, 3.0)
+        c = self.make_app().test_client()
+        h = self.h(self.register(c))
+        for _ in range(2):
+            self.assertEqual(c.put("/plug-order", json={"order": ["p1"]}, headers=h).status_code, 200)
+        r = c.put("/plug-order", json={"order": ["p1"]}, headers=h)
+        self.assertEqual(r.status_code, 429)
+        self.assertEqual(r.get_json()["error"], "prea multe comenzi")
+        self.assertEqual(len(self.ctl.calls), 2)
 
 
 class TestEventRoutes(WebCase):
@@ -801,6 +881,63 @@ class TestEventRoutesWithController(unittest.TestCase):
         times = [(e["time"], e["days"]) for e in
                  self.c.get("/plugs", headers=self.h).get_json()["plugs"][0]["events"]]
         self.assertEqual(times, [("07:00", [1, 2]), ("07:00", [6, 7]), ("18:00", None)])
+
+
+class TestPlugOrderWithController(unittest.TestCase):
+    """PUT /plug-order pe controllerul real (modul demo): ordinea ajunge la GET /plugs si la urmatoarea pornire."""
+
+    IDS = ("bfa", "bfb", "bfc")
+
+    def build(self):
+        cfg = Config(data_dir=self.tmp.name, influx_url="http://127.0.0.1:1", influx_token="t", influx_org="o",
+                     bucket_live="live", bucket_history="history", ntfy_url="", poll_s=0.2, demo=True)
+        svc = build_services(cfg)
+        self.addCleanup(svc.shutdown)
+        svc.command_limiter = RateLimiter(1000, 1.0)
+        return svc, create_app(svc).test_client()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        save_devices(self.tmp.name, [
+            DeviceInfo(id=i, name="Priza " + i, kind="plug", local_key=None, ip=None, version=None,
+                       dps={"switch": 1, "countdown": 9}, scales={}) for i in self.IDS])
+        svc, self.c = self.build()
+        svc.auth.set_password(PASSWORD)
+        r = self.c.post("/register", json={"password": PASSWORD, "device": "Pixel 8"},
+                        headers={"X-Forwarded-For": "10.0.0.5"})
+        self.h = {"Authorization": "Bearer " + r.get_json()["token"]}
+
+    def listed(self):
+        return [p["id"] for p in self.c.get("/plugs", headers=self.h).get_json()["plugs"]]
+
+    def test_order_round_trip_and_survives_restart(self):
+        self.assertEqual(self.listed(), ["bfa", "bfb", "bfc"])
+        r = self.c.put("/plug-order", json={"order": ["bfc", "bfa", "bfb"]}, headers=self.h)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual([p["id"] for p in r.get_json()["plugs"]], ["bfc", "bfa", "bfb"])
+        self.assertEqual(self.listed(), ["bfc", "bfa", "bfb"])
+        r = self.c.put("/plug-order", json={"order": ["bfb"]}, headers=self.h)     # cele lipsa raman la sfarsit
+        self.assertEqual([p["id"] for p in r.get_json()["plugs"]], ["bfb", "bfc", "bfa"])
+        with open(os.path.join(self.tmp.name, "state.demo.json")) as f:
+            data = json.load(f)
+        self.assertIs(data["demo"], True)                                          # marcajul demo ramane
+        self.assertEqual(data["plug_order"], ["bfb", "bfc", "bfa"])
+        # alta pornire a serviciului, acelasi director de date
+        _svc, c2 = self.build()
+        r = c2.post("/register", json={"password": PASSWORD, "device": "Pixel 9"},
+                    headers={"X-Forwarded-For": "10.0.0.6"})
+        h2 = {"Authorization": "Bearer " + r.get_json()["token"]}
+        self.assertEqual([p["id"] for p in c2.get("/plugs", headers=h2).get_json()["plugs"]],
+                         ["bfb", "bfc", "bfa"])
+
+    def test_unknown_and_duplicate_ids_are_400_and_change_nothing(self):
+        self.c.put("/plug-order", json={"order": ["bfb", "bfa", "bfc"]}, headers=self.h)
+        for body in ({"order": ["bfa", "zzz"]}, {"order": ["bfa", "bfa"]}):
+            r = self.c.put("/plug-order", json=body, headers=self.h)
+            self.assertEqual(r.status_code, 400, body)
+            self.assertIn("error", r.get_json())
+        self.assertEqual(self.listed(), ["bfb", "bfa", "bfc"])
 
 
 if __name__ == "__main__":

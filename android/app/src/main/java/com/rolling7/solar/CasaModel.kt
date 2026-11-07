@@ -340,6 +340,54 @@ class CasaFreshness {
     fun isFresh(ticket: Long): Boolean = inFlight == 0 && ticket == generation
 }
 
+// ---------------------------------------------------------------------------------------------
+// Ordinea prizelor: tinuta pe server, aceeasi pe toate telefoanele
+// ---------------------------------------------------------------------------------------------
+
+/** Muta id-ul de la `from` pe pozitia `to` (ambele limitate la lista). Aceeasi pozitie = aceeasi lista. */
+internal fun casaMove(ids: List<String>, from: Int, to: Int): List<String> {
+    if (ids.isEmpty()) return ids
+    val f = from.coerceIn(0, ids.lastIndex)
+    val t = to.coerceIn(0, ids.lastIndex)
+    if (f == t) return ids
+    return ids.toMutableList().apply { add(t, removeAt(f)) }
+}
+
+/**
+ * Prizele in ordinea `order` (id-uri); `null` = ordinea primita. Id-urile necunoscute si dublurile se
+ * ignora, prizele care lipsesc din `order` (o priza noua) vin la sfarsit, in ordinea primita.
+ */
+internal fun casaApplyOrder(plugs: List<CasaPlug>, order: List<String>?): List<CasaPlug> {
+    if (order.isNullOrEmpty()) return plugs
+    val byId = plugs.associateBy { it.id }
+    val first = order.distinct().mapNotNull { byId[it] }
+    val placed = first.mapTo(HashSet()) { it.id }
+    return first + plugs.filter { it.id !in placed }
+}
+
+/** Corpul `PUT /plug-order`. */
+internal fun casaOrderBody(ids: List<String>): JSONObject = JSONObject().put("order", JSONArray(ids))
+
+/**
+ * Pe ce pozitie ajunge un rand tras cu `offsetPx` pixeli fata de locul lui (`from`), cand randurile sunt
+ * la `pitchPx` unul de altul: distanta rotunjita la randuri, limitata la lista. Fara geometrie ramane pe loc.
+ */
+internal fun casaDropIndex(from: Int, offsetPx: Float, pitchPx: Float, count: Int): Int {
+    if (count <= 0) return 0
+    if (pitchPx <= 0f) return from.coerceIn(0, count - 1)
+    return (from + Math.round(offsetPx / pitchPx)).coerceIn(0, count - 1)
+}
+
+/**
+ * Cu cate locuri se da la o parte randul `index` cat timp randul `from` e tras peste pozitia `to`:
+ * -1 (urca) intre `from` si `to` cand se trage in jos, +1 (coboara) cand se trage in sus, altfel 0.
+ */
+internal fun casaRowShift(index: Int, from: Int, to: Int): Int = when {
+    from < to && index in (from + 1)..to -> -1
+    from > to && index in to until from -> 1
+    else -> 0
+}
+
 /** Lungimea maxima a unui nume dat din aplicatie (aceeasi ca pe server, `NAME_MAX`). */
 internal const val CasaNameMax = 24
 

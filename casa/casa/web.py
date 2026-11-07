@@ -399,11 +399,10 @@ def create_app(services: Optional[Services] = None) -> Flask:
         return jsonify({"phone_id": g.phone["phone_id"], "device": g.phone["device"]})
 
     # -- prize --
-    @app.get("/plugs")
-    @require_token
-    def plugs():
+    def plugs_body(views: list):
+        """Corpul lui `GET /plugs` (si al raspunsului la `PUT /plug-order`): prizele cu energia de azi."""
         out = []
-        for view in controller.plugs_view():
+        for view in views:
             view = dict(view)
             view["energy_today"] = None
             if view.get("metered"):
@@ -412,6 +411,25 @@ def create_app(services: Optional[Services] = None) -> Flask:
                                                  ENERGY_TTL_S, None)
             out.append(view)
         return jsonify({"plugs": out, "timestamp": time.time()})
+
+    @app.get("/plugs")
+    @require_token
+    def plugs():
+        return plugs_body(controller.plugs_view())
+
+    @app.put("/plug-order")
+    @require_token
+    def plug_order():
+        order = _body(("order",))["order"]
+        if not isinstance(order, list) or not all(isinstance(pid, str) for pid in order):
+            raise ApiError(400, "order: lista de id-uri de prize")
+        try:
+            views = controller.set_order(order)
+        except CorruptStore:
+            raise       # fisier de stare stricat: 500, nu "date invalide"
+        except ValueError as e:
+            raise ApiError(400, str(e))
+        return plugs_body(views)
 
     @app.post("/plugs/<pid>/switch")
     @require_token

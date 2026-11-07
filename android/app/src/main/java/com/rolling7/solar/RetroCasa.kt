@@ -1,5 +1,8 @@
 package com.rolling7.solar
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -30,9 +33,12 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,7 +61,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.imageResource
@@ -75,6 +83,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -407,6 +416,17 @@ private fun CasaContent(
     val scope = rememberCoroutineScope()
     val hapticContext = LocalContext.current
     val plugsStale by remember { derivedStateOf { clock.value - lastGoodPlugsMs > PlugsStaleMs } }
+    // Mutarea prizelor. `order` = ordinea locala de afisare: cat tine modul de mutare (si cat se trimite
+    // o mutare) bate ordinea de pe server, ca sondarea de 3 s sa nu amestece randurile sub deget.
+    var reorder by remember { mutableStateOf(false) }
+    var order by remember { mutableStateOf<List<String>?>(null) }
+    var orderBusy by remember { mutableStateOf(false) }
+    val geometry = remember { CasaRowGeometry() }
+    val drag = remember { CasaDragState() }
+    val shown = casaApplyOrder(plugs, order)
+    // Functiile de mai jos pot fi pastrate de un gest cat tine tot ecranul: citesc starea la apel, nu `shown` din
+    // compunerea in care au fost create.
+    fun shownIds(): List<String> = casaApplyOrder(plugs, order).map { it.id }
 
     fun lose(usedToken: String, r: CasaResult<*>) {
         access.onResult(usedToken, r)
@@ -449,9 +469,19 @@ private fun CasaContent(
         }
     }
 
+    fun showError(message: String) {
+        switchError = message
+        val stamp = System.currentTimeMillis()
+        errorStamp = stamp
+        scope.launch {
+            delay(ErrorShownMs)
+            if (errorStamp == stamp) switchError = null
+        }
+    }
+
     fun toggle(p: CasaPlug) {
         val t = token ?: return
-        if (p.id in optimistic) return
+        if (reorder || p.id in optimistic) return
         val target = !(optimistic[p.id] ?: p.on)
         optimistic = optimistic + (p.id to target)
         freshness.commandStarted()
@@ -471,26 +501,89 @@ private fun CasaContent(
                 is CasaResult.Unauthorized -> lose(t, r)
                 is CasaResult.Error -> {
                     CasaHaptics.reject(hapticContext)
-                    switchError = r.message
-                    val stamp = System.currentTimeMillis()
-                    errorStamp = stamp
-                    launch {
-                        delay(ErrorShownMs)
-                        if (errorStamp == stamp) switchError = null
-                    }
+                    showError(r.message)
                 }
             }
         }
     }
 
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    fun enterReorder() {
+        val ids = shownIds()
+        if (reorder || ids.size < 2) return
+        order = ids
+        reorder = true
+        CasaHaptics.confirm(hapticContext)
+    }
+
+    fun leaveReorder() {
+        drag.cancel()
+        reorder = false
+        if (!orderBusy) order = null
+    }
+
+    // Ordinea noua se arata pe loc; serverul o tine pentru toate telefoanele. Ca orice comanda, trece prin
+    // CasaFreshness: o sondare pornita inainte sa se termine mutarea aduce ordinea veche si se arunca.
+    fun commitOrder(newIds: List<String>) {
+        val t = token ?: return
+        val previous = shownIds()
+        if (newIds == previous) return
+        order = newIds
+        orderBusy = true
+        freshness.commandStarted()
+        scope.launch {
+            val r = try {
+                withContext(Dispatchers.IO) { CasaRepository.setPlugOrder(t, newIds) }
+            } finally {
+                freshness.commandFinished()
+            }
+            orderBusy = false
+            when (r) {
+                is CasaResult.Ok -> {
+                    CasaHaptics.confirm(hapticContext)
+                    plugs = r.value
+                    lastGoodPlugsMs = System.currentTimeMillis()
+                    if (!reorder) order = null
+                }
+                is CasaResult.Unauthorized -> {
+                    order = null
+                    reorder = false
+                    lose(t, r)
+                }
+                is CasaResult.Error -> {
+                    CasaHaptics.reject(hapticContext)
+                    order = if (reorder) previous else null
+                    showError(r.message)
+                }
+            }
+        }
+    }
+
+    val reorderGestures = rememberCasaReorderGestures(
+        geometry = geometry,
+        drag = drag,
+        isReorder = { reorder },
+        isBusy = { orderBusy },
+        currentIds = { shownIds() },
+        onEnter = { enterReorder() },
+        onExit = { leaveReorder() },
+        onDrop = { commitOrder(it) }
+    )
+
+    Column(
+        modifier.onGloballyPositioned { geometry.host = it }.then(reorderGestures),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         CasaPlugsCard(
-            plugs = plugs,
+            plugs = shown,
             stale = plugsStale,
             optimistic = optimistic,
             error = switchError,
+            reorder = reorder,
+            geometry = geometry,
+            drag = drag,
             onToggle = ::toggle,
-            onOpenPlug = onOpenPlug,
+            onOpenPlug = { if (!reorder) onOpenPlug(it) },
+            onDone = { leaveReorder() },
             modifier = Modifier.weight(1f)
         )
         CasaSensorsSection(sensors = sensors, clock = clock, onOpenSensor = onOpenSensor)
@@ -537,39 +630,132 @@ private fun CasaPlugsCard(
     stale: Boolean,
     optimistic: Map<String, Boolean>,
     error: String?,
+    reorder: Boolean,
+    geometry: CasaRowGeometry,
+    drag: CasaDragState,
     onToggle: (CasaPlug) -> Unit,
     onOpenPlug: (String) -> Unit,
+    onDone: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    RetroPanelSurface(
-        modifier = modifier,
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-        fillContent = true
-    ) {
-        val (count, watts) = casaPlugsSummary(plugs) { optimistic[it.id] ?: it.on }
-        when {
-            error != null -> CasaSectionTitle("PRIZE", error, RetroRed, 14f)
-            plugs.isEmpty() || stale -> CasaSectionTitle("PRIZE", "ASTEPT DATE", RetroYellow, 14f)
-            else -> CasaSectionTitle("PRIZE", casaSummaryText(count, watts), RetroMuted, 14f)
-        }
-        // Randuri compacte de inaltime fixa (v3.43): pe Note 9 intra cel putin 7 prize; restul cardului ramane
-        // liber pentru prize noi. Peste CompactPlugRows randurile isi impart inaltimea, ca pagina sa nu deruleze.
-        val compact = plugs.size <= CompactPlugRows
-        plugs.forEachIndexed { i, p ->
-            if (i > 0) {
-                Box(Modifier.fillMaxWidth().height(1.dp).background(RetroBrassLight.copy(alpha = 0.28f)))
+    // GATA sta peste cardul de randuri (nu in titlu), ca inaltimea titlului si pozitia randurilor sa nu se mute
+    // la intrarea in modul de mutare; titlul ii face loc la dreapta.
+    Box(modifier) {
+        RetroPanelSurface(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+            fillContent = true
+        ) {
+            val (count, watts) = casaPlugsSummary(plugs) { optimistic[it.id] ?: it.on }
+            Box(Modifier.fillMaxWidth().padding(end = if (reorder) CasaDoneKeyRoom else 0.dp)) {
+                when {
+                    error != null -> CasaSectionTitle("PRIZE", error, RetroRed, 14f)
+                    reorder -> CasaSectionTitle("PRIZE", "TRAGE PENTRU A MUTA", RetroYellow, 14f)
+                    plugs.isEmpty() || stale -> CasaSectionTitle("PRIZE", "ASTEPT DATE", RetroYellow, 14f)
+                    else -> CasaSectionTitle("PRIZE", casaSummaryText(count, watts), RetroMuted, 14f)
+                }
             }
-            CasaPlugRow(
-                plug = p,
-                on = optimistic[p.id] ?: p.on,
-                stale = stale,
-                busy = p.id in optimistic,
-                onToggle = { onToggle(p) },
-                onOpen = { onOpenPlug(p.id) },
-                modifier = if (compact) Modifier.height(CompactPlugRowHeight) else Modifier.weight(1f)
+            // Randuri compacte de inaltime fixa (v3.43): pe Note 9 intra cel putin 7 prize; restul cardului ramane
+            // liber pentru prize noi. Peste CompactPlugRows randurile isi impart inaltimea, ca pagina sa nu deruleze.
+            val compact = plugs.size <= CompactPlugRows
+            val wiggle = if (reorder) rememberCasaWiggle() else null
+            plugs.forEachIndexed { i, p ->
+                key(p.id) {
+                    if (i > 0) {
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(RetroBrassLight.copy(alpha = 0.28f)))
+                    }
+                    CasaMovableRow(
+                        plug = p,
+                        index = i,
+                        reorder = reorder,
+                        drag = drag,
+                        geometry = geometry,
+                        wiggle = wiggle,
+                        modifier = if (compact) Modifier.height(CompactPlugRowHeight) else Modifier.weight(1f)
+                    ) {
+                        CasaPlugRow(
+                            plug = p,
+                            on = optimistic[p.id] ?: p.on,
+                            stale = stale,
+                            busy = p.id in optimistic,
+                            reorder = reorder,
+                            onToggle = { onToggle(p) },
+                            onOpen = { onOpenPlug(p.id) },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+            if (compact || plugs.isEmpty()) Spacer(Modifier.weight(1f))
+        }
+        if (reorder) {
+            CasaDoneKey(
+                onClick = onDone,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = CasaDoneKeyTop, end = 12.dp)
+                    .size(CasaDoneKeyWidth, CasaDoneKeyHeight)
+                    .onGloballyPositioned { geometry.doneKey = it }
             )
         }
-        if (compact || plugs.isEmpty()) Spacer(Modifier.weight(1f))
+    }
+}
+
+/** Loc lasat in titlu pentru butonul GATA (latimea lui plus marginea). */
+private val CasaDoneKeyRoom = 84.dp
+private val CasaDoneKeyWidth = 68.dp
+private val CasaDoneKeyHeight = 32.dp
+/** Cardul are 8 dp padding si titlul ~18 dp: butonul de 32 dp are centrul pe linia titlului. */
+private val CasaDoneKeyTop = 1.dp
+
+/**
+ * Un rand de priza care poate fi mutat: pozitia lui e raportata gestului, iar in modul de mutare tremura,
+ * se da la o parte cand alt rand e tras peste el, sau (daca e cel tras) urmeaza degetul, ridicat si mai mare.
+ */
+@Composable
+private fun CasaMovableRow(
+    plug: CasaPlug,
+    index: Int,
+    reorder: Boolean,
+    drag: CasaDragState,
+    geometry: CasaRowGeometry,
+    wiggle: State<Float>?,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val dragging = drag.id != null
+    val lifted = drag.id == plug.id
+    val shiftTarget = if (dragging && !lifted) casaRowShift(index, drag.from, drag.target) * drag.pitch else 0f
+    val shiftAnim by animateFloatAsState(shiftTarget, tween(120), label = "casa-shift")
+    // Dupa lasare, randul alunga de la locul degetului spre locul lui nou (cate unul nou la fiecare lasare).
+    val settle = remember(drag.settleToken) {
+        Animatable(if (drag.settleId == plug.id) drag.settleFrom else 0f)
+    }
+    LaunchedEffect(settle) { if (settle.value != 0f) settle.animateTo(0f, tween(160)) }
+    DisposableEffect(plug.id) { onDispose { geometry.rows.remove(plug.id) } }
+    val tilt = if (index % 2 == 0) 1f else -1f
+    val liftShape = RoundedCornerShape(10.dp)
+    Box(
+        modifier
+            .onGloballyPositioned { geometry.rows[plug.id] = it }
+            .zIndex(if (lifted || drag.settleId == plug.id) 1f else 0f)
+            .graphicsLayer {
+                translationY = when {
+                    lifted -> drag.offset
+                    dragging -> shiftAnim
+                    else -> settle.value
+                }
+                val scale = if (lifted) 1.03f else 1f
+                scaleX = scale
+                scaleY = scale
+                rotationZ = if (reorder && !lifted) (wiggle?.value ?: 0f) * tilt else 0f
+                shadowElevation = if (lifted) 14.dp.toPx() else 0f
+                shape = liftShape
+                clip = false
+            }
+            .then(if (lifted) Modifier.background(RetroPanelRaised, liftShape) else Modifier)
+    ) {
+        content()
     }
 }
 
@@ -579,6 +765,7 @@ private fun CasaPlugRow(
     on: Boolean,
     stale: Boolean,
     busy: Boolean,
+    reorder: Boolean,
     onToggle: () -> Unit,
     onOpen: () -> Unit,
     modifier: Modifier = Modifier
@@ -597,7 +784,7 @@ private fun CasaPlugRow(
         modifier
             .fillMaxWidth()
             .alpha(if (online) 1f else 0.45f)
-            .clickable(onClick = onOpen)
+            .clickable(enabled = !reorder, onClick = onOpen)
             .padding(horizontal = 4.dp)
             .semantics(mergeDescendants = false) {
                 contentDescription = "${retroLabel(plug.name)}, ${if (on) "pornita" else "oprita"}"
@@ -637,9 +824,10 @@ private fun CasaPlugRow(
             modifier = Modifier
                 .width(58.dp)
                 .height(42.dp)
-                .alpha(if (!stale && !busy) 1f else 0.5f),
+                .alpha(if (!stale && !busy && !reorder) 1f else 0.5f),
             // Si o priza raportata offline primeste comanda: serverul incearca oricum sa se conecteze.
-            onClick = { if (!stale && !busy) onToggle() }
+            // In modul de mutare comutatoarele nu comanda nimic.
+            onClick = { if (!stale && !busy && !reorder) onToggle() }
         )
     }
 }

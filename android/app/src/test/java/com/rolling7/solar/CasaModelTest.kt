@@ -456,4 +456,79 @@ class CasaModelTest {
         // fara urmator eveniment nu apare nicio insigna de program
         assertEquals(listOf("AUTO 15 MIN"), plugBadges(parsePlug(plainJson), now, zone))
     }
+
+    // ---- ordinea prizelor ----
+
+    private fun plugId(id: String) = parsePlug("""{"id":"$id","name":"$id"}""")
+
+    @Test
+    fun `casaMove moves a row down`() {
+        assertEquals(listOf("b", "c", "a", "d"), casaMove(listOf("a", "b", "c", "d"), 0, 2))
+        assertEquals(listOf("a", "b", "d", "c"), casaMove(listOf("a", "b", "c", "d"), 2, 3))
+    }
+
+    @Test
+    fun `casaMove moves a row up`() {
+        assertEquals(listOf("a", "d", "b", "c"), casaMove(listOf("a", "b", "c", "d"), 3, 1))
+        assertEquals(listOf("b", "a", "c", "d"), casaMove(listOf("a", "b", "c", "d"), 1, 0))
+    }
+
+    @Test
+    fun `casaMove with the same index returns an equal list`() {
+        val ids = listOf("a", "b", "c")
+        assertEquals(ids, casaMove(ids, 1, 1))
+        assertEquals(emptyList<String>(), casaMove(emptyList(), 0, 3))
+        assertEquals(listOf("a"), casaMove(listOf("a"), 0, 5))
+    }
+
+    @Test
+    fun `casaMove clamps out of range indices and leaves the input alone`() {
+        val ids = listOf("a", "b", "c")
+        assertEquals(listOf("b", "c", "a"), casaMove(ids, 0, 99))
+        assertEquals(listOf("c", "a", "b"), casaMove(ids, 2, -7))
+        assertEquals(listOf("b", "c", "a"), casaMove(ids, -4, 2))   // from -4 = primul
+        assertEquals(listOf("c", "a", "b"), casaMove(ids, 50, 0))   // from 50 = ultimul
+        assertEquals(listOf("a", "b", "c"), ids)
+    }
+
+    @Test
+    fun `casaApplyOrder follows the given order and appends the rest`() {
+        val plugs = listOf("a", "b", "c").map(::plugId)
+        assertEquals(listOf("a", "b", "c"), casaApplyOrder(plugs, null).map { it.id })
+        assertEquals(listOf("c", "a", "b"), casaApplyOrder(plugs, listOf("c", "a")).map { it.id })
+        // necunoscute si duplicate se ignora; o priza noua (lipsa din ordine) vine la sfarsit
+        assertEquals(
+            listOf("b", "a", "c"),
+            casaApplyOrder(plugs, listOf("zzz", "b", "b", "a")).map { it.id }
+        )
+        assertEquals(emptyList<CasaPlug>(), casaApplyOrder(emptyList(), listOf("a")))
+    }
+
+    @Test
+    fun `casaOrderBody lists the ids in order`() {
+        val body = casaOrderBody(listOf("b", "a"))
+        assertEquals(1, body.length())
+        val a = body.getJSONArray("order")
+        assertEquals(listOf("b", "a"), (0 until a.length()).map { a.getString(it) })
+    }
+
+    @Test
+    fun `casaDropIndex rounds the dragged distance to whole rows and stays in the list`() {
+        assertEquals(1, casaDropIndex(from = 1, offsetPx = 20f, pitchPx = 55f, count = 5))   // sub jumatate
+        assertEquals(2, casaDropIndex(from = 1, offsetPx = 40f, pitchPx = 55f, count = 5))   // peste jumatate
+        assertEquals(0, casaDropIndex(from = 1, offsetPx = -40f, pitchPx = 55f, count = 5))
+        assertEquals(4, casaDropIndex(from = 1, offsetPx = 5000f, pitchPx = 55f, count = 5))
+        assertEquals(0, casaDropIndex(from = 3, offsetPx = -5000f, pitchPx = 55f, count = 5))
+        assertEquals(2, casaDropIndex(from = 2, offsetPx = 900f, pitchPx = 0f, count = 5))   // fara geometrie: pe loc
+        assertEquals(0, casaDropIndex(from = 0, offsetPx = 100f, pitchPx = 55f, count = 1))
+    }
+
+    @Test
+    fun `casaRowShift shifts only the rows between the picked row and its target`() {
+        // randul 1 tras pana pe pozitia 3: 2 si 3 urca cu un loc
+        assertEquals(listOf(0, 0, -1, -1, 0), (0..4).map { casaRowShift(it, from = 1, to = 3) })
+        // randul 3 tras pana pe pozitia 1: 1 si 2 coboara cu un loc
+        assertEquals(listOf(0, 1, 1, 0, 0), (0..4).map { casaRowShift(it, from = 3, to = 1) })
+        assertEquals(listOf(0, 0, 0), (0..2).map { casaRowShift(it, from = 1, to = 1) })
+    }
 }

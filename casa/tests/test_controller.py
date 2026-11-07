@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from casa.controller import CommandError, Controller, migrate_state
 from casa.devices import DeviceInfo
 from casa.plugs import FakeDriver, PlugError, PlugReading, decode_inching, decode_reading, encode_inching
-from casa.store import JsonStore
+from casa.store import CorruptStore, JsonStore
 
 UTC = timezone.utc
 TZ = ZoneInfo("Europe/Bucharest")
@@ -1849,6 +1849,113 @@ class RenameTest(ControllerBase):
         self.assertEqual(r.c.plug_view(PID)["name"], "Calorifer")
         with self.assertRaises(KeyError):
             r.c.rename("nu-exista", "X")
+
+
+class PlugOrderTest(unittest.TestCase):
+    """Ordinea prizelor, aceeasi pe toate telefoanele (state.json: `plug_order`, frate cu `plugs`)."""
+
+    IDS = ("a", "b", "c")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "state.json")
+        self.store = JsonStore(self.path)
+        self.clock = Clock(loc(9))
+
+    def dev(self, pid):
+        return DeviceInfo(id=pid, name="Priza " + pid, kind="plug", local_key="k", ip="1.2.3.4",
+                          version="3.3", dps={"switch": 1}, scales={})
+
+    def ctl(self, ids=IDS):
+        return Controller([self.dev(i) for i in ids], {}, self.store, TZ, self.clock)
+
+    def ids(self, view):
+        return [v["id"] for v in view]
+
+    def stored(self):
+        with open(self.path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_default_order_is_device_order(self):
+        c = self.ctl()
+        self.assertEqual(self.ids(c.plugs_view()), ["a", "b", "c"])
+        self.assertFalse(os.path.exists(self.path))      # citirea nu scrie nimic
+
+    def test_order_applied_in_view(self):
+        c = self.ctl()
+        out = c.set_order(["c", "a", "b"])
+        self.assertEqual(self.ids(out), ["c", "a", "b"])
+        self.assertEqual(self.ids(c.plugs_view()), ["c", "a", "b"])
+        self.assertEqual(self.stored()["plug_order"], ["c", "a", "b"])
+        # vederea fiecarei prize ramane aceeasi (doar ordinea listei se schimba)
+        self.assertEqual(out[0], c.plug_view("c"))
+
+    def test_order_missing_ids_appended(self):
+        c = self.ctl()
+        self.assertEqual(self.ids(c.set_order(["c"])), ["c", "a", "b"])
+        self.assertEqual(self.stored()["plug_order"], ["c", "a", "b"])
+        # cele lipsa raman in ordinea de acum, nu in cea a dispozitivelor
+        c.set_order(["b", "a", "c"])
+        self.assertEqual(self.ids(c.set_order(["c"])), ["c", "b", "a"])
+        self.assertEqual(self.stored()["plug_order"], ["c", "b", "a"])
+        self.assertEqual(self.ids(c.set_order([])), ["c", "b", "a"])
+
+    def test_order_rejects_unknown_and_duplicates(self):
+        c = self.ctl()
+        c.set_order(["b", "c", "a"])
+        before = self.stored()
+        for bad in (["a", "zzz"], ["a", "a"], ["a", "b", "a"], ["zzz"], [1], ["a", None], "abc", None,
+                    {"a": 1}, [["a"]]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                c.set_order(bad)
+        self.assertEqual(self.stored(), before)           # o cerere respinsa nu schimba nimic
+        self.assertEqual(self.ids(c.plugs_view()), ["b", "c", "a"])
+
+    def test_order_survives_restart(self):
+        self.ctl().set_order(["c", "b", "a"])
+        again = self.ctl()                                # alt Controller, acelasi store
+        self.assertEqual(self.ids(again.plugs_view()), ["c", "b", "a"])
+
+    def test_new_device_goes_last_and_removed_one_is_ignored(self):
+        self.ctl().set_order(["c", "a", "b"])
+        grown = self.ctl(ids=("a", "b", "c", "d"))
+        self.assertEqual(self.ids(grown.plugs_view()), ["c", "a", "b", "d"])
+        shrunk = self.ctl(ids=("a", "c"))                 # b ascunsa/disparuta: id-ul ramas in stare nu conteaza
+        self.assertEqual(self.ids(shrunk.plugs_view()), ["c", "a"])
+        self.assertEqual(self.ids(shrunk.set_order(["a"])), ["a", "c"])
+        self.assertEqual(self.stored()["plug_order"], ["a", "c"])
+
+    def test_garbage_in_state_is_ignored(self):
+        for junk in ("abc", {"a": 1}, 7, [1, None, "b", "b", "zzz", ["c"]]):
+            self.store.save({"plugs": {}, "plug_order": junk})
+            expected = ["b", "a", "c"] if isinstance(junk, list) else ["a", "b", "c"]
+            self.assertEqual(self.ids(self.ctl().plugs_view()), expected, junk)
+
+    def test_set_order_keeps_demo_marker_and_plug_state(self):
+        self.store.save({"demo": True, "plugs": {"a": {"events": [], "inching": {"enabled": True, "minutes": 5}}}})
+        c = self.ctl()
+        c.set_order(["b", "a", "c"])
+        data = self.stored()
+        self.assertIs(data["demo"], True)
+        self.assertEqual(data["plugs"]["a"]["inching"], {"enabled": True, "minutes": 5})
+        self.assertEqual(data["plug_order"], ["b", "a", "c"])
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+
+    def test_legacy_migration_does_not_touch_plug_order(self):
+        data = {"plug_order": ["b", "a"], "plugs": {"a": {"schedules": [
+            {"id": "x1", "start": "07:00", "stop": "08:00", "enabled": True}]}}}
+        self.assertTrue(migrate_state(data, loc(9)))
+        self.assertEqual(data["plug_order"], ["b", "a"])
+
+    def test_corrupt_state_is_not_overwritten(self):
+        c = self.ctl()
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("{nu e json")
+        with self.assertRaises(CorruptStore):
+            c.set_order(["b"])
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "{nu e json")
 
 
 class NativeInchingTest(ControllerBase):
