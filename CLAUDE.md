@@ -391,10 +391,14 @@ user. The go-live list at the end of this section is from 2026-11-05 and was not
 
   The T34 Bucatarie (`bfc30380ff8a29c0d88wcz`, no meter) is retired: `"hidden": true`. MACs of the Tasmota plugs and
   everything about their set-up are in `COPILOT_CONTEXT.md` §13.81.
-- **What it does (Tuya part):** Tuya plugs controlled locally (`tinytuya`, TCP 6668, one persistent connection per plug; IPs/protocol
-  defaults in `casa/casa/devices.py`, matched by device id: Boiler .204, Living sus .244, Priza cam Georgi .104,
-  Bucatarie .185, Lumina Curte .158 (confirmed by the first real `sync`, 2026-11-05; Bucatarie and Lumina Curte are
-  "T34-Smart Plug", protocol 3.4, no metering, Tuya category `tdq`); today only .104 is in use, the rest are fallback). 3 temperature/humidity sensors from the Tuya cloud
+- **What it does (Tuya part):** Tuya plugs are controlled locally (`tinytuya`, TCP 6668, one persistent connection per plug).
+  `BUILTIN_DEFAULTS` in `casa/casa/devices.py` keeps the IP and protocol of the five original Tuya units by device id,
+  under the names they had on 2026-11-05 (confirmed by the first real `sync`): Boiler .204, Living sus .244, "Priza cam
+  Georgi" .104 (`bf3bac46d1a367e845thx2`), Bucatarie .185 and Lumina Curte .158 (the last two are "T34-Smart Plug", protocol
+  3.4, no metering, Tuya category `tdq`). **Those names are old; the current names are in the table above.** The only Tuya
+  plug in use today is the old Georgi unit: id `bf3bac46d1a367e845thx2`, .104, now named **Bucatarie**. The other four Tuya
+  units are in the drawer as fallback (their ids now belong to the Tasmota plugs that replaced them, or are `hidden` for the
+  T34 Bucatarie). 3 temperature/humidity sensors from the Tuya cloud
   (`tuya-device-sharing-sdk`, session from a QR login). The real sensors ("T & H Sensor", category `tdq`) come with **no
   status at all over REST**; their values arrive **only by MQTT**, as numbered DPs the SDK drops (no local strategy):
   **27 = temperature ×10, 46 = humidity %, 101 = battery `low`/`middle`/`high`** (`SENSOR_DP_CODES` in `cloud.py`, measured
@@ -413,25 +417,28 @@ user. The go-live list at the end of this section is from 2026-11-05 and was not
   `ip`, skips the entry with a warning and boot goes on. An entry with `driver: tasmota` **plus `name` and `ip`** is enough
   alone: if its id is not in `devices.json` (Tuya plug deleted from SmartLife, or a plug that never had a Tuya
   account, like Priza cam Georgi `tasmota_431ea4`) the plug stays (kind `plug`). **Such a lone id must match
-  `^[A-Za-z0-9_]+$`** (found live 2026-11-10): the Influx id guard (`casa/casa/influx.py` `_ID`) rejects a `-`, so the
+  `^[A-Za-z0-9_]+$`** (found live 2026-11-10): the Influx id guard (`casa/casa/influx.py` `_ID`, which is `ID_RE` from `devices.py`) rejects a `-`, so the
   energy query raised ValueError and no plug points were written; `tasmota-431ea4` had to be renamed `tasmota_431ea4`.
+  `load_devices` now logs a warning (the id and the pattern) for any plug id that does not match, but keeps the plug (skipping
+  it would lose its events).
   `scan` / `apply_scan` never touch `driver: tasmota` entries (they would write the old Tuya IP over the Tasmota
   one). **Back to Tuya:** remove `driver` and `ip` from the entry (the Tuya IP then comes from `devices.json` /
   `BUILTIN_DEFAULTS`), put the Tuya plug back and `docker compose restart casa`; a lone entry like
   `tasmota_431ea4` has no Tuya twin under its id.
 - **`casa/data/tasmota.json`** (mode 600, gitignored like the rest of `data/`; `{"password": "..."}`): the single Tasmota
-  `WebPassword` (user `admin`), the same on all the Tasmota plugs; no file = no password. Set it with
+  `WebPassword` (user `admin`), the same on all the Tasmota plugs; **a missing file simply means no password, silently**
+  (no log line). Set it with
   `docker exec -i solar-casa python -m casa tasmota-password --stdin` (or without `--stdin`, asked twice; never in argv),
   then `docker compose restart casa` (it is read once, at boot; only if at least one Tasmota plug exists). The password goes
   in the request URL (`/cm?cmnd=...&user=admin&password=...`), so **no error, log or `PlugReading.error` may contain the
   URL or the password**: messages are `priza <ip>: <kind>` from the error type only (no `str(exc)` of `urllib`, no
   `__context__`, no redirects, no proxy). A plug that answers 401/403 (server has no or the wrong password) shows
-  OFFLINE with "parola Tasmota respinsa". A missing/corrupt `tasmota.json` logs a warning (no contents) and boot
-  continues without a password (plugs that have one then show that offline message). Setting `WebPassword` on a plug is
+  OFFLINE with "parola Tasmota respinsa". Only a **corrupt or unreadable** `tasmota.json` logs a warning (no contents);
+  either way boot continues without a password (plugs that have one then show that offline message). Setting `WebPassword` on a plug is
   done by hand at commissioning (over HTTP, from a file, not from argv/shell history); the server never writes it.
-- **Tasmota behaviour (`casa/casa/tasmota.py`):** HTTP `http://<ip>/cm?cmnd=...`, stdlib `urllib`, timeout 3 s, at most 3
-  requests per reading (`Power`, `Status 10` for the meter, `PulseTime1`; `Mem1`/`Mem2` are read at `connect()` and
-  cached). Nothing is stored in the plug but `PulseTime1`, `Mem1`, `Mem2`: **no rules or timers in the plug**, every
+- **Tasmota behaviour (`casa/casa/tasmota.py`):** HTTP `http://<ip>/cm?cmnd=...`, stdlib `urllib`, timeout 3 s, 3
+  requests per reading in steady state (`Power`, `Status 10` for the meter, `PulseTime1`), plus the `Mem1`/`Mem2` reads at
+  (re)connect (then cached) and a `PulseTime1` write when the driver self-heals. Nothing is stored in the plug but `PulseTime1`, `Mem1`, `Mem2`: **no rules or timers in the plug**, every
   schedule is the server's. The events/countdown/inching semantics below are identical for both drivers.
   - **`PulseTime1` is the fail-safe deadline** (Tuya's countdown DP 9 equivalent): `0` = off, `1..111` = tenths of a second,
     `112..64900` = value − 100 seconds. It applies at every relay turn-on and, written while the relay is **on**, restarts
@@ -543,7 +550,10 @@ user. The go-live list at the end of this section is from 2026-11-05 and was not
   invisible). While a plug is on (from any source), the **nearest off deadline** (next active OFF event, inching, countdown
   "off") is written to the plug's countdown DP (dp 9 only as fallback; real DP from `sync`), so it switches off even if the
   server is down — but **only once it is ≤ 24 h away (Tasmota: ≤ 18 h, `PulseTime1`)** (a weekday OFF days ahead is not written; a capped 24 h countdown would
-  switch off too early). Deleting an OFF while the plug is on leaves it on. A manual command cancels a running countdown.
+  switch off too early). With no server deadline at all, a countdown still left in the plug (cancelled while the plug was offline,
+  or after a failed write; a reconnect forgets what was written) is cleared with a 0 write as soon as the latest reading shows
+  `countdown_s` > 0 (at most once a minute), so it can never switch the plug off at the old time. Deleting an OFF while the plug is
+  on leaves it on. A manual command cancels a running countdown.
   The old intervals were migrated once into ON/OFF event pairs (backup `casa/data/state.json.bak-2026-11-07`). Per-plug
   locks and throttle: one dead plug never delays another's stop; a dead plug ties one thread for a command ≈ 25 s typical /
   45 s theoretical worst case. Routes: `POST /plugs/<id>/events` `{time, action, days?, enabled?}`, `PUT`/`DELETE

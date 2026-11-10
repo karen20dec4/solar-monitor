@@ -487,10 +487,14 @@ pașilor de punere în funcțiune de la finalul secțiunii e din 2026-11-05 și 
 
   T34 Bucatarie (`bfc30380ff8a29c0d88wcz`, fără contor) e retrasă: `"hidden": true`. MAC-urile prizelor Tasmota și tot ce
   ține de punerea lor în funcțiune sunt în `COPILOT_CONTEXT.md` §13.81.
-- **Ce face (partea Tuya):** prize Tuya comandate local (`tinytuya`, TCP 6668, o conexiune persistentă per priză; IP și protocol implicite
-  în `casa/casa/devices.py`, potrivite după device id: Boiler .204, Living sus .244, Priza cam Georgi .104, Bucatarie .185,
-  Lumina Curte .158 (confirmate de primul `sync` real, 2026-11-05; Bucatarie și Lumina Curte sunt „T34-Smart Plug”,
-  protocol 3.4, fără măsurare, categoria Tuya `tdq`); azi se folosește doar .104, restul sunt rezervă). 3 senzori de temperatură/umiditate din cloud-ul Tuya (`tuya-device-sharing-sdk`, sesiune din login QR). Senzorii
+- **Ce face (partea Tuya):** prizele Tuya sunt comandate local (`tinytuya`, TCP 6668, o conexiune persistentă per priză).
+  `BUILTIN_DEFAULTS` din `casa/casa/devices.py` ține IP-ul și protocolul celor cinci unități Tuya originale după device id,
+  sub numele pe care le aveau la 2026-11-05 (confirmate de primul `sync` real): Boiler .204, Living sus .244, „Priza cam
+  Georgi” .104 (`bf3bac46d1a367e845thx2`), Bucatarie .185 și Lumina Curte .158 (ultimele două sunt „T34-Smart Plug”,
+  protocol 3.4, fără măsurare, categoria Tuya `tdq`). **Numele acelea sunt vechi; numele de acum sunt în tabelul de mai sus.**
+  Singura priză Tuya folosită azi e unitatea veche a lui Georgi: id `bf3bac46d1a367e845thx2`, .104, numită acum
+  **Bucatarie**. Celelalte patru unități Tuya stau în sertar ca rezervă (id-urile lor aparțin acum prizelor Tasmota care le-au
+  înlocuit, sau sunt `hidden` pentru T34 Bucatarie). 3 senzori de temperatură/umiditate din cloud-ul Tuya (`tuya-device-sharing-sdk`, sesiune din login QR). Senzorii
   reali („T & H Sensor”, categoria `tdq`) vin **fără nicio stare prin REST**; valorile sosesc **doar prin MQTT**, ca DP-uri
   numerotate pe care SDK-ul le aruncă (n-au strategie locală): **27 = temperatură ×10, 46 = umiditate %, 101 = baterie
   `low`/`middle`/`high`** (`SENSOR_DP_CODES` în `cloud.py`, măsurat 2026-11-05). casa pune `set_up=True` pe senzori ca
@@ -509,26 +513,27 @@ pașilor de punere în funcțiune de la finalul secțiunii e din 2026-11-05 și 
   intrarea cu avertisment, iar pornirea continuă. O intrare cu `driver: tasmota` **plus `name` și `ip`** e suficientă singură:
   dacă id-ul ei nu e în `devices.json` (priza Tuya ștearsă din SmartLife sau o priză care n-a avut niciodată cont Tuya, ca
   Priza cam Georgi `tasmota_431ea4`), priza rămâne (kind `plug`). **Un asemenea id singur trebuie să respecte
-  `^[A-Za-z0-9_]+$`** (aflat live 2026-11-10): garda de id din Influx (`casa/casa/influx.py`, `_ID`) respinge un `-`, deci
+  `^[A-Za-z0-9_]+$`** (aflat live 2026-11-10): garda de id din Influx (`casa/casa/influx.py`, `_ID`, adică `ID_RE` din `devices.py`) respinge un `-`, deci
   interogarea de energie dădea ValueError și nu se scriau puncte pentru priză; `tasmota-431ea4` a trebuit redenumit
-  `tasmota_431ea4`. `scan` / `apply_scan` nu ating niciodată intrările `driver: tasmota` (ar scrie IP-ul vechi Tuya peste
+  `tasmota_431ea4`. `load_devices` scrie acum un avertisment (id-ul și tiparul) pentru orice id de priză care nu se potrivește,
+  dar păstrează priza (sărită, și-ar pierde evenimentele). `scan` / `apply_scan` nu ating niciodată intrările `driver: tasmota` (ar scrie IP-ul vechi Tuya peste
   cel Tasmota). **Înapoi pe Tuya:** scoți `driver` și `ip` din intrare (IP-ul Tuya vine atunci din `devices.json` /
   `BUILTIN_DEFAULTS`), pui priza Tuya la loc și `docker compose restart casa`; o intrare singură ca `tasmota_431ea4` nu are
   geamăn Tuya sub id-ul ei.
 - **`casa/data/tasmota.json`** (mod 600, ignorat de git ca restul lui `data/`; `{"password": "..."}`): unica `WebPassword`
-  Tasmota (utilizator `admin`), aceeași pe toate prizele Tasmota; fără fișier = fără parolă. Se setează cu
+  Tasmota (utilizator `admin`), aceeași pe toate prizele Tasmota; **un fișier lipsă înseamnă pur și simplu fără parolă, în tăcere** (nicio linie de log). Se setează cu
   `docker exec -i solar-casa python -m casa tasmota-password --stdin` (sau fără `--stdin`, cerută de două ori; niciodată în
   argv), apoi `docker compose restart casa` (se citește o singură dată, la pornire; doar dacă există cel puțin o priză
   Tasmota). Parola merge în URL-ul cererii (`/cm?cmnd=...&user=admin&password=...`), deci **nicio eroare, niciun log și
   niciun `PlugReading.error` nu are voie să conțină URL-ul sau parola**: mesajele sunt `priza <ip>: <fel>`, doar din tipul
   erorii (fără `str(exc)` de la `urllib`, fără `__context__`, fără redirecționări, fără proxy). O priză care răspunde 401/403
-  (serverul n-are parola sau o are greșită) apare OFFLINE cu „parola Tasmota respinsa”. Un `tasmota.json` lipsă/corupt scrie un
-  avertisment (fără conținut) și pornirea continuă fără parolă (prizele care au parolă arată atunci mesajul offline de mai
-  sus). `WebPassword` pe priză se setează de mână la punerea în funcțiune (prin HTTP, dintr-un fișier, nu din argv/istoricul
+  (serverul n-are parola sau o are greșită) apare OFFLINE cu „parola Tasmota respinsa”. Doar un `tasmota.json` **corupt sau ilizibil** scrie un
+  avertisment (fără conținut); în ambele cazuri pornirea continuă fără parolă (prizele care au parolă arată atunci mesajul
+  offline de mai sus). `WebPassword` pe priză se setează de mână la punerea în funcțiune (prin HTTP, dintr-un fișier, nu din argv/istoricul
   shell-ului); serverul nu o scrie niciodată.
-- **Comportamentul Tasmota (`casa/casa/tasmota.py`):** HTTP `http://<ip>/cm?cmnd=...`, `urllib` din stdlib, timeout 3 s, cel
-  mult 3 cereri pe citire (`Power`, `Status 10` pentru contor, `PulseTime1`; `Mem1`/`Mem2` se citesc la `connect()` și se
-  țin în cache). În priză nu se stochează decât `PulseTime1`, `Mem1`, `Mem2`: **nicio regulă sau timer în priză**, toate
+- **Comportamentul Tasmota (`casa/casa/tasmota.py`):** HTTP `http://<ip>/cm?cmnd=...`, `urllib` din stdlib, timeout 3 s, 3
+  cereri pe citire în regim normal (`Power`, `Status 10` pentru contor, `PulseTime1`), plus citirile `Mem1`/`Mem2` la
+  (re)conectare (apoi în cache) și o scriere `PulseTime1` când driverul se auto-vindecă. În priză nu se stochează decât `PulseTime1`, `Mem1`, `Mem2`: **nicio regulă sau timer în priză**, toate
   programările sunt ale serverului. Semantica evenimentelor/countdown-ului/inching-ului de mai jos e aceeași pentru ambele drivere.
   - **`PulseTime1` e termenul de siguranță** (echivalentul DP 9 de la Tuya): `0` = oprit, `1..111` = zecimi de secundă,
     `112..64900` = valoare − 100 de secunde. Se aplică la fiecare pornire a releului și, scris cât releul e **pornit**,
@@ -641,7 +646,10 @@ pașilor de punere în funcțiune de la finalul secțiunii e din 2026-11-05 și 
   vede). Cât timp priza e pornită (din orice sursă), **cel mai apropiat termen de oprire** (următorul OPREȘTE activ, inching,
   countdown „oprește") se scrie în DP-ul de countdown al prizei (dp 9 doar de rezervă; DP-ul real vine din `sync`), ca priza să se
   stingă și dacă serverul cade — dar **doar când e la ≤ 24 h (Tasmota: ≤ 18 h, `PulseTime1`)** (un OPREȘTE pe zile, peste câteva zile, nu se scrie; un countdown
-  plafonat la 24 h ar opri-o prea devreme). Ștergerea unui OPREȘTE cât priza e pornită o lasă pornită. O comandă manuală anulează
+  plafonat la 24 h ar opri-o prea devreme). Fără niciun termen pe server, un countdown rămas totuși în priză (anulat cât priza
+  era offline sau după o scriere eșuată; o reconectare uită ce s-a scris) se șterge cu o scriere 0 de îndată ce ultima citire
+  arată `countdown_s` > 0 (cel mult o dată pe minut), ca să nu oprească niciodată priza la vechea oră. Ștergerea unui OPREȘTE cât
+  priza e pornită o lasă pornită. O comandă manuală anulează
   countdown-ul în curs. Intervalele vechi au fost convertite o dată în perechi PORNEȘTE/OPREȘTE (copie
   `casa/data/state.json.bak-2026-11-07`). Lock-uri și throttle per priză: o priză moartă nu întârzie oprirea alteia; ține un fir ≈ 25 s
   obișnuit / 45 s în cel mai rău caz. Rute: `POST /plugs/<id>/events` `{time, action, days?, enabled?}`, `PUT`/`DELETE

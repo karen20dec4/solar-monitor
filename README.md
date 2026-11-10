@@ -33,7 +33,7 @@ Toate fișierele de documentație din repo, în ordinea în care le citești:
 | **`COPILOT_CONTEXT.md`** | Jurnal de sesiuni și decizii (secțiunile `13.x`): istoricul descoperirii registrelor, fiecare release, incidente. Tabelul de registre are porțiuni **învechite** — `collector/collector.py` e sursa de adevăr. |
 | **`deploy/README-firewalld.md`** | firewalld, rețeaua Docker, sonda end-to-end. De citit la orice problemă de trafic între containere. |
 | **`bms/jk_bms_reader.py`** | Cititorul bateriei: BMS JK prin Bluetooth LE → InfluxDB (măsurătoarea `bms`). Serviciu systemd pe host (`deploy/solar-bms.service`), strict READ-ONLY. Detalii în `CLAUDE.md` §„BMS reader". |
-| **`docs/superpowers/specs/2026-11-05-casa-prize-senzori-design.md`** | Specificația CASA: cele 5 prize și 3 senzori Tuya, autentificarea cu parolă, semantica programărilor/countdown/inching. Rezumatul operațional e în `CLAUDE.md` / `GEMINI.md` §„CASA", jurnalul în `COPILOT_CONTEXT.md` §13.78. |
+| **`docs/superpowers/specs/2026-11-05-casa-prize-senzori-design.md`** | Specificația CASA: cele 5 prize (azi 4 Tasmota + 1 Tuya, vezi `2026-11-10-casa-tasmota-design.md`) și 3 senzori Tuya, autentificarea cu parolă, semantica programărilor/countdown/inching. Rezumatul operațional e în `CLAUDE.md` / `GEMINI.md` §„CASA", jurnalul în `COPILOT_CONTEXT.md` §13.78. |
 | **`docs/BATERIE.md`** | Bateria: ce avem (NMC 14S, 9,3 kWh, 220 cicluri, module din Opel Vivaro C), anunțurile OLX discutate (al doilea pachet NMC sau trecere la LiFePO4), de ce nu se amestecă chimiile, ce se verifică la ridicare, ce ar însemna pentru software. **Decizia nu e luată.** |
 | **`android/DASHBOARD_REDESIGN.md`** | Design-ul temelor `Simple` și `Retro`, arhitectura hibridă fotografie + Compose, lista resurselor. |
 | **`deploy-windows.md`** | Fluxul de lucru de pe stația Windows (Android Studio, scp către server). |
@@ -50,14 +50,14 @@ Invertor --USB (/dev/growatt)--> Collector Python (Modbus RTU, READ-ONLY)
     |-> API Android READ-ONLY (telemetrie, istoric și agregate CPU/RAM din `/proc:ro`)
     `-> Grafana (dashboard live 1s + istoric 30 zile)
 
-Prize/senzori Tuya --LAN TCP 6668 (prize) / cloud Tuya (senzori)--> solar-casa (:8100, intern)
+4 prize Tasmota (LAN HTTP) + 1 priză Tuya (LAN TCP 6668) + senzori Tuya (cloud) --> solar-casa (:8100, intern)
     |-> InfluxDB `casa_plug` / `casa_sensor`
     `-> Caddy /solar/casa/* --> aplicația Android (pagina CASA, cu parolă)
 ```
 
 Șapte containere: `solar-collector`, `solar-influxdb`, `solar-grafana`, `solar-ntfy`, `solar-api`, `solar-caddy` și
-`solar-casa` (prizele și senzorii Tuya din casă; fără port publicat). Administrare:
-`docker exec -it solar-casa python -m casa login | sync | set-password | phones | revoke <id> | demo-devices`.
+`solar-casa` (4 prize Tasmota, 1 priză Tuya și senzorii Tuya din casă; fără port publicat). Administrare:
+`docker exec -it solar-casa python -m casa login | sync | set-password | tasmota-password | phones | revoke <id> | demo-devices`.
 
 ## Protocoale — cum ajung datele din invertor pe telefon
 
@@ -86,7 +86,7 @@ este `read_registers(..., functioncode=4)` (FC04 = read input registers).
 **Nu scrie NICIODATĂ** în invertor, nu poate modifica nicio setare sau configurație.
 Nu există niciun apel de scriere (FC06 / FC16) în cod.
 
-Singurul lucru pe care sistemul îl *comandă* sunt cele 5 prize inteligente Tuya (serviciul `solar-casa`).
+Singurul lucru pe care sistemul îl *comandă* sunt cele 5 prize inteligente din casă, 4 Tasmota și 1 Tuya (serviciul `solar-casa`).
 Invertorul și BMS-ul rămân strict READ-ONLY.
 
 ## Operare
