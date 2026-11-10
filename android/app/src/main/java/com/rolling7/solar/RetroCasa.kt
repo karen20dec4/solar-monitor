@@ -609,9 +609,10 @@ internal fun CasaSectionTitle(
             fontWeight = FontWeight.ExtraBold,
             letterSpacing = fixedSp(2f),
             maxLines = 1,
-            modifier = Modifier.padding(start = 8.dp)
+            // Fara parte mica alaturi (sub gol), titlul sta singur, centrat intre cele doua linii.
+            modifier = Modifier.padding(start = 8.dp, end = if (sub.isEmpty()) 8.dp else 0.dp)
         )
-        Text(
+        if (sub.isNotEmpty()) Text(
             text = sub,
             color = subColor,
             fontFamily = RetroMono,

@@ -39,7 +39,9 @@ data class CasaPlug(
     val inchingEnabled: Boolean,
     val inchingMinutes: Int,
     val offDeadline: CasaOffDeadline?,
-    val error: String?
+    val error: String?,
+    /** Tipul prizei dupa server: "tuya" sau "tasmota" (server vechi fara cheia `driver` = "tuya"). */
+    val driver: String = "tuya"
 )
 
 data class CasaSensor(
@@ -160,9 +162,18 @@ internal fun parsePlugObject(j: JSONObject): CasaPlug {
         offDeadline = j.objOrNull("off_deadline")?.let {
             CasaOffDeadline(it.getLong("at"), it.optLong("seconds_left", 0), it.stringOrNull("reason") ?: "")
         },
-        error = j.stringOrNull("error")
+        error = j.stringOrNull("error"),
+        driver = j.stringOrNull("driver") ?: "tuya"
     )
 }
+
+/** Eticheta driverului din antetul detaliului: "tasmota" -> "TASMOTA", "tuya" -> "TUYA". */
+internal fun casaDriverLabel(driver: String): String = driver.uppercase(Locale.ROOT)
+
+/** Subtitlul detaliului prizei, fara driver: "PRIZA 3/5 · CONTORIZATA · WIFI OK" sau "... · WIFI OFFLINE". */
+internal fun casaPlugSubtitle(index: Int, total: Int, metered: Boolean, online: Boolean): String =
+    if (!online) "PRIZA $index/$total · WIFI OFFLINE"
+    else "PRIZA $index/$total · " + (if (metered) "CONTORIZATA" else "FARA CONTOR") + " · WIFI OK"
 
 /** Raspunsul `GET /plugs`: `{"plugs":[...], "timestamp":...}`. */
 fun parsePlugs(json: String): List<CasaPlug> {

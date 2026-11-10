@@ -77,6 +77,40 @@ class CasaModelTest {
     }
 
     @Test
+    fun `plug driver defaults to tuya when the key is missing`() {
+        assertEquals("tuya", parsePlug(plugJson).driver)
+        assertEquals("tuya", parsePlug(plainJson).driver)
+    }
+
+    @Test
+    fun `plug driver tasmota is read from the reply`() {
+        val p = parsePlug("""{"id":"bf3","name":"Living sus","online":true,"on":true,"metered":true,"driver":"tasmota"}""")
+        assertEquals("tasmota", p.driver)
+        val list = parsePlugs("""{"plugs":[{"id":"a","name":"A","driver":"tasmota"},{"id":"b","name":"B","driver":"tuya"}],"timestamp":1}""")
+        assertEquals(listOf("tasmota", "tuya"), list.map { it.driver })
+    }
+
+    @Test
+    fun `plug driver null or blank means tuya`() {
+        assertEquals("tuya", parsePlug("""{"id":"x","name":"X","driver":null}""").driver)
+        assertEquals("tuya", parsePlug("""{"id":"x","name":"X","driver":""}""").driver)
+    }
+
+    @Test
+    fun `driver label is upper case`() {
+        assertEquals("TASMOTA", casaDriverLabel("tasmota"))
+        assertEquals("TUYA", casaDriverLabel("tuya"))
+        assertEquals("ESPHOME", casaDriverLabel("esphome"))
+    }
+
+    @Test
+    fun `plug subtitle without the driver`() {
+        assertEquals("PRIZA 3/5 · CONTORIZATA · WIFI OK", casaPlugSubtitle(3, 5, metered = true, online = true))
+        assertEquals("PRIZA 3/5 · FARA CONTOR · WIFI OK", casaPlugSubtitle(3, 5, metered = false, online = true))
+        assertEquals("PRIZA 3/5 · WIFI OFFLINE", casaPlugSubtitle(3, 5, metered = true, online = false))
+    }
+
+    @Test
     fun `parses the plug list`() {
         val plugs = parsePlugs("""{"plugs":[$plugJson,$plainJson],"timestamp":1730800000}""")
         assertEquals(listOf("bf1", "bf2"), plugs.map { it.id })

@@ -398,7 +398,10 @@ private fun CasaCloseButton(onClose: () -> Unit) {
     }
 }
 
-/** Titlul ecranului de detaliu + subtitlul (verde, sau rosu cand e o eroare) + butonul X. */
+/**
+ * Titlul ecranului de detaliu + subtitlul (verde, sau rosu cand e o eroare) + butonul X. [subtitleTag] (ex.
+ * "TASMOTA") se scrie la sfarsitul subtitlului, dupa un " · ", in auriu, oricare ar fi culoarea subtitlului.
+ */
 @Composable
 private fun CasaDetailHeader(
     title: String,
@@ -406,9 +409,10 @@ private fun CasaDetailHeader(
     subtitleColor: Color,
     onClose: () -> Unit,
     onRename: (() -> Unit)? = null,
+    subtitleTag: String? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    RetroPanelSurface(contentPadding = PaddingValues(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 10.dp)) {
+    RetroPanelSurface(contentPadding = PaddingValues(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 // Atingerea titlului deschide redenumirea (creionul arata ca se poate).
@@ -424,11 +428,25 @@ private fun CasaDetailHeader(
                         Canvas(Modifier.size(16.dp)) { drawPencil(RetroBrassLight) }
                     }
                 }
-                CasaText(subtitle, 10f, subtitleColor, spacing = 1f)
+                if (subtitleTag == null) {
+                    CasaText(subtitle, 10f, subtitleColor, spacing = 1f)
+                } else {
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(SpanStyle(color = subtitleColor)) { append("$subtitle · ") }
+                            withStyle(SpanStyle(color = RetroBrassLight, fontWeight = FontWeight.Bold)) { append(subtitleTag) }
+                        },
+                        fontFamily = RetroMono,
+                        fontSize = fixedSp(10f),
+                        letterSpacing = fixedSp(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
             CasaCloseButton(onClose)
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(2.dp))
         content()
     }
 }
@@ -727,13 +745,13 @@ internal fun RetroPlugDetail(plugId: String, onClose: () -> Unit) {
         val sub = when {
             message != null -> message!!
             stale -> "FARA LEGATURA"
-            !p.online -> "PRIZA ${position.first}/${position.second} · WIFI OFFLINE"
-            else -> "PRIZA ${position.first}/${position.second} · " +
-                (if (p.metered) "CONTORIZATA" else "FARA CONTOR") + " · WIFI OK"
+            else -> casaPlugSubtitle(position.first, position.second, p.metered, p.online)
         }
         val subColor = if (message != null || stale || !p.online) RetroRed else CasaGreenText
+        // Mesajele de eroare si "FARA LEGATURA" inlocuiesc tot subtitlul; altfel driverul inchide randul.
+        val driverTag = if (message != null || stale) null else casaDriverLabel(p.driver)
 
-        CasaDetailHeader(retroLabel(p.name), sub, subColor, onClose, onRename = { renaming = true }) {
+        CasaDetailHeader(retroLabel(p.name), sub, subColor, onClose, onRename = { renaming = true }, subtitleTag = driverTag) {
             PlugPowerRow(
                 plug = p,
                 on = on,
@@ -893,24 +911,22 @@ private fun PlugPowerRow(
     deadlineSeconds: Long?,
     onToggle: () -> Unit
 ) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-        Column(Modifier.width(118.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            CasaToggle(
-                checked = on,
-                description = "${retroLabel(plug.name)}: ${if (on) "opreste" else "porneste"}",
-                modifier = Modifier.width(112.dp).height(44.dp),
-                enabled = usable && !busy,
-                onClick = onToggle
-            )
-            CasaText(
-                if (on) "PORNIT" else "OPRIT", 12f, if (on) RetroSage else RetroMuted,
-                bold = true, spacing = 2f, align = TextAlign.Center
-            )
-            if (on && deadlineSeconds != null) {
-                CasaText(casaDeadlineText(deadlineSeconds), 9f, CasaBlue, align = TextAlign.Center, spacing = 0.2f)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        // Un singur rand (v3.45): comutator + PORNIT | placa de wati | placa kWh + AZI.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+            Column(Modifier.width(100.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                CasaToggle(
+                    checked = on,
+                    description = "${retroLabel(plug.name)}: ${if (on) "opreste" else "porneste"}",
+                    modifier = Modifier.padding(top = 3.dp).width(100.dp).height(40.dp),
+                    enabled = usable && !busy,
+                    onClick = onToggle
+                )
+                CasaText(
+                    if (on) "PORNIT" else "OPRIT", 12f, if (on) RetroSage else RetroMuted,
+                    bold = true, spacing = 2f, align = TextAlign.Center
+                )
             }
-        }
-        Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
             if (plug.metered) {
                 val power = plug.power
                 val watts = if (reading && power != null) power.roundToInt().toString() else "---"
@@ -919,17 +935,20 @@ private fun PlugPowerRow(
                     on && power != null && power > 0.5 -> CasaOrange
                     else -> RetroSage.copy(alpha = 0.55f)
                 }
-                CasaWattsPlate(watts, color, Modifier.fillMaxWidth().height(58.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CasaText("AZI", 11f, RetroMuted, spacing = 1.5f)
+                CasaWattsPlate(watts, color, Modifier.weight(1f).height(46.dp))
+                Column(Modifier.width(100.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     val kwh = plug.energyToday?.let { String.format(Locale.US, "%.1f", it) } ?: "---"
-                    CasaKwhPlate(kwh, Modifier.width(92.dp).height(32.dp))
+                    CasaKwhPlate(kwh, Modifier.fillMaxWidth().height(46.dp))
+                    CasaText("AZI", 11f, RetroMuted, spacing = 1.5f, align = TextAlign.Center)
                 }
             } else {
-                Box(Modifier.fillMaxWidth().height(58.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.weight(1f).height(46.dp), contentAlignment = Alignment.Center) {
                     CasaText("PRIZA FARA CONTOR", 11f, RetroMuted, bold = true, spacing = 1.5f)
                 }
             }
+        }
+        if (on && deadlineSeconds != null) {
+            CasaText(casaDeadlineText(deadlineSeconds), 10f, CasaBlue, Modifier.padding(start = 8.dp, bottom = 2.dp), spacing = 0.5f)
         }
     }
 }
@@ -993,7 +1012,7 @@ private fun PlugCountdownCard(
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(46.dp)
+                .height(42.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color(0xFF0C0F07).copy(alpha = 0.75f))
                 .border(1.dp, RetroBrassLight.copy(alpha = 0.30f), RoundedCornerShape(8.dp))
@@ -1018,7 +1037,7 @@ private fun PlugCountdownCard(
                         CasaText("MIN", 10f, CasaBlue, bold = true)
                     }
                 }
-                CasaKey("ANULEAZA", Modifier.width(104.dp).height(36.dp), accent = RetroRed,
+                CasaKey("ANULEAZA", Modifier.width(104.dp).height(34.dp), accent = RetroRed,
                     fill = CasaRedFillTop to CasaRedFillBottom, enabled = usable, size = 11f, onClick = onCancel)
             }
         }
@@ -1053,11 +1072,11 @@ private fun PlugEventsCard(
 ) {
     RetroPanelSurface(
         modifier = modifier,
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
         fillContent = true,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        CasaSectionTitle("PROGRAMARI", "EVENIMENTE", RetroMuted, 12f)
+        CasaSectionTitle("PROGRAMARI EVENIMENTE", "", RetroMuted, 12f)
         CasaNextEventLine(plug.nextEvent, nowEpoch)
         // Lista deruleaza in interior cand nu incap toate randurile (pagina in sine nu deruleaza niciodata).
         val scroll = rememberScrollState()
@@ -1096,13 +1115,13 @@ private fun PlugEventsCard(
         }
         if (casaCanAddEvent(plug.events.size)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CasaKey("+ PORNIRE", Modifier.weight(1f).height(40.dp), enabled = usable, size = 12f,
+                CasaKey("+ PORNIRE", Modifier.weight(1f).height(34.dp), enabled = usable, size = 12f,
                     description = "Adauga pornire", onClick = { onAdd("on") })
-                CasaKey("+ OPRIRE", Modifier.weight(1f).height(40.dp), enabled = usable, size = 12f,
+                CasaKey("+ OPRIRE", Modifier.weight(1f).height(34.dp), enabled = usable, size = 12f,
                     description = "Adauga oprire", onClick = { onAdd("off") })
             }
         } else {
-            Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().height(34.dp), contentAlignment = Alignment.Center) {
                 CasaText("MAXIM $MaxEvents EVENIMENTE", 10f, RetroMuted, spacing = 1f)
             }
         }
@@ -1116,7 +1135,7 @@ private fun CasaNextEventLine(next: CasaNextEvent?, nowEpoch: Long) {
     Box(
         Modifier
             .fillMaxWidth()
-            .height(30.dp)
+            .height(26.dp)
             .clip(shape)
             .background(Color(0xFF0C0F07).copy(alpha = 0.75f))
             .border(1.dp, RetroBrassLight.copy(alpha = 0.30f), shape)
@@ -1151,10 +1170,12 @@ private fun CasaActionChip(action: String) {
     val shape = RoundedCornerShape(6.dp)
     Box(
         Modifier
+            .width(82.dp)
             .clip(shape)
             .background(if (on) CasaChipOnFill else CasaChipOffFill)
             .border(1.5.dp, if (on) CasaChipOnEdge else CasaChipOffEdge, shape)
-            .padding(horizontal = 6.dp, vertical = 4.dp)
+            .padding(vertical = 3.dp),
+        contentAlignment = Alignment.Center
     ) {
         CasaText(casaActionText(action), 10f, if (on) CasaChipOnText else CasaChipOffText, bold = true, spacing = 0.8f)
     }
@@ -1171,9 +1192,9 @@ private fun CasaEventRow(
 ) {
     val what = "${e.time} ${casaActionText(e.action)} ${casaDaysText(e.days)}"
     Row(
-        Modifier.fillMaxWidth().height(54.dp),
+        Modifier.fillMaxWidth().height(CasaEventRowHeight),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         // Partea din stanga (LED, ora, eticheta, zilele) deschide editorul; comutatorul si X sunt separate.
         Row(
@@ -1186,26 +1207,28 @@ private fun CasaEventRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            RetroLed(color = RetroSage, active = enabled, modifier = Modifier.size(24.dp))
-            CasaText(e.time, 20f, CasaOrange, bold = true, spacing = 1f)
+            RetroLed(color = RetroSage, active = enabled, modifier = Modifier.size(18.dp))
+            CasaText(e.time, 19f, CasaOrange, bold = true, spacing = 1f)
             CasaActionChip(e.action)
             CasaText(casaDaysText(e.days), 9f, RetroMuted, Modifier.weight(1f), maxLines = 2, spacing = 0.3f)
         }
+        // Zona de atingere a comutatorului (60 x 40 dp) e mai mare decat pista lui vizibila (60 x ~20 dp).
         CasaToggle(
             checked = enabled,
             description = "Eveniment $what: ${if (enabled) "dezactiveaza" else "activeaza"}",
-            modifier = Modifier.width(56.dp).height(28.dp),
+            modifier = Modifier.width(60.dp).height(CasaEventRowHeight),
             enabled = usable,
             onClick = onToggle
         )
+        // X-ul se vede de 32 dp, dar se atinge pe 40 x 40 dp.
         Box(
             Modifier
-                .size(44.dp)
+                .size(40.dp)
                 .semantics { contentDescription = "Sterge evenimentul $what" }
                 .clickable(enabled = usable, onClick = onDelete),
             contentAlignment = Alignment.Center
         ) {
-            Canvas(Modifier.size(24.dp)) {
+            Canvas(Modifier.size(32.dp)) {
                 drawCircle(RetroBrassLight.copy(alpha = 0.5f), style = Stroke(1.dp.toPx()))
                 val a = size.minDimension * 0.22f
                 val w = 1.8.dp.toPx()
@@ -1215,6 +1238,9 @@ private fun CasaEventRow(
         }
     }
 }
+
+/** Inaltimea unui rand de eveniment (v3.45: 40 dp, ca sa incapa 5 randuri pe Note 9 fara derulare). */
+private val CasaEventRowHeight = 40.dp
 
 private const val CasaRepeatStartMs = 400L
 
@@ -1356,35 +1382,42 @@ private fun PlugInchingCard(
     onStep: (Int) -> Unit
 ) {
     RetroPanelSurface(
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        // Marginile laterale de 18 dp tin textul si butonul + departe de suruburile din colturile placii.
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 7.dp)
     ) {
-        CasaSectionTitle("INCHING", "OPRIRE AUTOMATA", RetroMuted, 12f)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CasaText(
-                "Dupa fiecare pornire, priza se stinge singura dupa durata aleasa.", 9f, RetroMuted,
-                Modifier.weight(1f), maxLines = 3, spacing = 0.1f
-            )
+        // Un singur rand (v3.45), fara linie de titlu: INCHING + OPRIRE AUTOMATA | comutator | - | durata | +.
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "INCHING",
+                    color = RetroText,
+                    fontFamily = RetroMono,
+                    fontSize = fixedSp(12f),
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = fixedSp(2f),
+                    maxLines = 1
+                )
+                CasaText("OPRIRE AUTOMATA", 8.5f, RetroMuted, spacing = 0.5f, maxLines = 2)
+            }
             CasaToggle(
                 checked = enabled,
-                description = "Inching: ${if (enabled) "dezactiveaza" else "activeaza"}",
-                modifier = Modifier.width(76.dp).height(36.dp),
+                // Explicatia scoasa din ecran (v3.45) ramane in descrierea de accesibilitate.
+                description = "Inching: ${if (enabled) "dezactiveaza" else "activeaza"}. " +
+                    "Dupa fiecare pornire, priza se stinge singura dupa durata aleasa.",
+                modifier = Modifier.width(60.dp).height(36.dp),
                 enabled = usable,
                 onClick = onToggle
             )
-        }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CasaText("DURATA", 11f, RetroMuted, Modifier.weight(1f), spacing = 1.5f)
-            CasaKey("−", Modifier.width(52.dp).height(40.dp), enabled = usable, size = 18f,
+            CasaKey("−", Modifier.width(44.dp).height(36.dp), enabled = usable, size = 18f,
                 description = "Inching mai putin", onClick = { onStep(-1) })
-            RetroInsetSurface(Modifier.width(96.dp).height(40.dp)) {
+            RetroInsetSurface(Modifier.width(84.dp).height(36.dp)) {
                 Row(Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    RetroVfdDisplay(minutes.toString(), "", RetroSage, Modifier.width(46.dp).height(30.dp), embedded = true,
+                    RetroVfdDisplay(minutes.toString(), "", RetroSage, Modifier.width(42.dp).height(28.dp), embedded = true,
                         horizontalPadding = 0.dp, description = "$minutes minute")
                     CasaText("MIN", 10f, RetroSage, bold = true)
                 }
             }
-            CasaKey("+", Modifier.width(52.dp).height(40.dp), enabled = usable, size = 18f,
+            CasaKey("+", Modifier.width(44.dp).height(36.dp), enabled = usable, size = 18f,
                 description = "Inching mai mult", onClick = { onStep(1) })
         }
     }

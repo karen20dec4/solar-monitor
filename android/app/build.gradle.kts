@@ -22,8 +22,8 @@ android {
         applicationId = "com.rolling7.solar"
         minSdk = 26
         targetSdk = 34
-        versionCode = 48
-        versionName = "3.44"
+        versionCode = 49
+        versionName = "3.45"
         // Serverul CASA; numai build-ul debug il poate schimba (vezi mai jos), release il pastreaza mereu.
         buildConfigField("String", "CASA_BASE", "\"https://vyra.go.ro:31443/solar/casa\"")
     }
