@@ -15,7 +15,8 @@ Reguli de siguranta:
     manuala: bate evenimentele mai vechi si anuleaza countdown-ul;
   * orice comanda catre priza trece prin worker-ul ei (o singura conexiune);
   * termenul de oprire cel mai apropiat se scrie si in countdown-ul intern al prizei, dar numai
-    daca e la cel mult 24 h (DP_MAX_S); unul mai departe il executa doar serverul.
+    daca e la cel mult plafonul driverului (Tuya 24 h = DP_MAX_S, Tasmota 18 h = TASMOTA_MAX_S, vezi
+    `_dp_max_s`); unul mai departe il executa doar serverul.
 """
 import copy
 import logging
@@ -32,6 +33,7 @@ from .plugs import PlugReading, encode_inching
 from .schedule import (Event, OffDeadline, events_conflict, nearest_off, next_occurrence,
                        normalize_days, occurrences_between, parse_hhmm)
 from .store import CorruptStore, JsonStore
+from .tasmota import TASMOTA_MAX_S
 
 log = logging.getLogger("casa.controller")
 UTC = timezone.utc
@@ -42,7 +44,7 @@ CMD_TIMEOUT_S = 10
 MAX_EVENTS = 12
 COUNTDOWN_MAX_MIN = 1440
 INCHING_MAX_MIN = 720
-DP_MAX_S = 86400
+DP_MAX_S = 86400                  # cel mai lung termen scris in countdown-ul unei prize Tuya (24 h)
 DP_TOLERANCE_S = 5
 GRACE_S = 10                      # cat lasam DP-ul prizei sa opreasca singur inainte sa o oprim noi
 # O schimbare de stare vazuta la citire e ecoul unei comenzi a serverului daca serverul a cerut
@@ -59,6 +61,11 @@ OFF_HORIZON = timedelta(days=8)   # cat cautam in fata urmatorul OPRESTE (ca sch
 
 # `plug_order` (lista de id-uri, frate cu `plugs`): ordinea prizelor in aplicatie, aceeasi pe toate telefoanele.
 _DEFAULT = {"plugs": {}}
+
+
+def _dp_max_s(dev: DeviceInfo) -> int:
+    """Cel mai lung termen (secunde) pe care driverul prizei il poate tine in countdown-ul ei."""
+    return TASMOTA_MAX_S if dev.driver == "tasmota" else DP_MAX_S
 
 
 class CommandError(Exception):
@@ -499,6 +506,7 @@ class Controller:
                 "at": _epoch(nd.at), "seconds_left": max(0, int((nd.at - now).total_seconds())),
                 "reason": nd.reason},
             "error": error,
+            "driver": dev.driver,
         }
 
     def _ordered_ids(self, raw) -> list:
@@ -865,10 +873,11 @@ class Controller:
         if rt.off_sent_at is not None and now - rt.off_sent_at < timedelta(seconds=GRACE_S):
             return
         nd = nearest_off(self._candidates(self._get(pid), now))
-        if nd is not None and (nd.at - now).total_seconds() > DP_MAX_S:
-            # Peste 24 h: in priza nu scriem nimic (un countdown plafonat ar opri-o prea devreme);
-            # serverul tot il executa, iar DP-ul se scrie abia cand termenul intra sub 24 h. Un
-            # termen mai apropiat scris inainte se anuleaza mai jos (0).
+        if nd is not None and (nd.at - now).total_seconds() > _dp_max_s(self.devices[pid]):
+            # Peste plafonul driverului (Tuya 24 h, Tasmota 18 h): in priza nu scriem nimic (un
+            # countdown plafonat ar opri-o prea devreme); serverul tot il executa, iar DP-ul se scrie
+            # abia cand termenul intra sub plafon. Un termen mai apropiat scris inainte se anuleaza
+            # mai jos (0).
             nd = None
         if nd is None:
             if rt.cd_written is None:

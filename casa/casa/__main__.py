@@ -11,9 +11,10 @@ from zoneinfo import ZoneInfo
 from .auth import Auth
 from .cloud import CloudSession, LoginFailed
 from .config import Config
-from .devices import DeviceInfo, apply_scan, load_devices, save_devices
+from .devices import TASMOTA_DPS, TASMOTA_SCALES, DeviceInfo, apply_scan, load_devices, save_devices
 from .notify import make_notify
 from .store import JsonStore
+from .tasmota import save_tasmota_password
 
 
 def _auth(cfg: Config) -> Auth:
@@ -38,6 +39,25 @@ def _cmd_set_password(args, cfg: Config) -> int:
         print(f"Eroare: {e}", file=sys.stderr)
         return 1
     print("Parola a fost setata. Telefoanele deja inregistrate raman valabile.")
+    return 0
+
+
+def _cmd_tasmota_password(args, cfg: Config) -> int:
+    """Parola `WebPassword` comuna prizelor Tasmota (tasmota.json); serverul o citeste la pornire."""
+    if args.stdin:
+        password = sys.stdin.readline().rstrip("\r\n").strip()
+    else:
+        password = getpass.getpass("Parola Tasmota (WebPassword): ")
+        if getpass.getpass("Repeta parola: ") != password:
+            print("Parolele nu coincid.", file=sys.stderr)
+            return 1
+    try:
+        save_tasmota_password(cfg.data_dir, password)
+    except ValueError as e:
+        print(f"Eroare: {e}", file=sys.stderr)
+        return 1
+    print("Parola Tasmota a fost salvata. Reporneste serviciul ca prizele Tasmota sa o foloseasca: "
+          "docker compose restart casa")
     return 0
 
 
@@ -70,7 +90,8 @@ def _print_devices(cfg: Config) -> None:
     print(f"{'NUME':<22}{'TIP':<8}{'ID':<26}{'IP':<20}{'MASURAT'}")
     for d in devices:
         metered = d.kind == "plug" and "power" in d.dps
-        where = f"{d.ip} ({d.version})" if d.ip else ("-" if d.kind != "plug" else "NECUNOSCUT")
+        proto = d.driver if d.driver != "tuya" else d.version   # Tasmota nu are protocol Tuya
+        where = f"{d.ip} ({proto})" if d.ip else ("-" if d.kind != "plug" else "NECUNOSCUT")
         print(f"{d.name:<22}{d.kind:<8}{d.id:<26}{where:<20}{'da' if metered else 'nu'}")
     print(f"{len(devices)} dispozitive.")
 
@@ -144,6 +165,7 @@ def _cmd_scan(args, cfg: Config) -> int:
 
 
 # Pentru CASA_DEMO=1: aceleasi id-uri ca in prizele reale (nume din aplicatia Tuya), fara chei.
+# O singura priza demo apare ca Tasmota (aplicatia isi arata eticheta driverului, vezi `_DEMO_TASMOTA`).
 _DEMO_PLUGS = (
     ("bf7b3c62e47bfd15fczfov", "Boiler", True),
     ("bf5cc0f2db15b9eab2a0zy", "Living sus", True),
@@ -151,6 +173,7 @@ _DEMO_PLUGS = (
     ("bfc30380ff8a29c0d88wcz", "Bucatarie", False),
     ("bf3897ad46cd66d32cww3j", "Lumina Curte", False),
 )
+_DEMO_TASMOTA = "Living sus"      # priza demo marcata Tasmota; cu contor, 60 W cand e pornita
 _DEMO_SENSORS = (
     ("demo_sensor_etaj", "Temp Etaj"),
     ("demo_sensor_afara", "Temp afara"),
@@ -178,8 +201,11 @@ def _cmd_demo_devices(args, cfg: Config) -> int:
         if metered:
             dps.update({"current": 18, "power": 19, "voltage": 20})
             scales = {"power": 1, "voltage": 1, "current": 0}
+        driver = "tuya"
+        if name == _DEMO_TASMOTA:
+            driver, dps, scales = "tasmota", dict(TASMOTA_DPS), dict(TASMOTA_SCALES)
         devices.append(DeviceInfo(id=dev_id, name=name, kind="plug", local_key=None, ip=None, version=None,
-                                  dps=dps, scales=scales, category="cz", raw_name=name))
+                                  dps=dps, scales=scales, category="cz", raw_name=name, driver=driver))
     for dev_id, name in _DEMO_SENSORS:
         devices.append(DeviceInfo(id=dev_id, name=name, kind="sensor", local_key=None, ip=None, version=None,
                                   category="wsdcg", raw_name=name))
@@ -194,6 +220,10 @@ def main(argv=None) -> int:
     p = sub.add_parser("set-password", help="seteaza parola comuna (se cere de doua ori; niciodata in argv)")
     p.add_argument("--stdin", action="store_true", help="citeste parola dintr-o linie de pe stdin (automatizare)")
     p.set_defaults(fn=_cmd_set_password)
+    p = sub.add_parser("tasmota-password",
+                       help="seteaza parola WebPassword comuna prizelor Tasmota (se cere de doua ori; niciodata in argv)")
+    p.add_argument("--stdin", action="store_true", help="citeste parola dintr-o linie de pe stdin (automatizare)")
+    p.set_defaults(fn=_cmd_tasmota_password)
     p = sub.add_parser("phones", help="listeaza telefoanele inregistrate")
     p.set_defaults(fn=_cmd_phones)
     p = sub.add_parser("revoke", help="revoca un telefon dupa id")

@@ -101,6 +101,30 @@ _services: Optional[Services] = None
 _services_lock = threading.Lock()
 
 
+def _tasmota_password(data_dir: str) -> Optional[str]:
+    """Parola comuna a prizelor Tasmota din tasmota.json; None daca lipseste sau fisierul nu se poate citi.
+
+    Un fisier stricat nu opreste pornirea (prizele Tuya si restul trebuie sa mearga): prizele Tasmota pornesc
+    fara parola, iar cele cu WebPassword apar offline pana se repara fisierul. In log nu intra continutul.
+    """
+    from .tasmota import PASSWORD_FILE, load_tasmota_password
+    try:
+        return load_tasmota_password(data_dir)
+    except (ValueError, OSError) as exc:
+        log.warning("%s nu se poate citi (%s): prizele Tasmota pornesc fara parola; reface-o cu "
+                    "`python -m casa tasmota-password`", PASSWORD_FILE, type(exc).__name__)
+        return None
+
+
+def _real_driver(dev, tasmota_password: Optional[str]):
+    """Driverul real al unei prize, dupa `DeviceInfo.driver` (orice altceva decat "tasmota" = Tuya)."""
+    if dev.driver == "tasmota":
+        from .tasmota import TasmotaDriver
+        return TasmotaDriver(dev.ip or "", password=tasmota_password)
+    from .plugs import TinyTuyaDriver
+    return TinyTuyaDriver(dev.id, dev.ip, dev.local_key, dev.version)
+
+
 def build_services(cfg: Optional[Config] = None) -> Services:
     """Serviciile reale (sau de demonstratie) din mediu; porneste firele de fundal."""
     cfg = cfg or Config.from_env()
@@ -112,7 +136,7 @@ def build_services(cfg: Optional[Config] = None) -> Services:
     elif state.load({"plugs": {}}).get("demo"):
         raise StateIsDemo(f"{state.path} are marcajul demo: il mut in {DEMO_STATE_FILE} inainte de a porni "
                           "in modul real")
-    from .plugs import PlugWorker, TinyTuyaDriver
+    from .plugs import PlugWorker
 
     auth = Auth(JsonStore(os.path.join(cfg.data_dir, "auth.json")))
     all_devices = load_devices(cfg.data_dir)
@@ -136,7 +160,8 @@ def build_services(cfg: Optional[Config] = None) -> Services:
             cloud.seed_sensors(influx.sensor_last(), {d.id for d in all_devices if d.kind == "sensor"})
         except Exception as exc:  # noqa: BLE001
             log.warning("ultimele valori ale senzorilor nu s-au putut citi din InfluxDB: %s", type(exc).__name__)
-        drivers = {d.id: TinyTuyaDriver(d.id, d.ip, d.local_key, d.version) for d in plugs}
+        tasmota_password = _tasmota_password(cfg.data_dir) if any(d.driver == "tasmota" for d in plugs) else None
+        drivers = {d.id: _real_driver(d, tasmota_password) for d in plugs}
 
     def on_reading(device):
         def hook(pid, reading):

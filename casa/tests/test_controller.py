@@ -10,7 +10,7 @@ from unittest import mock
 from zoneinfo import ZoneInfo
 
 from casa.controller import CommandError, Controller, migrate_state
-from casa.devices import DeviceInfo
+from casa.devices import TASMOTA_DPS, TASMOTA_SCALES, DeviceInfo
 from casa.plugs import FakeDriver, PlugError, PlugReading, decode_inching, decode_reading, encode_inching
 from casa.store import CorruptStore, JsonStore
 
@@ -986,8 +986,9 @@ class ViewTest(ControllerBase):
         v = r.c.plug_view(PID)
         self.assertEqual(set(v), {
             "id", "name", "online", "on", "metered", "power", "voltage", "current",
-            "schedules", "events", "next_event", "countdown", "inching", "off_deadline", "error"})
+            "schedules", "events", "next_event", "countdown", "inching", "off_deadline", "error", "driver"})
         self.assertEqual(v["id"], PID)
+        self.assertEqual(v["driver"], "tuya")
         self.assertEqual(v["name"], "Boiler")
         self.assertTrue(v["online"])
         self.assertTrue(v["on"])
@@ -1811,6 +1812,65 @@ class FarDeadlineTest(ControllerBase):
         self.assertEqual(r.dp9, 0)
         r.tick_to(loc(19), step=timedelta(minutes=10))
         self.assertEqual(self.nonzero_dp_writes(r), [(9, 3600)])
+
+
+def tasmota_device(driver="tasmota"):
+    return DeviceInfo(id=PID, name="Priza", kind="plug", local_key=None, ip="1.2.3.4", version=None,
+                      dps=dict(TASMOTA_DPS), scales=dict(TASMOTA_SCALES), driver=driver)
+
+
+class DriverViewTest(ControllerBase):
+    def test_plug_view_has_driver(self):
+        for dev, want in ((device(), "tuya"), (tasmota_device(), "tasmota"), (tasmota_device("tuya"), "tuya")):
+            r = self.rig(loc(9), dev=dev)
+            self.assertEqual(r.c.plug_view(PID)["driver"], dev.driver)
+            self.assertEqual(r.c.plug_view(PID)["driver"], want)
+            self.assertEqual(r.c.plugs_view()[0]["driver"], want)
+
+
+class DriverDeadlineCapTest(ControllerBase):
+    """Plafonul termenului scris in priza depinde de driver: Tuya 24 h (DP_MAX_S), Tasmota 18 h (PulseTime)."""
+
+    @staticmethod
+    def nonzero_dp_writes(r):
+        return [x for x in r.worker.submitted if x[0] == 9 and x[1] != 0]
+
+    def armed(self, driver, off_at):
+        """Priza pornita la 18:00 cu un singur OPRESTE zilnic la `off_at` (maine, deci la 17-23 h distanta)."""
+        r = self.rig(loc(18, 0), dev=tasmota_device(driver))
+        self.event(r, off_at, "off")
+        r.c.switch(PID, True)
+        return r
+
+    def test_tasmota_deadline_cap_18h(self):
+        r = self.armed("tasmota", "14:00")                    # +20 h: peste plafon, nu se scrie
+        self.assertEqual(self.nonzero_dp_writes(r), [])
+        self.assertTrue(r.on)
+        r = self.armed("tasmota", "11:00")                    # +17 h: se scrie
+        self.assertEqual(self.nonzero_dp_writes(r), [(9, 61200)])
+        self.assertEqual(r.dp9, 61200)
+
+    def test_tuya_deadline_cap_stays_24h(self):
+        r = self.armed("tuya", "14:00")                       # +20 h: sub 24 h, se scrie
+        self.assertEqual(self.nonzero_dp_writes(r), [(9, 72000)])
+        self.assertEqual(r.dp9, 72000)
+
+    def test_tasmota_far_deadline_is_written_once_it_enters_18h(self):
+        r = self.armed("tasmota", "14:00")                    # +20 h
+        r.tick_to(loc(19, 50), step=timedelta(minutes=10))    # +18 h 10 min
+        self.assertEqual(self.nonzero_dp_writes(r), [])
+        r.clock.set(loc(20, 0, 5))                            # +17 h 59 min 55 s
+        r.c.tick()
+        self.assertEqual(self.nonzero_dp_writes(r), [(9, 64795)])
+
+    def test_tasmota_far_deadline_does_not_leave_a_stale_write(self):
+        r = self.rig(loc(18, 0), dev=tasmota_device())
+        r.c.set_inching(PID, True, 10)
+        self.event(r, "14:00", "off")
+        r.c.switch(PID, True)
+        self.assertEqual(r.dp9, 600)                          # inching 10 min, mai aproape decat OPRESTE
+        r.c.set_inching(PID, False, 10)
+        self.assertEqual(r.dp9, 0)                            # ramane doar OPRESTE la +20 h: nu se scrie
 
 
 class DpCountdownRealismTest(ControllerBase):

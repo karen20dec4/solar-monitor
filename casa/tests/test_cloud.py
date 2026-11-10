@@ -718,6 +718,19 @@ class DemoTest(unittest.TestCase):
             self.assertTrue(all(p.ip for p in plugs))  # IP din valorile implicite
             self.assertEqual(stat.S_IMODE(os.stat(os.path.join(d, "devices.json")).st_mode), 0o600)
 
+    def test_demo_devices_has_one_tasmota(self):
+        from casa.devices import TASMOTA_DPS, TASMOTA_SCALES
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._run(d)[0], 0)
+            plugs = [x for x in load_devices(d) if x.kind == "plug"]
+            tas = [p for p in plugs if p.driver == "tasmota"]
+            self.assertEqual(len(tas), 1)
+            self.assertEqual(tas[0].dps, TASMOTA_DPS)
+            self.assertEqual(tas[0].scales, TASMOTA_SCALES)
+            self.assertEqual(tas[0].name, "Living sus")           # numele ramane
+            self.assertTrue(all(p.driver == "tuya" for p in plugs if p is not tas[0]))
+            self.assertTrue(all(x.driver == "tuya" for x in load_devices(d) if x.kind == "sensor"))
+
 
 if __name__ == "__main__":
     unittest.main()

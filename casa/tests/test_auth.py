@@ -289,6 +289,40 @@ class CliTest(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertNotIn("scurta", out)
 
+    def test_cli_tasmota_password_stdin(self):
+        from casa.tasmota import load_tasmota_password
+        code, out = self.run_cli(["tasmota-password", "--stdin"], "abc123\n")
+        self.assertEqual(code, 0)
+        self.assertEqual(load_tasmota_password(self.dir.name), "abc123")
+        self.assertNotIn("abc123", out)
+        path = os.path.join(self.dir.name, "tasmota.json")
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_cli_tasmota_password_stdin_empty_fails_and_writes_nothing(self):
+        for text in ("", "\n", "   \n"):
+            code, out = self.run_cli(["tasmota-password", "--stdin"], text)
+            self.assertNotEqual(code, 0, repr(text))
+        self.assertFalse(os.path.exists(os.path.join(self.dir.name, "tasmota.json")))
+
+    def test_cli_tasmota_password_asks_twice_and_refuses_a_mismatch(self):
+        from casa.tasmota import load_tasmota_password
+        with mock.patch("getpass.getpass", side_effect=["parola-buna", "alta-parola"]):
+            code, out = self.run_cli(["tasmota-password"])
+        self.assertEqual(code, 1)
+        self.assertNotIn("parola-buna", out)
+        self.assertIsNone(load_tasmota_password(self.dir.name))
+        with mock.patch("getpass.getpass", side_effect=["parola-buna", "parola-buna"]):
+            code, out = self.run_cli(["tasmota-password"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("parola-buna", out)
+        self.assertEqual(load_tasmota_password(self.dir.name), "parola-buna")
+
+    def test_cli_tasmota_password_leaves_the_shared_password_alone(self):
+        self.run_cli(["set-password", "--stdin"], "parola-comuna\n")
+        self.run_cli(["tasmota-password", "--stdin"], "abc123\n")
+        auth = Auth(JsonStore(os.path.join(self.dir.name, "auth.json")))
+        auth.register("parola-comuna", "Tel", "10.0.0.1")
+
 
 if __name__ == "__main__":
     unittest.main()

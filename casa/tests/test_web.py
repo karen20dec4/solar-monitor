@@ -9,14 +9,17 @@ from casa import web
 from casa.auth import Auth, RateLimiter
 from casa.config import Config
 from casa.controller import CommandError
-from casa.devices import DeviceInfo, save_devices
+from casa.devices import TASMOTA_DPS, TASMOTA_SCALES, DeviceInfo, save_devices
+from casa.plugs import FakeDriver
 from casa.store import CorruptStore, JsonStore
+from casa.tasmota import save_tasmota_password
 from casa.web import Services, StateIsDemo, build_services, create_app
 
 PASSWORD = "parola-de-test"
 VIEW = {"id": "p1", "name": "Boiler", "online": True, "on": False, "metered": True, "power": 0.0,
         "voltage": 230.0, "current": 0.0, "schedules": [], "events": [], "next_event": None,
-        "countdown": None, "inching": {"enabled": False, "minutes": 30}, "off_deadline": None, "error": None}
+        "countdown": None, "inching": {"enabled": False, "minutes": 30}, "off_deadline": None, "error": None,
+        "driver": "tuya"}
 
 
 class FakeController:
@@ -29,7 +32,8 @@ class FakeController:
         self.fail_store = False
 
     def _view(self, pid):
-        return dict(VIEW, id=pid, metered=(pid == "p1"), online=pid not in getattr(self, "offline", ()))
+        return dict(VIEW, id=pid, metered=(pid == "p1"), online=pid not in getattr(self, "offline", ()),
+                    driver="tasmota" if pid == "p2" else "tuya")
 
     def plug_view(self, pid):
         return self._view(pid)
@@ -257,6 +261,10 @@ class TestPlugRoutes(WebCase):
         plugs = {p["id"]: p for p in body["plugs"]}
         self.assertEqual(plugs["p1"]["energy_today"], 2.4)
         self.assertIsNone(plugs["p2"]["energy_today"])  # neinregistrata la consum
+
+    def test_plugs_list_has_driver_for_every_plug(self):
+        body = self.c.get("/plugs", headers=self.h()).get_json()
+        self.assertEqual({p["id"]: p["driver"] for p in body["plugs"]}, {"p1": "tuya", "p2": "tasmota"})
 
     def test_plugs_energy_failure_is_null_not_error(self):
         self.influx.fail = True
@@ -788,6 +796,114 @@ class TestBuildServices(unittest.TestCase):
         with mock.patch("casa.influx.CasaInflux", boom), mock.patch("casa.cloud.CloudSession", boom):
             with self.assertRaises(StateIsDemo):
                 build_services(self.cfg(False))
+
+
+class TestDriverWiring(unittest.TestCase):
+    """Alegerea driverului in build_services: Tuya / Tasmota (cu parola din tasmota.json); demo ramane pe DemoDriver."""
+
+    TUYA = DeviceInfo(id="bftuya1", name="Boiler", kind="plug", local_key="k", ip="192.168.1.204", version="3.3",
+                      dps={"switch": 1, "countdown": 9, "current": 18, "power": 19, "voltage": 20},
+                      scales={"power": 1, "voltage": 1, "current": 0})
+    TASMOTA = DeviceInfo(id="bftas1", name="Living sus", kind="plug", local_key=None, ip="192.168.1.186",
+                         version=None, dps=dict(TASMOTA_DPS), scales=dict(TASMOTA_SCALES), driver="tasmota")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = self.tmp.name
+        save_devices(self.dir, [self.TUYA, self.TASMOTA])
+        self.made = []
+
+    def cfg(self, demo):
+        return Config(data_dir=self.dir, influx_url="http://127.0.0.1:1", influx_token="t", influx_org="o",
+                      bucket_live="live", bucket_history="history", ntfy_url="", poll_s=0.2, demo=demo)
+
+    def fake_drivers(self):
+        """Inlocuieste ambele drivere reale cu FakeDriver si noteaza cu ce argumente au fost construite."""
+        def tuya(*args, **kw):
+            self.made.append(("tuya", args, kw))
+            return FakeDriver({"1": False, "9": 0})
+
+        def tasmota(*args, **kw):
+            self.made.append(("tasmota", args, kw))
+            return FakeDriver({"1": False, "9": 0})
+        return (mock.patch("casa.plugs.TinyTuyaDriver", side_effect=tuya),
+                mock.patch("casa.tasmota.TasmotaDriver", side_effect=tasmota),
+                mock.patch("casa.influx.CasaInflux", return_value=mock.Mock()),
+                mock.patch("casa.cloud.CloudSession", return_value=mock.Mock()))
+
+    def build_real(self):
+        patches = self.fake_drivers()
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        svc = build_services(self.cfg(False))
+        self.addCleanup(svc.shutdown)
+        return svc
+
+    def test_real_mode_picks_driver_per_plug_and_gives_tasmota_the_password(self):
+        save_tasmota_password(self.dir, "parola-tasmota")
+        svc = self.build_real()
+        kinds = {k: (a, kw) for k, a, kw in self.made}
+        self.assertEqual(sorted(kinds), ["tasmota", "tuya"])
+        self.assertEqual(kinds["tuya"][0], ("bftuya1", "192.168.1.204", "k", "3.3"))
+        self.assertEqual(kinds["tasmota"][0], ("192.168.1.186",))
+        self.assertEqual(kinds["tasmota"][1], {"password": "parola-tasmota"})
+        self.assertEqual({v["id"]: v["driver"] for v in svc.controller.plugs_view()},
+                         {"bftuya1": "tuya", "bftas1": "tasmota"})
+
+    def test_real_mode_tasmota_without_password_file_gets_none(self):
+        self.build_real()
+        tas = [kw for k, _a, kw in self.made if k == "tasmota"]
+        self.assertEqual(tas, [{"password": None}])
+
+    def test_corrupt_password_file_does_not_stop_boot_and_is_not_logged(self):
+        with open(os.path.join(self.dir, "tasmota.json"), "w") as f:
+            f.write('{"password": "PAROLA-SECRETA-123')            # JSON trunchiat
+        with self.assertLogs("casa.web", level="WARNING") as logs:
+            svc = self.build_real()
+        text = " ".join(logs.output)
+        self.assertIn("tasmota.json", text)
+        self.assertNotIn("PAROLA-SECRETA-123", text)
+        self.assertEqual(sorted(k for k, _a, _kw in self.made), ["tasmota", "tuya"])   # Tuya porneste la fel
+        self.assertEqual([kw for k, _a, kw in self.made if k == "tasmota"], [{"password": None}])
+        self.assertEqual(len(svc.controller.plugs_view()), 2)
+
+    def test_unreadable_password_file_does_not_stop_boot(self):
+        os.mkdir(os.path.join(self.dir, "tasmota.json"))         # director in loc de fisier: OSError la citire
+        with self.assertLogs("casa.web", level="WARNING"):
+            self.build_real()
+        self.assertEqual([kw for k, _a, kw in self.made if k == "tasmota"], [{"password": None}])
+
+    def test_password_file_is_not_read_without_tasmota_plugs(self):
+        save_devices(self.dir, [self.TUYA])
+        with open(os.path.join(self.dir, "tasmota.json"), "w") as f:
+            f.write("{corupt")
+        with mock.patch("casa.tasmota.load_tasmota_password", side_effect=AssertionError("nu trebuia citita")):
+            self.build_real()
+        self.assertEqual([k for k, _a, _kw in self.made], ["tuya"])
+
+    def test_demo_mode_never_builds_real_drivers_and_lists_the_driver(self):
+        boom = mock.Mock(side_effect=AssertionError("driver real in demo"))
+        with mock.patch("casa.plugs.TinyTuyaDriver", boom), mock.patch("casa.tasmota.TasmotaDriver", boom):
+            svc = build_services(self.cfg(True))
+        self.addCleanup(svc.shutdown)
+        boom.assert_not_called()
+        svc.command_limiter = RateLimiter(1000, 1.0)
+        svc.auth.set_password(PASSWORD)
+        c = create_app(svc).test_client()
+        r = c.post("/register", json={"password": PASSWORD, "device": "Pixel 8"},
+                   headers={"X-Forwarded-For": "10.0.0.5"})
+        h = {"Authorization": "Bearer " + r.get_json()["token"]}
+        plugs = c.get("/plugs", headers=h).get_json()["plugs"]
+        self.assertEqual({p["id"]: p["driver"] for p in plugs}, {"bftuya1": "tuya", "bftas1": "tasmota"})
+        one = c.post("/plugs/bftas1/switch", json={"on": True}, headers=h)
+        self.assertEqual(one.status_code, 200, one.get_data(as_text=True))
+        self.assertEqual(one.get_json()["driver"], "tasmota")
+        # inching-ul unei prize cu DP 44 (Tasmota: Mem1/Mem2) merge si pe DemoDriver
+        r = c.put("/plugs/bftas1/inching", json={"enabled": True, "minutes": 20}, headers=h)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["inching"], {"enabled": True, "minutes": 20})
 
 
 class TestEventRoutesWithController(unittest.TestCase):
