@@ -50,8 +50,8 @@ asks and accepts the risk.
 > ~0.5V). Final: no button, no writes, READ-ONLY stands. Full research in `COPILOT_CONTEXT.md` §13.17.
 > Do not reopen without new information (e.g. new firmware with documented charge-control registers).
 >
-> **CASA (2026-11-05):** the new `solar-casa` service **does command** things: the user's five Tuya smart plugs
-> (switch, countdown, schedules, inching) over the LAN. That is the only thing the system commands. It does not
+> **CASA (2026-11-05):** the new `solar-casa` service **does command** things: the user's five smart plugs (Tasmota
+> and Tuya since 2026-11-10; switch, countdown, events, inching) over the LAN. That is the only thing the system commands. It does not
 > touch the inverter or the BMS, which stay READ-ONLY; the rule above is unchanged for them. Details in "CASA" below.
 >
 > **BMS reader (2026-10-22):** the battery's JK BMS is read over Bluetooth LE by `bms/jk_bms_reader.py`
@@ -70,7 +70,7 @@ Inverter --USB (/dev/growatt)--> collector.py (minimalmodbus, FC04, polls every 
 ```
 
 Seven containers (`docker-compose.yml`): `solar-collector`, `solar-influxdb`, `solar-grafana`,
-`solar-ntfy`, `solar-casa` (Tuya plugs and sensors, see "CASA" below; internal port 8100, no published port), plus `solar-api` (JSON micro-API for the Android app, read-only towards the data — its only write
+`solar-ntfy`, `solar-casa` (Tasmota/Tuya plugs and Tuya sensors, see "CASA" below; internal port 8100, no published port), plus `solar-api` (JSON micro-API for the Android app, read-only towards the data — its only write
 is the `app_client` phone log, see "Phones and app versions"; no published port,
 reached internally at `api:8000`) and `solar-caddy` (HTTPS reverse proxy, `tls internal`, routes
 `/solar/casa/*` → casa, `/solar/*` → api and everything else → Grafana). All `restart: unless-stopped`, start on boot.
@@ -366,17 +366,35 @@ needs BlueZ and the dongle. Dependency: Debian `python3-bleak`. Address in `.env
   One-shot read for debugging: `python3 -I bms/jk_bms_reader.py --once` (stop the service first).
   Logs: `journalctl -u solar-bms`.
 
-## CASA (Tuya plugs and sensors, `casa/`)
+## CASA (Tasmota and Tuya plugs, Tuya sensors, `casa/`)
 
-Container `solar-casa` (Python, gunicorn 1 worker x 8 threads, port 8100, **no published port**). Spec:
-`docs/superpowers/specs/2026-11-05-casa-prize-senzori-design.md`; log of the build: `COPILOT_CONTEXT.md` §13.78.
-**Status (2026-11-05): real mode (`CASA_DEMO=0`), QR login + `sync` done, all 5 plugs online locally, password set by
-the user; still open: DHCP reservations, phones, live tests, deleting the SmartLife schedules (list below).**
+Container `solar-casa` (Python, gunicorn 1 worker x 8 threads, port 8100, **no published port**). Specs:
+`docs/superpowers/specs/2026-11-05-casa-prize-senzori-design.md` (base), `2026-11-07-casa-evenimente-design.md` (events),
+`2026-11-10-casa-tasmota-design.md` (Tasmota); logs: `COPILOT_CONTEXT.md` §13.78 (build), §13.81 (Tasmota).
+**Status (2026-11-10): real mode (`CASA_DEMO=0`), 5 plugs online: 4 Tasmota + 1 Tuya (Bucatarie), password set by the
+user. The go-live list at the end of this section is from 2026-11-05 and was not re-reviewed after the Tasmota switch.**
 
-- **What it does:** 5 plugs controlled locally (`tinytuya`, TCP 6668, one persistent connection per plug; IPs/protocol
+- **Two plug drivers (since 2026-11-10, v3.45):** a plug is `tuya` (default; `tinytuya`, `casa/casa/plugs.py`) or `tasmota`
+  (HTTP on the LAN, `casa/casa/tasmota.py`); `GET /plugs` items carry `"driver"`. Both sit behind the same `PlugDriver`
+  protocol (`connect/status/set_dp/close`) and the controller speaks "DPs" to both (the Tasmota driver maps them:
+  `{"switch": 1, "countdown": 9, "current": 18, "power": 19, "voltage": 20, "inching": 44}`). The user moved the
+  plugs from Tuya to **Eightree ET28 16 A with Tasmota** (no cloud, no MQTT, no SmartLife); the old Tuya plugs are in a
+  drawer as a **fallback**, so Tuya support stays (do not delete it). Current plugs (final mapping, user, 2026-11-10 14:07):
+
+  | App name | Driver | IP | Device id (kept = state, events, order, Influx history) |
+  |---|---|---|---|
+  | Boiler | tasmota nr1 | .186 | `bf7b3c62e47bfd15fczfov` |
+  | Living sus | tasmota nr2 | .234 | `bf5cc0f2db15b9eab2a0zy` |
+  | Priza cam Georgi | tasmota nr3 | .170 | `tasmota_431ea4` (new, self-sufficient entry; the old id now belongs to Bucatarie, and Georgi's Influx history before 14:07 stays under it) |
+  | Lumina Curte | tasmota nr4 | .188 | `bf3897ad46cd66d32cww3j` (30 min inching lives in the plug, `PulseTime1`) |
+  | Bucatarie | tuya "WiFi Plug", metered | .104 | `bf3bac46d1a367e845thx2` (MAC fc:67:1f:7a:04:dd; it was Priza cam Georgi until 14:07, so its Influx history before that is Georgi's; native inching DP 44 = 20 min, set by the user) |
+
+  The T34 Bucatarie (`bfc30380ff8a29c0d88wcz`, no meter) is retired: `"hidden": true`. MACs of the Tasmota plugs and
+  everything about their set-up are in `COPILOT_CONTEXT.md` §13.81.
+- **What it does (Tuya part):** Tuya plugs controlled locally (`tinytuya`, TCP 6668, one persistent connection per plug; IPs/protocol
   defaults in `casa/casa/devices.py`, matched by device id: Boiler .204, Living sus .244, Priza cam Georgi .104,
   Bucatarie .185, Lumina Curte .158 (confirmed by the first real `sync`, 2026-11-05; Bucatarie and Lumina Curte are
-  "T34-Smart Plug", protocol 3.4, no metering, Tuya category `tdq`)). 3 temperature/humidity sensors from the Tuya cloud
+  "T34-Smart Plug", protocol 3.4, no metering, Tuya category `tdq`); today only .104 is in use, the rest are fallback). 3 temperature/humidity sensors from the Tuya cloud
   (`tuya-device-sharing-sdk`, session from a QR login). The real sensors ("T & H Sensor", category `tdq`) come with **no
   status at all over REST**; their values arrive **only by MQTT**, as numbered DPs the SDK drops (no local strategy):
   **27 = temperature ×10, 46 = humidity %, 101 = battery `low`/`middle`/`high`** (`SENSOR_DP_CODES` in `cloud.py`, measured
@@ -386,29 +404,80 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   the cloud state: `ok` only if the last successful REST read is ≤ 10 min old. No cloud fallback for plug commands: a plug that refuses the local
   connection shows OFFLINE.
 - **Devices are loaded once, at boot** (`casa/casa/web.py`). After `login`/`sync`, a rename in SmartLife, or an edit of
-  `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "...", "hidden": true}}`; `hidden` keeps a
+  `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "...", "hidden": true, "driver": "tasmota"}}`; `hidden` keeps a
   device out of the app, e.g. "Boiler Buc", unused, in a drawer; a malformed entry is skipped with a warning in the log) →
   `docker compose restart casa`.
-- **The three "WiFi Plug" units (Boiler, Living sus, Priza cam Georgi) do not answer ARP** (2026-11-05): they broadcast,
+- **`devices.local.json` and the Tasmota driver:** `"driver": "tasmota"` + `"ip"` on an entry keyed by the plug's **Tuya
+  id** turns that plug into a Tasmota one and keeps everything attached to the id (name, events, inching, place in
+  the list, Influx history, phones). Valid drivers: `tuya` (default), `tasmota`; an unknown driver, or `tasmota` without
+  `ip`, skips the entry with a warning and boot goes on. An entry with `driver: tasmota` **plus `name` and `ip`** is enough
+  alone: if its id is not in `devices.json` (Tuya plug deleted from SmartLife, or a plug that never had a Tuya
+  account, like Priza cam Georgi `tasmota_431ea4`) the plug stays (kind `plug`). **Such a lone id must match
+  `^[A-Za-z0-9_]+$`** (found live 2026-11-10): the Influx id guard (`casa/casa/influx.py` `_ID`) rejects a `-`, so the
+  energy query raised ValueError and no plug points were written; `tasmota-431ea4` had to be renamed `tasmota_431ea4`.
+  `scan` / `apply_scan` never touch `driver: tasmota` entries (they would write the old Tuya IP over the Tasmota
+  one). **Back to Tuya:** remove `driver` and `ip` from the entry (the Tuya IP then comes from `devices.json` /
+  `BUILTIN_DEFAULTS`), put the Tuya plug back and `docker compose restart casa`; a lone entry like
+  `tasmota_431ea4` has no Tuya twin under its id.
+- **`casa/data/tasmota.json`** (mode 600, gitignored like the rest of `data/`; `{"password": "..."}`): the single Tasmota
+  `WebPassword` (user `admin`), the same on all the Tasmota plugs; no file = no password. Set it with
+  `docker exec -i solar-casa python -m casa tasmota-password --stdin` (or without `--stdin`, asked twice; never in argv),
+  then `docker compose restart casa` (it is read once, at boot; only if at least one Tasmota plug exists). The password goes
+  in the request URL (`/cm?cmnd=...&user=admin&password=...`), so **no error, log or `PlugReading.error` may contain the
+  URL or the password**: messages are `priza <ip>: <kind>` from the error type only (no `str(exc)` of `urllib`, no
+  `__context__`, no redirects, no proxy). A plug that answers 401/403 (server has no or the wrong password) shows
+  OFFLINE with "parola Tasmota respinsa". A missing/corrupt `tasmota.json` logs a warning (no contents) and boot
+  continues without a password (plugs that have one then show that offline message). Setting `WebPassword` on a plug is
+  done by hand at commissioning (over HTTP, from a file, not from argv/shell history); the server never writes it.
+- **Tasmota behaviour (`casa/casa/tasmota.py`):** HTTP `http://<ip>/cm?cmnd=...`, stdlib `urllib`, timeout 3 s, at most 3
+  requests per reading (`Power`, `Status 10` for the meter, `PulseTime1`; `Mem1`/`Mem2` are read at `connect()` and
+  cached). Nothing is stored in the plug but `PulseTime1`, `Mem1`, `Mem2`: **no rules or timers in the plug**, every
+  schedule is the server's. The events/countdown/inching semantics below are identical for both drivers.
+  - **`PulseTime1` is the fail-safe deadline** (Tuya's countdown DP 9 equivalent): `0` = off, `1..111` = tenths of a second,
+    `112..64900` = value − 100 seconds. It applies at every relay turn-on and, written while the relay is **on**, restarts
+    the count at once. `PulseTime1 Remaining` uses the **same encoding** as `Set` (verified on a real plug, Lumina
+    Curte, 2026-11-10: turned on 14:07:52, 24 s later `Remaining` 1875 = 1775 s, expected 1776), so the countdown is read
+    from it. **Cap: `TASMOTA_MAX_S` = 64800 s (18 h)** per plug against 24 h (`DP_MAX_S` = 86400) on Tuya; `_dp_max_s` in
+    `controller.py` picks it per device, and a deadline farther than the cap is **not** written (the server executes it).
+    Tested: 20 h not written on Tasmota, 17 h written, 20 h written on Tuya.
+  - **Inching** (DP 44 equivalent): `Mem1` = the duration in seconds (kept while disabled, so the app does not lose the chosen
+    duration), `Mem2` = `1`/`0` enabled. *base* = `Mem1` if `Mem2 == 1`, else 0. With the relay **off**, `PulseTime1` must
+    equal *base*, so the physical button applies the inching even with the server down (that is how Lumina Curte's 30
+    min works). `Mem1`/`Mem2` empty (`""`, the factory state) or garbage (`abc`, `-5`, `0`, over 64800) -> the driver reports
+    **no** DP 44 and does not self-heal (the server keeps the value from `state.json`). Commissioning must
+    initialise `Mem1`/`Mem2` on every plug **before** the casa deploy (otherwise a button press after a server-written
+    deadline would switch the plug off early). Verified on a real plug: `Mem2 0` stores "0", `Mem2 "` clears it.
+    Once written, the plug is the source of truth (as for Tuya, v3.43).
+  - **Self-healing:** if on a reading the relay is off and `PulseTime1 Set` != *base*, the driver rewrites *base*
+    (a safety deadline left over from the last turn-on must not switch the next button turn-on off too early). A failed
+    heal is logged once and does not take the plug offline.
+  - `set_dp(9, N)`: `N > 0` writes `PulseTime1` = N s; `N = 0` writes *base*. `set_dp(44, ...)` writes `Mem1`, `Mem2`, and
+    `PulseTime1` = *base* only if the relay is off.
+- **Metering and calibration (Tasmota):** the BL0937 meter of each ET28 was calibrated against the **same electric heater**
+  (step 2, resistive; reference nr2 ≈ 1157 W / 4.947 A, the inverter showed ~1100–1150 W). Factory values read
+  4–8 % high on nr1, nr3, nr4, and **the old Tuya plug read ~10 % high** (Living sus 1285 W on the same load). Do not
+  recalibrate Tasmota to a Tuya reading. Values and per-plug history: `COPILOT_CONTEXT.md` §13.81.
+- **The three Tuya "WiFi Plug" units (Boiler, Living sus, Priza cam Georgi; today only the last one, now Bucatarie .104, is in use) do not answer ARP** (2026-11-05): they broadcast,
   but `ip neigh` shows FAILED, so ping and TCP 6668 fail. A static entry (`ip neigh replace <ip> lladdr <mac> nud permanent`)
   fixes it. `deploy/tuya_arp.py` (host, root) listens ~25 s for Tuya broadcasts, takes IP + MAC from the Ethernet frame and
   sets those entries; it drops an entry when the MAC moves to another IP or is unseen for 24 h (state in
   `/var/lib/solar-tuya-arp/`). Run by `deploy/solar-tuya-arp.timer` (boot + every 10 min); install:
   `cp deploy/solar-tuya-arp.{service,timer} /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now
   solar-tuya-arp.timer`. Tests: `python3 -I -m unittest discover -s deploy -p 'test_tuya_arp.py'`.
-- **Inching in the plug's own firmware** (DP 44 `switch_inching`, base64 of 3 bytes: enabled, seconds big-endian; mapped
-  as `dps["inching"]` by `sync`): Bucatarie 25 min and Lumina Curte 30 min are on **on purpose** (user, 2026-11-05). Since
+- **Inching in the plug's own firmware (Tuya)** (DP 44 `switch_inching`, base64 of 3 bytes: enabled, seconds big-endian; mapped
+  as `dps["inching"]` by `sync`): Bucatarie 25 min and Lumina Curte 30 min were on **on purpose** (user, 2026-11-05; since 2026-11-10 Bucatarie is the old metered plug with 20 min, Lumina Curte's 30 min lives in a Tasmota plug). Since
   v3.43 the plug is the source of truth (user's choice): every reading copies DP 44 into the plug's `inching` setting
   (`_sync_native_inching`), so a change made in SmartLife shows up, and `PUT .../inching` writes DP 44 first (a failed
   write changes nothing). The server keeps its own inching deadline too, so "STINGE IN …" shows and the fail-safe
-  countdown DP agrees with the firmware. Plugs without DP 44 keep the server-only inching.
+  countdown DP agrees with the firmware. Plugs without DP 44 keep the server-only inching. Tasmota plugs report their inching through
+  `Mem1`/`Mem2` the same way (see above).
 - **Names editable from the app (v3.43):** tap the title of a plug/sensor detail (pencil). `PUT /plugs/<id>/name` and
   `PUT /sensors/<id>/name` (1–24 chars, `clean_user_name`) write `name` into `devices.local.json`; plug names change in
   memory at once, sensor names via `Services.names`. SmartLife keeps its own name; Influx tags take the new plug name
   from then on (history is by `device_id`).
 - **Compact plug list (v3.43):** Retro CASA rows are a fixed 54 dp (up to 7 plugs, `CompactPlugRows`; more share the
   card), at most 2 badge lines, and plugs without metering have no watts plate (Retro and Simple).
-- **Internet cut for the plugs (test since 2026-11-05 ~18:45, user's choice):** the goal is no dependency on SmartLife /
+- **Internet cut for the plugs (test since 2026-11-05 ~18:45, user's choice; superseded for the four Tasmota plugs, which have no cloud at all; the profile was not reviewed in the 2026-11-10 switch):** the goal is no dependency on SmartLife /
   the Tuya cloud. Router Access Control (blacklist) is **not** usable: it also cuts the LAN (Lumina Curte went offline
   for casa, reverted at once). What works: Parental Controls, profile "Prize fara internet" (`owner_id` 0) with
   `internet_blocked` on (API `admin/smart_network?form=patrol_owner_list|patrol_owner_block`, see the router memory /
@@ -416,10 +485,19 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   stable ~1 day, add the other four plugs to the profile; SmartLife (and its schedules) then stops working for them.
   Undo: `internet_blocked=false` or remove the device from the profile.
 - **Later, not now (user, 2026-11-05):** Zigbee sensors (USB dongle + zigbee2mqtt) to drop the Tuya cloud for the
-  temperature sensors; OpenBeken on the current plugs (tuya-cloudcutter or serial) "when there is time"; future plugs
-  with ESPHome/Tasmota (e.g. Athom) so pairing can happen from our app. A (+) "add device" button only makes sense
-  with those; with stock Tuya plugs pairing stays in SmartLife + `scripts/casa-sync.sh`.
-- **Adding a new plug/sensor:** (1) pair it in SmartLife; (2) `scripts/casa-sync.sh` (= `sync`, then `scan`, then
+  temperature sensors; OpenBeken on the Tuya plugs (tuya-cloudcutter or serial) "when there is time" (largely moot: four
+  plugs are Tasmota since 2026-11-10); future plugs with ESPHome (or more Tasmota) so pairing can happen from our app. A
+  (+) "add device" button only makes sense with those; with stock Tuya plugs pairing stays in SmartLife +
+  `scripts/casa-sync.sh`.
+- **Adding a new Tasmota plug:** (1) check the firmware (16.0.0) and the module/template: the `EIGHTREE` template has
+  GPIO `[0,0,0,2720,2624,32,224,2656,0,…,320,7648]` and some units arrive with a generic `ESP32C3` module and no relay or
+  metering (15.1.0 units: nr2, nr3), so apply the template; `VoltageSet 230`; (2) calibrate against the heater
+  (`PowerSet`/`CurrentSet`, see §13.81); (3) DHCP reservation by MAC; (4) `WebPassword` = the one in `tasmota.json`
+  (verify 401 without / 200 with); (5) `Mem1`/`Mem2` + `PulseTime1` = *base*; (6) entry in `devices.local.json`
+  (`driver`, `ip`, and `name` if the id is not in `devices.json`; a new id must match `^[A-Za-z0-9_]+$`), back up
+  `state.json` and `devices.local.json` first if state moves between ids; (7) `docker compose restart casa` (or
+  `up -d --build casa` after code changes). No `scan`, no `sync`.
+- **Adding a new Tuya plug/sensor:** (1) pair it in SmartLife; (2) `scripts/casa-sync.sh` (= `sync`, then `scan`, then
   `docker compose restart casa`). `scan` runs in a throwaway container with `--network host` (the plugs' UDP broadcasts on
   6666/6667/7000 never reach the bridge network), listens ~20 s and writes the IP and protocol of every plug in
   `devices.json` whose address differs into `devices.local.json` (a hand-set `name` stays); devices not in `devices.json`
@@ -439,10 +517,11 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
 - **CLI** (run in the container): `docker exec -it solar-casa python -m casa <cmd>`:
   `login [user_code]` (QR login with Smart Life: Eu > Setari > Cont si securitate > User Code, then scan the QR in the
   terminal), `sync` (refresh devices + local keys into `devices.json`), `set-password [--stdin]` (asked twice, never in
-  argv; changing it does not log phones out), `phones` (registered phones), `revoke <phone_id>`,
+  argv; changing it does not log phones out), `tasmota-password [--stdin]` (the Tasmota `WebPassword` in `casa/data/tasmota.json`, see above), `phones` (registered phones), `revoke <phone_id>`,
   `demo-devices [--force]` (fake `devices.json` for `CASA_DEMO=1`; refuses to overwrite real keys without `--force`),
   `scan` (plug IPs from the LAN; only useful with `--network host`, so run it through `scripts/casa-sync.sh`).
 - **Data dir `casa/data/`** (gitignored, mounted at `/data`, files mode 600): `devices.json` (**local keys**),
+  `devices.local.json` (names, IPs, `hidden`, `driver`), `tasmota.json` (**Tasmota password**),
   `cloud_session.json` (**cloud session**), `auth.json` (password hash + token hashes), `state.json` (schedules,
   countdowns, inching; real mode) / `state.demo.json` (demo mode, carries a demo marker; real mode **refuses** a
   demo-marked state, so test schedules can never run on the real boiler). Secrets never go to git, logs, ntfy or
@@ -463,7 +542,7 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   between two online readings that the server did not command within 15 s; a press made while the plug is offline is
   invisible). While a plug is on (from any source), the **nearest off deadline** (next active OFF event, inching, countdown
   "off") is written to the plug's countdown DP (dp 9 only as fallback; real DP from `sync`), so it switches off even if the
-  server is down — but **only once it is ≤ 24 h away** (a weekday OFF days ahead is not written; a capped 24 h countdown would
+  server is down — but **only once it is ≤ 24 h away (Tasmota: ≤ 18 h, `PulseTime1`)** (a weekday OFF days ahead is not written; a capped 24 h countdown would
   switch off too early). Deleting an OFF while the plug is on leaves it on. A manual command cancels a running countdown.
   The old intervals were migrated once into ON/OFF event pairs (backup `casa/data/state.json.bak-2026-11-07`). Per-plug
   locks and throttle: one dead plug never delays another's stop; a dead plug ties one thread for a command ≈ 25 s typical /
@@ -477,7 +556,7 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   change** to both buckets (not 60 s means); plug history is per minute: `on`/`online` = minimum, `power`/`voltage`/
   `current` = mean. Written by one flusher thread, so a down InfluxDB never delays plug commands. The API energy today = integral of `power` since local midnight.
   Grafana: row "🏠 Casa: prize si senzori" (panels 142–147: plug power, plugs on, sensor temperature/humidity, sensors now).
-- **App (v3.40, versionCode 44; v3.41 stale poll fix, v3.42 haptics, v3.43/47 compact list + rename; v3.44/48 events editor + plug order):** Retro SISTEM page has a SISTEM | CASA selector; CASA = 5 plug plates + sensors, tap
+- **App (v3.40, versionCode 44; v3.41 stale poll fix, v3.42 haptics, v3.43/47 compact list + rename; v3.44/48 events editor + plug order; v3.45/49 plug driver label + compact detail):** Retro SISTEM page has a SISTEM | CASA selector; CASA = 5 plug plates + sensors, tap
   opens plug detail (switch, countdown 30M/1H/2H/6H/other, events list "PROGRAMARI · EVENIMENTE" with "URMATORUL: …" and an editor, inching) or sensor detail (2h/1d/7d charts). Simple
   theme: a CASA card. SETARI: row "ACCES CASA" with "UITA TELEFONUL" (deletes only the local token; the server keeps the phone until `revoke`). The password plate shows on first open.
   Command timeout 50 s; commands stay enabled when a plug looks offline. Files: `CasaModel.kt`, `CasaRepository.kt`,
@@ -487,18 +566,30 @@ the user; still open: DHCP reservations, phones, live tests, deleting the SmartL
   is used only if no command started or finished meanwhile. Any new command path must call `commandStarted/Finished`.
   The casa access log shows each request's duration (`… 200 240 1.234s`). **Haptics (v3.42):** `CasaHaptics` vibrates
   once (70 ms) when the server confirms a switch, twice on failure (list, Simple card, plug detail).
+  **v3.45 (versionCode 49, the current app version; plug detail only, `RetroCasaDetail.kt` + `CasaModel.kt`):**
+  `CasaPlug.driver` (from `GET /plugs`, `"tuya"` if missing); the subtitle reads `PRIZA 3/5 · CONTORIZATA · WIFI OK ·
+  TASMOTA` (or `· TUYA`, driver name in brass; offline: `PRIZA 3/5 · WIFI OFFLINE · TASMOTA`; error and "FARA LEGATURA"
+  replace the whole subtitle). The header is **one row**: switch (PORNIT/OPRIT under it) | a smaller watts plate (46 dp) | kWh
+  plate `AZI`; no meter -> "PRIZA FARA CONTOR" instead of the two plates; the blue "OPRIRE IN …" line stays under the row.
+  "PROGRAMARI EVENIMENTE" has one title style; event rows are ~40 dp, so **5 events fit without scrolling** on the
+  `note9-large` profile (~4 dp slack; the 6th scrolls inside the card, as before). INCHING is **one row**: "INCHING" with a
+  small "OPRIRE AUTOMATA" under it, the switch, `−`, `30 MIN`, `+`; the explanatory text moved to the switch's accessibility
+  description. The plug list (SISTEM → CASA) and the Simple theme are unchanged (no driver label there). New texts are Compose,
+  nothing painted in the WebP.
 - **Stale reads on the persistent socket (fixed 2026-11-05):** tinytuya returns the NEXT message on the socket, not the
   reply to the request; a plug's unsolicited pushes (countdown, power) shifted every reply by one, so each 5 s poll
   returned the previous poll's state and a switch looked undone for ~5 s. `TinyTuyaDriver._drain` empties the socket
   (0.05 s timeout) before every `status()` and `set_dp()`. Measured after the fix on Lumina Curte: correct state 0.2 s
   after the command.
 - **Tests:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
-  solar-monitor-casa -m unittest discover -s tests -v` (293 tests, run it after any change in `casa/`; run the full
+  solar-monitor-casa -m unittest discover -s tests -v` (482 tests; Android unit tests: 144; run it after any change in `casa/`; run the full
   suite more than once, a non-reproducible failure was seen once during edits).
 - **Go-live steps:** done 2026-11-05: login + `sync`, real mode, every plug online, password, ARP timer. Left: (1) DHCP
   reservations on the router for the 5 plug IPs; (2) confirm the current unit with a load on (Tuya mA / 1000); (5) register the phones (Note 9, S20 FE, S26) from the app and check `phones`; (6) live tests of
   switch, countdown, schedule, inching on a plug (boiler last); (7) **delete the equivalent SmartLife schedules** once
-  ours work, or the two will fight.
+  ours work, or the two will fight. (2026-11-10: the four Tasmota plugs are reserved in DHCP by MAC and have no
+  SmartLife; (2) was settled for them by the heater test, current comes in A from `Status 10`; (7) matters only for
+  Tuya plugs that go back into service.)
 
 ## Conventions
 

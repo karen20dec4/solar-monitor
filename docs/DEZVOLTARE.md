@@ -22,7 +22,7 @@ ceva ce API-ul refuză, sau API care servește ceva ce nimeni nu afișează.
 | 7 | Desen UI | `android/.../RetroDashboard.kt` (Retro) / `MainActivity.kt` (Simple) | zone tactile, etichete, grafice |
 | 8 | Fotografie | `android/app/src/main/res/drawable-nodpi/*.webp` | **textul desenat pe șasiu** (vezi §3) |
 | 9 | Grafana | `grafana/dashboards/solar.json` | opțional, dashboard-ul de pe desktop |
-| 10 | CASA (prize/senzori Tuya) | `casa/casa/*.py` (container `solar-casa`; `web.py` rutele, `controller.py` programări/countdown/inching, `plugs.py` driver local, `cloud.py` senzori, `influx.py` măsurătorile `casa_plug`/`casa_sensor`, `auth.py` parola și token-urile), `casa/tests/`; Caddy `handle_path /solar/casa/*`; Android `CasaModel.kt`, `CasaRepository.kt`, `CasaAccess.kt`, `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt` | un câmp nou de priză/senzor trece prin `PlugView` din `controller.py`/`web.py` → `CasaModel.kt` → ecranele; **nu trece prin `api/app.py`** (alt serviciu, altă autentificare). Teste: comanda din §„Contractul CASA" |
+| 10 | CASA (prize Tasmota/Tuya, senzori Tuya) | `casa/casa/*.py` (container `solar-casa`; `web.py` rutele, `controller.py` programări/countdown/inching, `plugs.py` driverul Tuya local, `tasmota.py` driverul Tasmota (HTTP, `PulseTime1`, `Mem1`/`Mem2`), `devices.py` registrul de dispozitive și câmpul `driver`, `cloud.py` senzori, `influx.py` măsurătorile `casa_plug`/`casa_sensor`, `auth.py` parola și token-urile), `casa/tests/`; Caddy `handle_path /solar/casa/*`; Android `CasaModel.kt`, `CasaRepository.kt`, `CasaAccess.kt`, `RetroCasa.kt`, `RetroCasaDetail.kt`, `SimpleCasa.kt` | un câmp nou de priză/senzor trece prin `plug_view` din `controller.py` / `web.py` → `CasaModel.kt` → ecranele; **nu trece prin `api/app.py`** (alt serviciu, altă autentificare). Teste: comanda din §„Contractul CASA" |
 
 **Regula de aur:** un câmp nou trebuie adăugat *și* în `FIELDS` din `api/app.py`, altfel
 `/solar/latest` nu îl returnează niciodată, oricât de corect l-ar scrie collector-ul.
@@ -51,7 +51,7 @@ va exista dar va da mereu eroare.
 ```
 POST   /solar/casa/register               {password, device} -> {token, phone_id}   (singura rută fără token în afară de /health; 401 parola greșită, 429 + retry_after, 503 parola nesetată)
 GET    /solar/casa/me                     -> {phone_id, device}
-GET    /solar/casa/plugs                  -> {plugs:[{id,name,online,on,metered,power,voltage,current,energy_today,
+GET    /solar/casa/plugs                  -> {plugs:[{id,name,driver:"tuya"|"tasmota",online,on,metered,power,voltage,current,energy_today,
                                               events[{id,time,action,days,enabled}],next_event,schedules[] (gol, pt. ≤3.43),
                                               countdown,inching,off_deadline,error}], timestamp}   (în ordinea plug_order)
 POST   /solar/casa/plugs/<id>/switch      {on}
@@ -72,11 +72,21 @@ Forma exactă a câmpurilor e în `casa/casa/web.py` și `casa/casa/controller.p
 (după orice modificare în `casa/`). Reguli de semantică (fronturi, termen de oprire, DST): `CLAUDE.md` §„CASA".
 
 **Priză/senzor nou sau schimbat:** dispozitivele se încarcă o singură dată, la pornire; după `login`/`sync`, o redenumire în
-SmartLife sau o editare a `casa/data/devices.local.json` → `docker compose restart casa`. Procedura „Adăugare priză/senzor nou":
+SmartLife sau o editare a `casa/data/devices.local.json` → `docker compose restart casa`. Procedura „Adăugare priză/senzor Tuya nou":
 asociezi în SmartLife → `scripts/casa-sync.sh` (`sync` + `scan` cu `--network host`, care scrie IP-ul și protocolul prizelor
 în `devices.local.json`, + `docker compose restart casa`; `--scan-only` dacă doar s-a schimbat un IP) → rezervare DHCP pentru IP-ul
 nou → apare în aplicație, fără APK nou. Scanarea are nevoie de regulile firewalld din zona `public` (UDP 6666/6667/7000, doar
 `192.168.1.0/24`). Pagina CASA din Retro e făcută pentru cel mult 5 prize și 3 senzori. Detalii: `CLAUDE.md` §„CASA".
+
+**Driverul prizei (`driver` în `GET /plugs`, din v3.45):** o priză e `tuya` (implicit) sau `tasmota`; ambele driveri implementează
+același protocol `PlugDriver` (`connect/status/set_dp/close`) din `plugs.py`, iar controllerul vorbește „DP-uri” cu amândoi,
+deci un câmp nou de priză nu depinde de driver. Priza Tasmota se declară în `casa/data/devices.local.json`
+(`"driver": "tasmota"` + `"ip"`, plus `"name"` dacă id-ul nu e în `devices.json`; un id nou trebuie să respecte
+`^[A-Za-z0-9_]+$`, altfel garda din `influx.py` respinge punctele), nu prin `sync`/`scan`; parola ei (`WebPassword`) stă în
+`casa/data/tasmota.json`, setată cu `python -m casa tasmota-password --stdin`. Plafonul termenului de siguranță scris în
+priză e per driver (Tasmota 18 h, `TASMOTA_MAX_S`; Tuya 24 h, `DP_MAX_S`), alegerea e `_dp_max_s` în `controller.py`. Un câmp
+nou de priză trece prin `plug_view` (`controller.py`) → `CasaModel.kt` (`parsePlugObject`) → `RetroCasaDetail.kt`. Detaliile
+(mapare DP, `PulseTime1`, `Mem1`/`Mem2`, auto-vindecare, întoarcerea la Tuya): `CLAUDE.md` §„CASA".
 
 ### Ce bucket alegi pentru un interval
 
@@ -459,7 +469,7 @@ decizii deja luate, nu scăpări.
   fără „încarcă bateria acum". Subiect închis; vezi `GEMINI.md`.
 - **Nicio scriere către BMS.** Cititorul `bms/jk_bms_reader.py` trimite doar cererile de date
   `0x96`/`0x97`; fără comenzi JK de setări (praguri, balansare, MOSFET-uri, parolă).
-- **Singurul lucru comandat de sistem sunt prizele Tuya** (`solar-casa`). Invertorul și BMS-ul rămân READ-ONLY; nu muta
+- **Singurul lucru comandat de sistem sunt prizele (Tasmota și Tuya)** (`solar-casa`). Invertorul și BMS-ul rămân READ-ONLY; nu muta
   logica de control în `collector` sau `bms`. Programările din SmartLife se șterg după ce merg ale noastre (altfel se bat).
 - Fără cloud Growatt / ShineServer, fără MQTT, fără dongle ShineWiFi, fără Modbus TCP.
 - Fără derulare verticală în UI-ul Retro.

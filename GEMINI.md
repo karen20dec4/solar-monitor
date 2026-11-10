@@ -58,8 +58,8 @@ explicită a utilizatorului care își asumă riscul.
   de scriere (praguri, balansare, MOSFET-uri de încărcare/descărcare, parolă) — nu le adăuga.
   `request_frame()` refuză orice altă comandă, iar un test unitar verifică asta.
 
-- *2026-11-05* — serviciul nou **`solar-casa`** *comandă* ceva: cele cinci prize inteligente Tuya ale utilizatorului
-  (pornit/oprit, countdown, programări, inching), prin LAN. Asta e singurul lucru pe care îl comandă sistemul. Nu atinge
+- *2026-11-05* — serviciul nou **`solar-casa`** *comandă* ceva: cele cinci prize inteligente ale utilizatorului (Tasmota și
+  Tuya din 2026-11-10; pornit/oprit, countdown, evenimente, inching), prin LAN. Asta e singurul lucru pe care îl comandă sistemul. Nu atinge
   invertorul și nici BMS-ul, care rămân READ-ONLY; regula de mai sus nu se schimbă pentru ele. Detalii în „CASA".
 
 Recon-ul FC03 (citire holding registers) e o *citire* și nu încalcă invariantul.
@@ -86,7 +86,7 @@ Invertor --USB (/dev/growatt)--> collector.py  (minimalmodbus, FC04, 1 dată/sec
 | `solar-grafana` | dashboard `solar-main` | 3000 |
 | `solar-ntfy` | push pe telefon, topic din `.env` | 8088 |
 | `solar-api` | micro-API JSON pentru Android (citește datele; scrie doar evidența telefoanelor `app_client`) | **niciunul** (intern `api:8000`) |
-| `solar-casa` | prizele și senzorii Tuya (vezi „CASA"); comandă prizele local | **niciunul** (intern `casa:8100`) |
+| `solar-casa` | prizele Tasmota/Tuya și senzorii Tuya (vezi „CASA"); comandă prizele local | **niciunul** (intern `casa:8100`) |
 | `solar-caddy` | reverse proxy HTTPS, `tls internal` | 9443 → 443, 8443 |
 
 Toate cu `restart: unless-stopped`, pornesc la boot.
@@ -461,17 +461,36 @@ Debian `python3-bleak`. Adresa e în `.env` ca `BMS_ADDRESS`.
 
 ---
 
-## CASA (prize și senzori Tuya, `casa/`)
+## CASA (prize Tasmota și Tuya, senzori Tuya, `casa/`)
 
-Container `solar-casa` (Python, gunicorn 1 worker × 8 fire, port 8100, **fără port publicat**). Specificație:
-`docs/superpowers/specs/2026-11-05-casa-prize-senzori-design.md`; jurnalul construcției: `COPILOT_CONTEXT.md` §13.78.
-**Stare (2026-11-05): mod real (`CASA_DEMO=0`), login QR + `sync` făcute, toate cele 5 prize online local, parola setată
-de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea programărilor din SmartLife (lista de mai jos).**
+Container `solar-casa` (Python, gunicorn 1 worker × 8 fire, port 8100, **fără port publicat**). Specificații:
+`docs/superpowers/specs/2026-11-05-casa-prize-senzori-design.md` (baza), `2026-11-07-casa-evenimente-design.md`
+(evenimente), `2026-11-10-casa-tasmota-design.md` (Tasmota); jurnale: `COPILOT_CONTEXT.md` §13.78 (construcția), §13.81 (Tasmota).
+**Stare (2026-11-10): mod real (`CASA_DEMO=0`), 5 prize online: 4 Tasmota + 1 Tuya (Bucatarie), parola setată de user. Lista
+pașilor de punere în funcțiune de la finalul secțiunii e din 2026-11-05 și n-a fost reverificată după trecerea pe Tasmota.**
 
-- **Ce face:** 5 prize comandate local (`tinytuya`, TCP 6668, o conexiune persistentă per priză; IP și protocol implicite
+- **Două drivere de priză (din 2026-11-10, v3.45):** o priză e `tuya` (implicit; `tinytuya`, `casa/casa/plugs.py`) sau
+  `tasmota` (HTTP în LAN, `casa/casa/tasmota.py`); elementele din `GET /plugs` au `"driver"`. Ambele stau în spatele
+  aceluiași protocol `PlugDriver` (`connect/status/set_dp/close`), iar controllerul vorbește în „DP-uri” cu amândouă
+  (driverul Tasmota le mapează: `{"switch": 1, "countdown": 9, "current": 18, "power": 19, "voltage": 20, "inching": 44}`).
+  Userul a trecut prizele de pe Tuya pe **Eightree ET28 16 A cu Tasmota** (fără cloud, fără MQTT, fără SmartLife); prizele
+  Tuya vechi sunt în sertar ca **rezervă**, deci suportul Tuya rămâne (nu-l șterge). Prizele de acum (mapare finală, user,
+  2026-11-10 14:07):
+
+  | Nume în aplicație | Driver | IP | Id dispozitiv (rămâne = stare, evenimente, ordine, istoric Influx) |
+  |---|---|---|---|
+  | Boiler | tasmota nr1 | .186 | `bf7b3c62e47bfd15fczfov` |
+  | Living sus | tasmota nr2 | .234 | `bf5cc0f2db15b9eab2a0zy` |
+  | Priza cam Georgi | tasmota nr3 | .170 | `tasmota_431ea4` (nou, intrare de sine stătătoare; vechiul id aparține acum Bucătăriei, iar istoricul Influx al lui Georgi dinainte de 14:07 rămâne sub el) |
+  | Lumina Curte | tasmota nr4 | .188 | `bf3897ad46cd66d32cww3j` (inching-ul de 30 min stă în priză, `PulseTime1`) |
+  | Bucatarie | tuya „WiFi Plug”, cu contor | .104 | `bf3bac46d1a367e845thx2` (MAC fc:67:1f:7a:04:dd; până la 14:07 a fost Priza cam Georgi, deci istoricul Influx de dinainte e al lui Georgi; inching nativ DP 44 = 20 min, setat de user) |
+
+  T34 Bucatarie (`bfc30380ff8a29c0d88wcz`, fără contor) e retrasă: `"hidden": true`. MAC-urile prizelor Tasmota și tot ce
+  ține de punerea lor în funcțiune sunt în `COPILOT_CONTEXT.md` §13.81.
+- **Ce face (partea Tuya):** prize Tuya comandate local (`tinytuya`, TCP 6668, o conexiune persistentă per priză; IP și protocol implicite
   în `casa/casa/devices.py`, potrivite după device id: Boiler .204, Living sus .244, Priza cam Georgi .104, Bucatarie .185,
   Lumina Curte .158 (confirmate de primul `sync` real, 2026-11-05; Bucatarie și Lumina Curte sunt „T34-Smart Plug”,
-  protocol 3.4, fără măsurare, categoria Tuya `tdq`)). 3 senzori de temperatură/umiditate din cloud-ul Tuya (`tuya-device-sharing-sdk`, sesiune din login QR). Senzorii
+  protocol 3.4, fără măsurare, categoria Tuya `tdq`); azi se folosește doar .104, restul sunt rezervă). 3 senzori de temperatură/umiditate din cloud-ul Tuya (`tuya-device-sharing-sdk`, sesiune din login QR). Senzorii
   reali („T & H Sensor”, categoria `tdq`) vin **fără nicio stare prin REST**; valorile sosesc **doar prin MQTT**, ca DP-uri
   numerotate pe care SDK-ul le aruncă (n-au strategie locală): **27 = temperatură ×10, 46 = umiditate %, 101 = baterie
   `low`/`middle`/`high`** (`SENSOR_DP_CODES` în `cloud.py`, măsurat 2026-11-05). casa pune `set_up=True` pe senzori ca
@@ -481,29 +500,82 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   reușită are ≤ 10 min. Fără
   rezervă prin cloud pentru comenzile prizelor: o priză care refuză conexiunea locală apare OFFLINE.
 - **Dispozitivele se încarcă o singură dată, la pornire** (`casa/casa/web.py`). După `login`/`sync`, o redenumire în
-  SmartLife sau o editare a lui `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "...", "hidden": true}}`;
+  SmartLife sau o editare a lui `casa/data/devices.local.json` (`{"<id>": {"ip": "...", "version": "3.3", "name": "...", "hidden": true, "driver": "tasmota"}}`;
   `hidden` scoate un dispozitiv din aplicație, ex. „Boiler Buc”, nefolosit, în sertar; o intrare greșită se sare cu
   avertisment în log) → `docker compose restart casa`.
-- **Cele trei „WiFi Plug” (Boiler, Living sus, Priza cam Georgi) nu răspund la ARP** (2026-11-05): se anunță în rețea,
+- **`devices.local.json` și driverul Tasmota:** `"driver": "tasmota"` + `"ip"` pe o intrare cheiată după **id-ul Tuya** al
+  prizei o face priză Tasmota și păstrează tot ce atârnă de id (nume, evenimente, inching, locul în listă, istoricul
+  Influx, telefoanele). Drivere valide: `tuya` (implicit), `tasmota`; un driver necunoscut sau `tasmota` fără `ip` sare
+  intrarea cu avertisment, iar pornirea continuă. O intrare cu `driver: tasmota` **plus `name` și `ip`** e suficientă singură:
+  dacă id-ul ei nu e în `devices.json` (priza Tuya ștearsă din SmartLife sau o priză care n-a avut niciodată cont Tuya, ca
+  Priza cam Georgi `tasmota_431ea4`), priza rămâne (kind `plug`). **Un asemenea id singur trebuie să respecte
+  `^[A-Za-z0-9_]+$`** (aflat live 2026-11-10): garda de id din Influx (`casa/casa/influx.py`, `_ID`) respinge un `-`, deci
+  interogarea de energie dădea ValueError și nu se scriau puncte pentru priză; `tasmota-431ea4` a trebuit redenumit
+  `tasmota_431ea4`. `scan` / `apply_scan` nu ating niciodată intrările `driver: tasmota` (ar scrie IP-ul vechi Tuya peste
+  cel Tasmota). **Înapoi pe Tuya:** scoți `driver` și `ip` din intrare (IP-ul Tuya vine atunci din `devices.json` /
+  `BUILTIN_DEFAULTS`), pui priza Tuya la loc și `docker compose restart casa`; o intrare singură ca `tasmota_431ea4` nu are
+  geamăn Tuya sub id-ul ei.
+- **`casa/data/tasmota.json`** (mod 600, ignorat de git ca restul lui `data/`; `{"password": "..."}`): unica `WebPassword`
+  Tasmota (utilizator `admin`), aceeași pe toate prizele Tasmota; fără fișier = fără parolă. Se setează cu
+  `docker exec -i solar-casa python -m casa tasmota-password --stdin` (sau fără `--stdin`, cerută de două ori; niciodată în
+  argv), apoi `docker compose restart casa` (se citește o singură dată, la pornire; doar dacă există cel puțin o priză
+  Tasmota). Parola merge în URL-ul cererii (`/cm?cmnd=...&user=admin&password=...`), deci **nicio eroare, niciun log și
+  niciun `PlugReading.error` nu are voie să conțină URL-ul sau parola**: mesajele sunt `priza <ip>: <fel>`, doar din tipul
+  erorii (fără `str(exc)` de la `urllib`, fără `__context__`, fără redirecționări, fără proxy). O priză care răspunde 401/403
+  (serverul n-are parola sau o are greșită) apare OFFLINE cu „parola Tasmota respinsa”. Un `tasmota.json` lipsă/corupt scrie un
+  avertisment (fără conținut) și pornirea continuă fără parolă (prizele care au parolă arată atunci mesajul offline de mai
+  sus). `WebPassword` pe priză se setează de mână la punerea în funcțiune (prin HTTP, dintr-un fișier, nu din argv/istoricul
+  shell-ului); serverul nu o scrie niciodată.
+- **Comportamentul Tasmota (`casa/casa/tasmota.py`):** HTTP `http://<ip>/cm?cmnd=...`, `urllib` din stdlib, timeout 3 s, cel
+  mult 3 cereri pe citire (`Power`, `Status 10` pentru contor, `PulseTime1`; `Mem1`/`Mem2` se citesc la `connect()` și se
+  țin în cache). În priză nu se stochează decât `PulseTime1`, `Mem1`, `Mem2`: **nicio regulă sau timer în priză**, toate
+  programările sunt ale serverului. Semantica evenimentelor/countdown-ului/inching-ului de mai jos e aceeași pentru ambele drivere.
+  - **`PulseTime1` e termenul de siguranță** (echivalentul DP 9 de la Tuya): `0` = oprit, `1..111` = zecimi de secundă,
+    `112..64900` = valoare − 100 de secunde. Se aplică la fiecare pornire a releului și, scris cât releul e **pornit**,
+    repornește numărătoarea pe loc. `PulseTime1 Remaining` are **aceeași codificare** ca `Set` (verificat pe o priză reală,
+    Lumina Curte, 2026-11-10: pornită la 14:07:52, 24 s mai târziu `Remaining` 1875 = 1775 s, așteptat 1776), deci
+    countdown-ul se citește din el. **Plafon: `TASMOTA_MAX_S` = 64800 s (18 h)** pe priză, față de 24 h (`DP_MAX_S` = 86400) la
+    Tuya; `_dp_max_s` din `controller.py` îl alege per dispozitiv, iar un termen mai departe decât plafonul **nu** se scrie
+    (îl execută serverul). Testat: 20 h nu se scrie pe Tasmota, 17 h se scrie, 20 h se scrie pe Tuya.
+  - **Inching** (echivalentul DP 44): `Mem1` = durata în secunde (păstrată și când e oprit, ca aplicația să nu piardă durata
+    aleasă), `Mem2` = `1`/`0` activ. *Baza* = `Mem1` dacă `Mem2 == 1`, altfel 0. Cu releul **oprit**, `PulseTime1` trebuie să
+    fie egal cu *baza*, ca butonul fizic să aplice inching-ul și cu serverul căzut (așa merge cele 30 min ale Luminii Curte).
+    `Mem1`/`Mem2` goale (`""`, starea de fabrică) sau gunoi (`abc`, `-5`, `0`, peste 64800) -> driverul **nu** raportează DP 44
+    și nu se auto-vindecă (serverul păstrează valoarea din `state.json`). Punerea în funcțiune trebuie să inițializeze
+    `Mem1`/`Mem2` pe fiecare priză **înainte** de deploy-ul casa (altfel o apăsare de buton după un termen scris de server ar
+    opri priza prea devreme). Verificat pe o priză reală: `Mem2 0` stochează „0”, `Mem2 "` îl șterge. Odată scrisă, priza e
+    sursa de adevăr (ca la Tuya, v3.43).
+  - **Auto-vindecare:** dacă la o citire releul e oprit și `PulseTime1 Set` != *baza*, driverul rescrie *baza* (un termen
+    de siguranță rămas de la ultima pornire nu are voie să oprească prea devreme următoarea pornire din buton). O vindecare
+    eșuată se loghează o dată și nu scoate priza offline.
+  - `set_dp(9, N)`: `N > 0` scrie `PulseTime1` = N s; `N = 0` scrie *baza*. `set_dp(44, ...)` scrie `Mem1`, `Mem2` și
+    `PulseTime1` = *baza* doar dacă releul e oprit.
+- **Măsurare și calibrare (Tasmota):** contorul BL0937 al fiecărei ET28 a fost calibrat cu **același calorifer electric**
+  (treapta 2, rezistiv; referința nr2 ≈ 1157 W / 4,947 A, invertorul arăta ~1100–1150 W). Valorile din fabrică citeau cu
+  4–8 % peste la nr1, nr3, nr4, iar **priza Tuya veche citea cu ~10 % peste** (Living sus 1285 W pe aceeași sarcină). Nu
+  recalibra Tasmota după o citire Tuya. Valorile și istoricul pe priză: `COPILOT_CONTEXT.md` §13.81.
+- **Cele trei „WiFi Plug” Tuya (Boiler, Living sus, Priza cam Georgi; azi se folosește doar ultima, acum Bucatarie .104) nu răspund la ARP** (2026-11-05): se anunță în rețea,
   dar `ip neigh` arată FAILED, deci ping și TCP 6668 eșuează. O intrare statică (`ip neigh replace <ip> lladdr <mac> nud
   permanent`) rezolvă. `deploy/tuya_arp.py` (pe host, root) ascultă ~25 s anunțurile Tuya, ia IP + MAC din cadrul Ethernet
   și pune intrările; șterge una când MAC-ul trece pe alt IP sau nu mai e văzut 24 h (stare în `/var/lib/solar-tuya-arp/`).
   Rulat de `deploy/solar-tuya-arp.timer` (la pornire + la 10 min); instalare: `cp deploy/solar-tuya-arp.{service,timer}
   /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now solar-tuya-arp.timer`. Teste: `python3 -I -m
   unittest discover -s deploy -p 'test_tuya_arp.py'`.
-- **Inching în firmware-ul prizei** (DP 44 `switch_inching`, base64 pe 3 octeți: activ, secunde big-endian; mapat ca
-  `dps["inching"]` de `sync`): Bucatarie 25 min și Lumina Curte 30 min sunt pornite **intenționat** (user, 2026-11-05).
+- **Inching în firmware-ul prizei (Tuya)** (DP 44 `switch_inching`, base64 pe 3 octeți: activ, secunde big-endian; mapat ca
+  `dps["inching"]` de `sync`): Bucatarie 25 min și Lumina Curte 30 min au fost pornite **intenționat** (user, 2026-11-05; din
+  2026-11-10 Bucatarie e priza veche cu contor, cu 20 min, iar cele 30 min ale Luminii Curte stau într-o priză Tasmota).
   Din v3.43 priza e sursa de adevăr (alegerea userului): fiecare citire copiază DP 44 în setarea `inching` a prizei
   (`_sync_native_inching`), deci o schimbare din SmartLife apare și la noi, iar `PUT .../inching` scrie întâi DP 44 (o
   scriere eșuată nu schimbă nimic). Serverul își ține și termenul lui de inching, ca „STINGE ÎN …” să apară și DP-ul de
-  countdown de siguranță să fie de acord cu firmware-ul. Prizele fără DP 44 păstrează inching-ul doar pe server.
+  countdown de siguranță să fie de acord cu firmware-ul. Prizele fără DP 44 păstrează inching-ul doar pe server. Prizele Tasmota
+  își raportează inching-ul prin `Mem1`/`Mem2`, la fel (vezi mai sus).
 - **Nume editabile din aplicație (v3.43):** atingerea titlului din detaliul prizei/senzorului (creionul).
   `PUT /plugs/<id>/name` și `PUT /sensors/<id>/name` (1–24 caractere, `clean_user_name`) scriu `name` în
   `devices.local.json`; numele prizei se schimbă imediat în memorie, al senzorului prin `Services.names`. SmartLife își
   păstrează numele lui; în Influx eticheta prizei ia numele nou de atunci înainte (istoricul e după `device_id`).
 - **Lista compactă de prize (v3.43):** în Retro CASA rândurile au fix 54 dp (până la 7 prize, `CompactPlugRows`; peste,
   își împart cardul), cel mult 2 rânduri de insigne, iar prizele fără contor nu au placa de wați (Retro și Simple).
-- **Internetul tăiat prizelor (probă din 2026-11-05 ~18:45, alegerea userului):** scopul e să nu mai depindem de
+- **Internetul tăiat prizelor (probă din 2026-11-05 ~18:45, alegerea userului; depășită pentru cele patru prize Tasmota, care n-au deloc cloud; profilul n-a fost reverificat la trecerea din 2026-11-10):** scopul e să nu mai depindem de
   SmartLife / cloud-ul Tuya. Access Control (lista neagră) din router **nu** se poate folosi: taie și rețeaua locală
   (Lumina Curte a căzut pentru casa, anulat imediat). Ce merge: Parental Controls, profilul „Prize fara internet”
   (`owner_id` 0) cu `internet_blocked` pornit (API `admin/smart_network?form=patrol_owner_list|patrol_owner_block`, vezi
@@ -511,10 +583,19 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   offline. Dacă rămâne stabilă ~o zi, se adaugă și celelalte patru; SmartLife (și programările lui) nu mai merg pentru ele.
   Anulare: `internet_blocked=false` sau scoaterea prizei din profil.
 - **Mai târziu, nu acum (user, 2026-11-05):** senzori Zigbee (stick USB + zigbee2mqtt), ca senzorii să nu mai depindă de
-  cloud-ul Tuya; OpenBeken pe prizele actuale (tuya-cloudcutter sau prin serial) „când avem timp”; prize viitoare cu
-  ESPHome/Tasmota (ex. Athom), ca asocierea să se facă din aplicația noastră. Un buton (+) „adaugă dispozitiv” are rost
-  doar cu acestea; cu prize Tuya de fabrică asocierea rămâne în SmartLife + `scripts/casa-sync.sh`.
-- **Adăugarea unei prize/unui senzor nou:** (1) îl asociezi în SmartLife; (2) `scripts/casa-sync.sh` (= `sync`, apoi `scan`,
+  cloud-ul Tuya; OpenBeken pe prizele Tuya (tuya-cloudcutter sau prin serial) „când avem timp” (în mare parte depășit: patru
+  prize sunt Tasmota din 2026-11-10); prize viitoare cu ESPHome (sau încă Tasmota), ca asocierea să se facă din aplicația
+  noastră. Un buton (+) „adaugă dispozitiv” are rost doar cu acestea; cu prize Tuya de fabrică asocierea rămâne în SmartLife
+  + `scripts/casa-sync.sh`.
+- **Adăugarea unei prize Tasmota noi:** (1) verifici firmware-ul (16.0.0) și modulul/template-ul: template-ul `EIGHTREE` are
+  GPIO `[0,0,0,2720,2624,32,224,2656,0,…,320,7648]`, iar unele unități vin cu modul generic `ESP32C3`, fără releu și fără
+  măsurare (unitățile 15.1.0: nr2, nr3), deci aplici template-ul; `VoltageSet 230`; (2) calibrezi pe calorifer
+  (`PowerSet`/`CurrentSet`, vezi §13.81); (3) rezervare DHCP după MAC; (4) `WebPassword` = cea din `tasmota.json` (verifici
+  401 fără / 200 cu); (5) `Mem1`/`Mem2` + `PulseTime1` = *baza*; (6) intrare în `devices.local.json` (`driver`, `ip`, plus
+  `name` dacă id-ul nu e în `devices.json`; un id nou trebuie să respecte `^[A-Za-z0-9_]+$`), cu copie de siguranță a lui
+  `state.json` și `devices.local.json` înainte dacă starea se mută între id-uri; (7) `docker compose restart casa` (sau
+  `up -d --build casa` după modificări de cod). Fără `scan`, fără `sync`.
+- **Adăugarea unei prize/unui senzor Tuya nou:** (1) îl asociezi în SmartLife; (2) `scripts/casa-sync.sh` (= `sync`, apoi `scan`,
   apoi `docker compose restart casa`). `scan` rulează într-un container temporar cu `--network host` (anunțurile UDP ale
   prizelor pe 6666/6667/7000 nu ajung în rețeaua bridge), ascultă ~20 s și scrie în `devices.local.json` IP-ul și protocolul
   fiecărei prize din `devices.json` a cărei adresă diferă (un `name` pus de mână rămâne); ce nu e în `devices.json` apare ca
@@ -533,11 +614,12 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
 - **CLI** (în container): `docker exec -it solar-casa python -m casa <comandă>`:
   `login [cod_utilizator]` (login QR Smart Life: Eu > Setări > Cont și securitate > User Code, apoi scanezi QR-ul din
   terminal), `sync` (reîmprospătează dispozitivele și cheile locale în `devices.json`), `set-password [--stdin]` (se cere
-  de două ori, niciodată în argv; schimbarea nu deconectează telefoanele), `phones` (telefoanele înregistrate),
+  de două ori, niciodată în argv; schimbarea nu deconectează telefoanele), `tasmota-password [--stdin]` (`WebPassword`
+  Tasmota în `casa/data/tasmota.json`, vezi mai sus), `phones` (telefoanele înregistrate),
   `revoke <phone_id>`, `demo-devices [--force]` (`devices.json` fals pentru `CASA_DEMO=1`; refuză să suprascrie chei reale
   fără `--force`), `scan` (IP-urile prizelor din LAN; merge doar cu `--network host`, deci prin `scripts/casa-sync.sh`).
 - **Directorul de date `casa/data/`** (ignorat de git, montat la `/data`, fișiere cu mod 600): `devices.json` (**chei
-  locale**), `cloud_session.json` (**sesiunea cloud**), `auth.json` (hash de parolă + hash-uri de token), `state.json`
+  locale**), `devices.local.json` (nume, IP-uri, `hidden`, `driver`), `tasmota.json` (**parola Tasmota**), `cloud_session.json` (**sesiunea cloud**), `auth.json` (hash de parolă + hash-uri de token), `state.json`
   (programări, countdown, inching; mod real) / `state.demo.json` (mod demo, poartă un marcaj demo; modul real **refuză** o
   stare marcată demo, ca programările de test să nu poată porni niciodată boilerul real). Secretele nu ajung niciodată în
   git, log-uri, ntfy sau Telegram (nu se loghează text de excepție cu token QR / cod de utilizator).
@@ -558,7 +640,7 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   pornit/oprit văzută între două citiri online pe care serverul n-a comandat-o în ultimele 15 s; o apăsare cât priza e offline nu se
   vede). Cât timp priza e pornită (din orice sursă), **cel mai apropiat termen de oprire** (următorul OPREȘTE activ, inching,
   countdown „oprește") se scrie în DP-ul de countdown al prizei (dp 9 doar de rezervă; DP-ul real vine din `sync`), ca priza să se
-  stingă și dacă serverul cade — dar **doar când e la ≤ 24 h** (un OPREȘTE pe zile, peste câteva zile, nu se scrie; un countdown
+  stingă și dacă serverul cade — dar **doar când e la ≤ 24 h (Tasmota: ≤ 18 h, `PulseTime1`)** (un OPREȘTE pe zile, peste câteva zile, nu se scrie; un countdown
   plafonat la 24 h ar opri-o prea devreme). Ștergerea unui OPREȘTE cât priza e pornită o lasă pornită. O comandă manuală anulează
   countdown-ul în curs. Intervalele vechi au fost convertite o dată în perechi PORNEȘTE/OPREȘTE (copie
   `casa/data/state.json.bak-2026-11-07`). Lock-uri și throttle per priză: o priză moartă nu întârzie oprirea alteia; ține un fir ≈ 25 s
@@ -574,7 +656,7 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   `voltage`/`current` = media. Le scrie un singur fir de flush, deci un InfluxDB căzut nu întârzie comenzile. Energia azi din API = integrala lui `power` de la miezul
   nopții local. Grafana: rândul „🏠 Casa: prize si senzori" (panourile 142–147: putere prize, prize pornite,
   temperatură/umiditate senzori, senzori acum).
-- **Aplicația (v3.40, versionCode 44; v3.41 sondarea veche, v3.42 vibrație, v3.43/47 listă compactă + redenumire; v3.44/48 editor de evenimente + ordinea prizelor):** pagina SISTEM din Retro are comutatorul SISTEM | CASA; CASA = 5 plăci de priză +
+- **Aplicația (v3.40, versionCode 44; v3.41 sondarea veche, v3.42 vibrație, v3.43/47 listă compactă + redenumire; v3.44/48 editor de evenimente + ordinea prizelor; v3.45/49 eticheta driverului + detaliu compact):** pagina SISTEM din Retro are comutatorul SISTEM | CASA; CASA = 5 plăci de priză +
   senzori, atingerea deschide detaliul prizei (comutator, countdown 30M/1H/2H/6H/altă durată, programări, inching) sau al
   senzorului (grafice 2h/1d/7d). Tema Simple: un card CASA. SETARI: rândul „ACCES CASA" cu „UITA TELEFONUL" (șterge doar
   token-ul local; serverul ține telefonul până la `revoke`). Placa de parolă apare la prima deschidere. Timeout comandă 50 s;
@@ -585,19 +667,31 @@ de user; rămân: rezervările DHCP, telefoanele, testele live, ștergerea progr
   între timp n-a început și nu s-a terminat nicio comandă. Orice cale nouă de comandă trebuie să apeleze
   `commandStarted/Finished`. Log-ul de acces casa arată durata fiecărei cereri (`… 200 240 1.234s`). **Vibrație
   (v3.42):** `CasaHaptics` vibrează o dată (70 ms) când serverul confirmă comutarea, de două ori la eșec.
+  **v3.45 (versionCode 49, versiunea curentă a aplicației; doar detaliul prizei, `RetroCasaDetail.kt` + `CasaModel.kt`):**
+  `CasaPlug.driver` (din `GET /plugs`, `"tuya"` dacă lipsește); subtitlul arată `PRIZA 3/5 · CONTORIZATA · WIFI OK ·
+  TASMOTA` (sau `· TUYA`, numele driverului în alamă; offline: `PRIZA 3/5 · WIFI OFFLINE · TASMOTA`; eroarea și „FARA
+  LEGATURA” înlocuiesc tot subtitlul). Antetul e pe **un singur rând**: comutatorul (PORNIT/OPRIT sub el) | placa de wați
+  mai mică (46 dp) | placa kWh `AZI`; fără contor -> „PRIZA FARA CONTOR” în locul celor două plăci; linia albastră „OPRIRE IN
+  …” rămâne sub rând. „PROGRAMARI EVENIMENTE” are un singur stil de titlu; rândurile de eveniment au ~40 dp, deci **5
+  evenimente încap fără derulare** pe profilul `note9-large` (~4 dp rezervă; al 6-lea derulează în interiorul cardului, ca
+  înainte). INCHING e pe **un singur rând**: „INCHING” cu „OPRIRE AUTOMATA” mic dedesubt, comutatorul, `−`, `30 MIN`, `+`;
+  textul explicativ a trecut în descrierea de accesibilitate a comutatorului. Lista prizelor (SISTEM → CASA) și tema Simple
+  rămân neschimbate (fără etichetă de driver acolo). Textele noi sunt Compose, nimic pictat în WebP.
 - **Citiri vechi pe socketul persistent (reparat 2026-11-05):** tinytuya întoarce URMĂTORUL mesaj din socket, nu
   răspunsul cererii; anunțurile nesolicitate ale prizei (countdown, putere) decalau răspunsurile cu unul, deci fiecare
   citire la 5 s aducea starea citirii precedente și comutarea părea neexecutată ~5 s. `TinyTuyaDriver._drain` golește
   socketul (timeout 0,05 s) înainte de fiecare `status()` și `set_dp()`. Măsurat după reparație pe Lumina Curte: starea
   corectă la 0,2 s după comandă.
 - **Teste:** `docker run --rm --network none -v /opt/solar-monitor/casa:/src:ro -w /src --entrypoint python
-  solar-monitor-casa -m unittest discover -s tests -v` (293 de teste; rulează după orice modificare în `casa/`, suita
+  solar-monitor-casa -m unittest discover -s tests -v` (482 de teste; teste unitare Android: 144; rulează după orice modificare în `casa/`, suita
   completă de mai multe ori: un eșec nereproductibil a apărut o dată în timpul editărilor).
 - **Pașii de punere în funcțiune:** făcute 2026-11-05: login + `sync`, mod real, toate prizele online, parola, timerul ARP.
   Rămân: (1) rezervări DHCP în router pentru cele 5 IP-uri; (2) confirmarea unității curentului cu un consumator pornit
   (mA Tuya / 1000); (5) înregistrează telefoanele (Note 9, S20 FE, S26) din aplicație și verifică
   `phones`; (6) teste live de comutare, countdown, programare, inching pe o priză (boilerul la urmă); (7) **șterge
-  programările echivalente din SmartLife** după ce merg ale noastre, altfel se bat între ele.
+  programările echivalente din SmartLife** după ce merg ale noastre, altfel se bat între ele. (2026-11-10: cele patru prize
+  Tasmota au rezervare DHCP după MAC și nu au SmartLife; (2) s-a lămurit pentru ele prin testul cu caloriferul, curentul vine
+  în A din `Status 10`; (7) contează doar pentru prizele Tuya care revin în folosință.)
 
 ---
 

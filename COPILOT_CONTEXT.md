@@ -2202,3 +2202,75 @@ Apoi merge în `main` și livrare APK pe Telegram.
 - Livrat: `SolarMonitor-v3.44.apk` (versionCode 48), 7535347 octeți, SHA-256
   `aa3fc51f1425492281127d7058a14ac89450a105c99045a47e43078533ce5221` (identic cu cel descărcat din Telegram), mesaj 171 pe
   @sun_tattva_access_bot. Verificat: APK-ul release nu conține URL-ul de debug; pornit pe emulator (v3.44, date live, fără crash).
+
+### 13.81 CASA: prizele Tasmota (Eightree ET28) alături de Tuya, punerea în funcțiune, v3.45 (2026-11-10)
+
+- **De ce:** userul a comandat (2026-11-07) 4 prize **Eightree ET28 16 A cu Tasmota** ca să scape de cloud-ul Tuya/SmartLife; au
+  venit 2026-11-10 și au fost montate în locul prizelor Tuya, care erau OFFLINE pentru casa (boilerul nu se mai oprea la
+  15:45, Priza cam Georgi nu pornea la 07:00). Spec: `docs/superpowers/specs/2026-11-10-casa-tasmota-design.md` (aprobat de user:
+  „varianta B, restul e ok”), plan: `docs/superpowers/plans/2026-11-10-casa-tasmota.md`, implementat cu agenți Sonnet
+  (subagent-driven) pe ramura `feat/casa-tasmota`, câte o revizie per sarcină.
+- **Prizele (verificate pe unități, 2026-11-10):** toate ESP32-C3 (ESP8685), în final Tasmota **16.0.0** (release-tasmota32,
+  engleză), template `EIGHTREE` (GPIO `[0,0,0,2720,2624,32,224,2656,0,…,320,7648]`, contor BL0937), `PowerOnState 3`, fără MQTT,
+  HTTP pe portul 80, `WebPassword` pus la punerea în funcțiune (mai jos). Rezervări DHCP după MAC din routerul Archer A6.
+
+  | Unitate | MAC | IP | A venit cu | Calibrare finală (`PowerCal`/`CurrentCal`/`VoltageCal`) |
+  |---|---|---|---|---|
+  | nr1 | DC:06:75:44:D3:4C | 192.168.1.186 | Tasmota 14.1.0.3 (build german), **cu template** | 8809 / 2962 / 1505 |
+  | nr2 | DC:06:75:42:0F:84 | 192.168.1.234 | Tasmota 15.1.0, **fără template** (modul generic ESP32C3) | 9500 / 3150 / 1617 |
+  | nr3 | DC:06:75:43:1E:A4 | 192.168.1.170 | Tasmota 15.1.0, **fără template** (modul generic ESP32C3) | 9055 / 3038 / 1547 |
+  | nr4 | DC:06:75:43:7C:84 | 192.168.1.188 | Tasmota 14.1.0.3 (build german), **cu template** | 9013 / 3008 / 1541 |
+
+  Unitățile 14.1.0.3 (nr1, nr4) aveau template-ul și citesc tensiunea rețelei și cu releul oprit; unitățile 15.1.0 (nr2, nr3)
+  veneau cu modulul generic, fără releu și fără contor: li s-a aplicat template-ul `EIGHTREE` de pe nr1, apoi OTA la 16.0.0
+  (`Upgrade 1`, `OtaUrl` oficial `tasmota32c3.bin`; template-ul și calibrarea se păstrează) și citesc 0 V cu releul oprit.
+  **Verifică modulul/template-ul pe fiecare unitate nouă.** Copiile configurației dinainte sunt în `/root/tasmota-backup/` (mod
+  600, conțin parola Wi-Fi: nu intră în git).
+- **Calibrare pe același calorifer** (electric, rezistiv, treapta 2; referința **nr2 ≈ 1157 W / 4,947 A**; invertorul arăta
+  `output_power` ~1100–1150 W la 230,0 V, deci nr2 e cu ~3–5 % peste invertor). `VoltageSet 230` pe toate. Valorile de fabrică
+  citeau **cu 4–8 % peste** la nr1, nr3, nr4 (nr1 a dat 1250 W / 5,27 A pe aceeași treaptă); au fost aduse la nr2 cu
+  `PowerSet 1157` + `CurrentSet 4947` (nr1: 9500 -> 8809 / 3150 -> 2962; nr4: factory +4,7 % -> 9013 / 3008; nr3: +4 % -> 9055 /
+  3038). nr2 a rămas pe valorile lui (9500 / 3150, aceleași ca nr1 înainte de calibrare). **Priza Tuya Living sus citea
+  1285 W / 5,49 A / 233 V pe aceeași sarcină (~10 % peste invertor)**; pe treapta 1 Tuya 900 W față de ~850 W la invertor. Nu s-a
+  recalibrat Tasmota după Tuya.
+- **`PulseTime` / `Remaining` (observat pe prize):** `PulseTime1 <v>` scris cu releul **pornit** repornește numărătoarea pe loc
+  (`Remaining` arată noua valoare); `Set`: 0 = oprit, 1..111 = zecimi de secundă, 112..64900 = valoare − 100 secunde (maxim
+  18 h). **`Remaining` are aceeași codificare ca `Set`**, confirmat la punerea în funcțiune pe o priză reală: Lumina Curte
+  pornită 14:07:52, 24 s mai târziu `Remaining` 1875 = 1775 s (așteptat 1776). Observat înainte, pe nr4: `Set 1900` scris cu
+  priza pornită -> `Remaining` 1899, apoi 1765 după ~135 s. `Mem2 0` stochează „0”, `Mem2 "` îl șterge (confirmat pe nr1, fără schimbare de releu).
+  `Mem1`/`Mem2` goale (`""`) sunt starea de fabrică.
+- **Ce s-a construit** (4 comituri pe ramură): `6c584f3` registrul de dispozitive cunoaște driverul (`driver` în
+  `devices.local.json`, intrare Tasmota singură cu `name` + `ip`, `scan` nu le atinge); `4b69b2d` `casa/casa/tasmota.py`
+  (HTTP stdlib, cel mult 3 cereri/citire, `PulseTime1` ca termen de siguranță, inching în `Mem1`/`Mem2`, auto-vindecare, nicio
+  parolă în erori); `463e30a` controller (plafon 18 h Tasmota / 24 h Tuya), `driver` în `GET /plugs`, `tasmota-password`,
+  Living sus demo = Tasmota; `17400ee` aplicația v3.45 (versionCode 49). **Teste: 482 casa** (381 înainte), **144 Android**.
+  Aplicația: antet `… · WIFI OK · TASMOTA/TUYA`, rând unic comutator + wați + kWh, 5 programări fără derulare, inching pe un
+  rând (capturi pe emulator cu serverul demo, `note9-large`, `layout-check` ok). Livrarea APK-ului v3.45 pe Telegram urmează
+  după merge, ca de obicei; mesajul și SHA-256 se adaugă aici la livrare.
+- **Punerea în funcțiune, 2026-11-10 14:02 (ora locală; serverul `casa` reconstruit 12:02Z):** copii `casa/data/state.json.bak-2026-11-10`
+  și `devices.local.json.bak-2026-11-10`; `casa/data/tasmota.json` (mod 600, o singură parolă, utilizator `admin`) generat și
+  `WebPassword` pus pe toate cele 4 prize (verificat: 401 fără parolă, 200 cu); `Mem1`/`Mem2` inițializate din starea serverului
+  (Boiler 1500/0, Living sus 1800/0, Georgi 60/0, Lumina Curte 1800/1) cu `PulseTime1` = baza; intrări `driver: tasmota` + `ip` în
+  `devices.local.json`; toate 4 online în Influx. Decizie: deploy-ul casa imediat după sarcina 3, înainte de aplicație și de
+  revizia finală, fiindcă prizele Tasmota nu erau comandate (OPREȘTE-urile de la 15:45 și 16:00); cost acceptat: o problemă
+  prinsă doar la revizia finală ajunge mai devreme în producție (copii + întoarcere pe Tuya prin `devices.local.json`).
+- **Maparea finală (schimbare a userului, 14:07; copii `*.bak-2026-11-10b`):** Boiler = nr1 (.186, `bf7b3c62e47bfd15fczfov`);
+  Living sus = nr2 (.234, `bf5cc0f2db15b9eab2a0zy`); **Priza cam Georgi = nr3 (.170) sub un id nou de sine stătător
+  `tasmota_431ea4`** (starea mutată de mână: evenimentele 07:00 PORNEȘTE / 07:30 OPREȘTE / 16:00 OPREȘTE); Lumina Curte = nr4 (.188,
+  `bf3897ad46cd66d32cww3j`, `PulseTime1` 30 min în priză); **Bucatarie = vechea priză Tuya „WiFi Plug” cu contor care fusese Priza cam
+  Georgi** (id `bf3bac46d1a367e845thx2`, .104, MAC fc:67:1f:7a:04:dd, redenumită Bucatarie, starea Bucătăriei vechi: inching 25
+  pornit; inching-ul nativ DP 44 pus de user la 20 min). T34 Bucatarie (`bfc30380ff8a29c0d88wcz`, fără contor) e retrasă:
+  `"hidden": true`, starea ștearsă, `plug_order` remapat. **Istoricul Influx al lui `bf3bac46` dinainte de 14:07 e al vechii Georgi.**
+  T34 Bucatarie nu mai răspundea la ping din 14:01:59 (ora locală); n-a fost investigată mai departe, userul a retras-o.
+- **Capcană găsită live:** un id de dispozitiv cu `-` e respins de garda de id din Influx (`casa/casa/influx.py`, `_ID =
+  ^[A-Za-z0-9_]+$`): interogarea de energie dădea ValueError și nu se scriau puncte pentru priză. Primul id, `tasmota-431ea4`, a
+  fost redenumit `tasmota_431ea4`. Orice id de intrare Tasmota singură trebuie să respecte regexul (de validat la revizia
+  finală).
+- **Hotărâri și minore rămase** (registrul sarcinilor): `tasmota.json` ilizibil/corupt la boot -> avertisment fără conținut și
+  pornire fără parolă (prizele cu parolă arată „parola Tasmota respinsa”); fără auto-vindecare cât `Mem1`/`Mem2` sunt invalide
+  (de aceea sunt inițializate înainte de deploy); `Mem` schimbat din consola Tasmota se vede doar la reconectare; `devices.json`
+  cu `driver` direct nu e validat; în aplicație, eticheta driverului e ultima în subtitlul tăiat pe telefoane de ~360 dp, iar cele
+  5 rânduri încap cu doar ~4 dp rezervă pe `note9-large` (`layout-check` nu deschide detaliul prizei).
+- **Neschimbat:** invertorul și BMS-ul rămân READ-ONLY; `collector/`, `bms/`, `api/` neatinse; Tuya rămâne în cod ca rezervă
+  (prizele vechi sunt în sertar, doar Bucătăria e Tuya în uz). Întoarcerea unei prize pe Tuya: `driver`/`ip` scoase din
+  intrare + `docker compose restart casa`.
