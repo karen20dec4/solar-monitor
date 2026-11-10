@@ -1,0 +1,1 @@
+{"StatusSNS":{"Time":"2026-11-10T12:32:35","ENERGY":{"TotalStartTime":"1970-01-01T00:00:57","Total":0.11920,"Yesterday":0.00000,"Today":0.11920,"Power":0.000,"ApparentPower":0.000,"ReactivePower":0.000,"Factor":0.00,"Voltage":228,"Current":0.000},"ESP32":{"Temperature":35.9},"TempUnit":"C"}}
