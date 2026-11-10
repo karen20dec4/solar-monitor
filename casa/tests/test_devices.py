@@ -4,8 +4,9 @@ import stat
 import tempfile
 import unittest
 
-from casa.devices import (DeviceInfo, apply_scan, clean_name, dp_map_from_strategy,
-                          load_devices, save_devices)
+from casa.devices import (DRIVERS, TASMOTA_DPS, TASMOTA_SCALES, DeviceInfo, apply_scan, clean_name,
+                          dp_map_from_strategy, load_devices, local_names, save_devices,
+                          set_local_name)
 
 
 class CleanNameTest(unittest.TestCase):
@@ -223,6 +224,178 @@ class ApplyScanTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 apply_scan(self.dir, {"p": {"ip": "192.168.1.5", "version": "3.3"}})
         self.assertEqual(self._local(), ["gresit"])
+
+
+class TasmotaDriverTest(unittest.TestCase):
+    """devices.local.json poate trece o priza pe driverul Tasmota (acelasi id Tuya) sau poate adauga una noua."""
+    setUp = StoreDevicesTest.setUp
+    _dev = StoreDevicesTest._dev
+
+    def _write_local(self, data):
+        with open(os.path.join(self.dir, "devices.local.json"), "w") as f:
+            json.dump(data, f)
+
+    def test_constants(self):
+        self.assertEqual(DRIVERS, ("tuya", "tasmota"))
+        self.assertEqual(TASMOTA_DPS, {"switch": 1, "countdown": 9, "current": 18, "power": 19,
+                                       "voltage": 20, "inching": 44})
+        self.assertEqual(TASMOTA_SCALES, {"power": 1, "voltage": 1, "current": 0})
+
+    def test_default_driver_is_tuya(self):
+        save_devices(self.dir, [self._dev("P1", ip="192.168.1.204", version="3.3")])
+        self._write_local({"P1": {"name": "Boiler"}})
+        dev = load_devices(self.dir)[0]
+        self.assertEqual(dev.driver, "tuya")
+        self.assertEqual(dev.dps, {"switch": 1, "power": 19})
+        self.assertEqual(dev.scales, {"power": 1})
+        self.assertEqual(DeviceInfo(id="x", name="P", kind="plug", local_key=None, ip=None, version=None).driver,
+                         "tuya")
+
+    def test_driver_survives_save_load_roundtrip(self):
+        save_devices(self.dir, [self._dev("P1")])
+        with open(os.path.join(self.dir, "devices.json")) as f:
+            self.assertEqual(json.load(f)["devices"][0]["driver"], "tuya")
+        self.assertEqual(load_devices(self.dir)[0].driver, "tuya")
+
+    def test_local_tasmota_overrides_tuya_device(self):
+        save_devices(self.dir, [self._dev("P1", name="Boiler", ip="192.168.1.204", version="3.3")])
+        self._write_local({"P1": {"driver": "tasmota", "ip": "192.168.1.186"}})
+        devs = load_devices(self.dir)
+        self.assertEqual(len(devs), 1)
+        dev = devs[0]
+        self.assertEqual(dev.driver, "tasmota")
+        self.assertEqual(dev.ip, "192.168.1.186")
+        self.assertEqual(dev.dps, TASMOTA_DPS)
+        self.assertEqual(dev.scales, TASMOTA_SCALES)
+        self.assertEqual(dev.id, "P1")
+        self.assertEqual(dev.name, "Boiler")
+        self.assertEqual(dev.kind, "plug")
+
+    def test_tasmota_maps_are_copies(self):
+        save_devices(self.dir, [self._dev("P1")])
+        self._write_local({"P1": {"driver": "tasmota", "ip": "192.168.1.186"}})
+        dev = load_devices(self.dir)[0]
+        dev.dps["switch"] = 99
+        dev.scales["power"] = 99
+        self.assertEqual(TASMOTA_DPS["switch"], 1)
+        self.assertEqual(TASMOTA_SCALES["power"], 1)
+
+    def test_local_tasmota_override_keeps_name_override(self):
+        save_devices(self.dir, [self._dev("P1", name="Boiler")])
+        self._write_local({"P1": {"driver": "tasmota", "ip": "192.168.1.186", "name": "Boiler nou"}})
+        dev = load_devices(self.dir)[0]
+        self.assertEqual((dev.driver, dev.name), ("tasmota", "Boiler nou"))
+
+    def test_local_tasmota_entry_self_sufficient(self):
+        save_devices(self.dir, [])
+        self._write_local({"T9": {"driver": "tasmota", "ip": "192.168.1.170", "name": "Boiler"}})
+        devs = load_devices(self.dir)
+        self.assertEqual(len(devs), 1)
+        dev = devs[0]
+        self.assertEqual((dev.id, dev.kind, dev.name, dev.driver, dev.ip),
+                         ("T9", "plug", "Boiler", "tasmota", "192.168.1.170"))
+        self.assertEqual(dev.dps, TASMOTA_DPS)
+        self.assertEqual(dev.scales, TASMOTA_SCALES)
+        self.assertIsNone(dev.local_key)
+
+    def test_self_sufficient_entry_without_devices_file(self):
+        self._write_local({"T9": {"driver": "tasmota", "ip": "192.168.1.170", "name": "Boiler"}})
+        self.assertEqual([d.id for d in load_devices(self.dir)], ["T9"])
+
+    def test_self_sufficient_entry_added_after_tuya_devices(self):
+        save_devices(self.dir, [self._dev("P1"), self._dev("P2")])
+        self._write_local({"T9": {"driver": "tasmota", "ip": "192.168.1.170", "name": "Noua"},
+                           "P2": {"driver": "tasmota", "ip": "192.168.1.186"}})
+        got = load_devices(self.dir)
+        self.assertEqual([(d.id, d.driver) for d in got],
+                         [("P1", "tuya"), ("P2", "tasmota"), ("T9", "tasmota")])
+
+    def test_self_sufficient_entry_needs_name_and_ip(self):
+        self._write_local({"A": {"driver": "tasmota", "ip": "192.168.1.170"},
+                           "B": {"driver": "tasmota", "name": "Fara ip"}})
+        with self.assertLogs("casa.devices", level="WARNING") as cm:
+            self.assertEqual(load_devices(self.dir), [])
+        self.assertEqual(len(cm.records), 2)
+
+    def test_local_tasmota_without_ip_is_skipped(self):
+        save_devices(self.dir, [self._dev("P1", ip="192.168.1.204", version="3.3")])
+        self._write_local({"P1": {"driver": "tasmota"}})
+        with self.assertLogs("casa.devices", level="WARNING"):
+            devs = load_devices(self.dir)
+        self.assertEqual(len(devs), 1)
+        dev = devs[0]
+        self.assertEqual((dev.driver, dev.ip, dev.version), ("tuya", "192.168.1.204", "3.3"))
+        self.assertEqual(dev.dps, {"switch": 1, "power": 19})
+        self.assertEqual(dev.scales, {"power": 1})
+
+    def test_local_tasmota_with_empty_ip_is_skipped(self):
+        save_devices(self.dir, [self._dev("P1", ip="192.168.1.204")])
+        self._write_local({"P1": {"driver": "tasmota", "ip": ""}})
+        with self.assertLogs("casa.devices", level="WARNING"):
+            dev = load_devices(self.dir)[0]
+        self.assertEqual((dev.driver, dev.ip), ("tuya", "192.168.1.204"))
+
+    def test_lone_tasmota_entry_without_ip_creates_nothing(self):
+        self._write_local({"T9": {"driver": "tasmota", "name": "Fara ip"}})
+        with self.assertLogs("casa.devices", level="WARNING"):
+            self.assertEqual(load_devices(self.dir), [])
+
+    def test_unknown_driver_is_skipped(self):
+        save_devices(self.dir, [self._dev("P1", ip="192.168.1.204", version="3.3")])
+        self._write_local({"P1": {"driver": "esphome", "ip": "192.168.1.186"},
+                           "T9": {"driver": "esphome", "ip": "192.168.1.170", "name": "Alta"}})
+        with self.assertLogs("casa.devices", level="WARNING"):
+            devs = load_devices(self.dir)
+        self.assertEqual([d.id for d in devs], ["P1"])
+        dev = devs[0]
+        self.assertEqual((dev.driver, dev.ip, dev.version), ("tuya", "192.168.1.204", "3.3"))
+        self.assertEqual(dev.dps, {"switch": 1, "power": 19})
+
+    def test_driver_must_be_text(self):
+        save_devices(self.dir, [self._dev("P1", ip="192.168.1.204")])
+        self._write_local({"P1": {"driver": ["tasmota"], "ip": "192.168.1.186"}})
+        with self.assertLogs("casa.devices", level="WARNING"):
+            dev = load_devices(self.dir)[0]
+        self.assertEqual((dev.driver, dev.ip), ("tuya", "192.168.1.204"))
+
+    def test_tasmota_override_on_sensor_is_skipped(self):
+        save_devices(self.dir, [self._dev("S1", kind="sensor")])
+        self._write_local({"S1": {"driver": "tasmota", "ip": "192.168.1.186"}})
+        with self.assertLogs("casa.devices", level="WARNING"):
+            dev = load_devices(self.dir)[0]
+        self.assertEqual((dev.driver, dev.kind), ("tuya", "sensor"))
+
+    def test_tasmota_hidden_entry_skipped(self):
+        save_devices(self.dir, [self._dev("P1"), self._dev("P2")])
+        self._write_local({"P1": {"driver": "tasmota", "ip": "192.168.1.186", "hidden": True},
+                           "T9": {"driver": "tasmota", "ip": "192.168.1.170", "name": "Ascunsa",
+                                  "hidden": True}})
+        self.assertEqual([d.id for d in load_devices(self.dir)], ["P2"])
+
+    def test_local_names_include_tasmota_entry(self):
+        self._write_local({"T9": {"driver": "tasmota", "ip": "192.168.1.170", "name": "Boiler"}})
+        self.assertEqual(local_names(self.dir), {"T9": "Boiler"})
+
+    def test_set_local_name_keeps_driver_and_ip(self):
+        self._write_local({"T9": {"driver": "tasmota", "ip": "192.168.1.170", "name": "Boiler"}})
+        set_local_name(self.dir, "T9", "Boiler nou")
+        dev = load_devices(self.dir)[0]
+        self.assertEqual((dev.name, dev.driver, dev.ip), ("Boiler nou", "tasmota", "192.168.1.170"))
+
+    def test_apply_scan_ignores_tasmota(self):
+        save_devices(self.dir, [self._dev("P1", ip="192.168.1.204", version="3.3")])
+        self._write_local({"P1": {"driver": "tasmota", "ip": "192.168.1.186"}})
+        changes, unknown = apply_scan(self.dir, {"P1": {"ip": "192.168.1.204", "version": "3.3"}})
+        self.assertEqual((changes, unknown), ([], []))
+        with open(os.path.join(self.dir, "devices.local.json")) as f:
+            self.assertEqual(json.load(f), {"P1": {"driver": "tasmota", "ip": "192.168.1.186"}})
+
+    def test_apply_scan_ignores_self_sufficient_tasmota(self):
+        self._write_local({"T9": {"driver": "tasmota", "ip": "192.168.1.170", "name": "Boiler"}})
+        changes, unknown = apply_scan(self.dir, {"T9": {"ip": "192.168.1.99", "version": "3.3"}})
+        self.assertEqual((changes, unknown), ([], []))
+        with open(os.path.join(self.dir, "devices.local.json")) as f:
+            self.assertEqual(json.load(f)["T9"]["ip"], "192.168.1.170")
 
 
 if __name__ == "__main__":

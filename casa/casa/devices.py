@@ -1,4 +1,4 @@
-"""Registrul dispozitivelor Tuya: devices.json (scris de sincronizare) + devices.local.json (suprascrieri)."""
+"""Registrul dispozitivelor: devices.json (Tuya, scris de sincronizare) + devices.local.json (suprascrieri, Tasmota)."""
 import json
 import logging
 import os
@@ -37,6 +37,13 @@ _CODE_TO_KEY = {
 }
 _SCALED = ("power", "voltage", "current")
 
+# Driverul prizei: "tuya" (implicit, din devices.json) sau "tasmota" (doar din devices.local.json, cu acelasi id Tuya
+# cand inlocuieste o priza Tuya, ca starea/evenimentele/ordinea sa se pastreze).
+DRIVERS = ("tuya", "tasmota")
+# Harta sintetica a prizelor Tasmota: aceleasi chei ca la Tuya; "numerele" nu merg pe fir, doar numesc campurile.
+TASMOTA_DPS = {"switch": 1, "countdown": 9, "current": 18, "power": 19, "voltage": 20, "inching": 44}
+TASMOTA_SCALES = {"power": 1, "voltage": 1, "current": 0}
+
 
 @dataclass
 class DeviceInfo:
@@ -50,6 +57,7 @@ class DeviceInfo:
     scales: dict = field(default_factory=dict)
     category: str = ""
     raw_name: str = ""
+    driver: str = "tuya"
 
 
 _TIME_RANGE = re.compile(r"[\s:\-]*\d{1,2}[:.]\d{2}\s*-\s*\d{1,2}[:.]\d{2}")
@@ -111,10 +119,16 @@ def save_devices(data_dir: str, devices: list, raw_names: Optional[dict] = None,
 
 
 def _valid_local(over) -> bool:
-    """Intrare din devices.local.json: dict cu `ip`/`version`/`name` optionale (text) si `hidden` (true/false)."""
+    """Intrare din devices.local.json: dict cu `ip`/`version`/`name` optionale (text), `hidden` (true/false)
+    si `driver` (unul din DRIVERS)."""
     return isinstance(over, dict) and all(
         isinstance(over[k], str) for k in ("ip", "version", "name") if k in over) and (
-        isinstance(over.get("hidden", False), bool))
+        isinstance(over.get("hidden", False), bool)) and (
+        "driver" not in over or (isinstance(over["driver"], str) and over["driver"] in DRIVERS))
+
+
+_BAD_LOCAL = ("%s: intrare gresita pentru %s (asteptat obiect cu ip/version/name text, hidden true/false, "
+              "driver tuya/tasmota); o sar")
 
 
 def load_devices(data_dir: str) -> list:
@@ -130,6 +144,7 @@ def load_devices(data_dir: str) -> list:
         log.warning("%s: 'devices' nu e o lista; o ignor", DEVICES_FILE)
         entries = []
     result = []
+    seen = set()
     for entry in entries:
         try:
             if not isinstance(entry, dict):
@@ -141,6 +156,7 @@ def load_devices(data_dir: str) -> list:
             ident = entry.get("id") if isinstance(entry, dict) else None
             log.warning("%s: intrare gresita (id=%s): %s; o sar", DEVICES_FILE, ident, exc)
             continue
+        seen.add(dev.id)
         defaults = BUILTIN_DEFAULTS.get(dev.id, {})
         if not dev.ip:
             dev.ip = defaults.get("ip")
@@ -148,15 +164,38 @@ def load_devices(data_dir: str) -> list:
             dev.version = defaults.get("version")
         over = local.get(dev.id)
         if over is not None and not _valid_local(over):
-            log.warning("%s: intrare gresita pentru %s (asteptat obiect cu ip/version/name text); o sar",
-                        LOCAL_FILE, dev.id)
+            log.warning(_BAD_LOCAL, LOCAL_FILE, dev.id)
             over = None
         if over and over.get("hidden"):
             continue  # ascuns din aplicatie (ex. priza nefolosita, ramasa in contul Smart Life)
+        if over and over.get("driver") == "tasmota":
+            if dev.kind != "plug" or not over.get("ip"):
+                log.warning("%s: %s are driver tasmota dar %s; intrarea locala e ignorata", LOCAL_FILE, dev.id,
+                            "nu e priza" if dev.kind != "plug" else "nu are ip")
+                over = None
+            else:
+                dev.driver = "tasmota"
+                dev.dps = dict(TASMOTA_DPS)
+                dev.scales = dict(TASMOTA_SCALES)
         for key in ("ip", "version", "name"):
             if over and over.get(key):
                 setattr(dev, key, over[key])
         result.append(dev)
+    # Prize Tasmota care nu vin din devices.json (priza noua, fara cont Tuya): intrarea locala le descrie singura.
+    for dev_id, over in local.items():
+        if dev_id in seen or not isinstance(over, dict) or "driver" not in over:
+            continue
+        if not _valid_local(over):
+            log.warning(_BAD_LOCAL, LOCAL_FILE, dev_id)
+            continue
+        if over["driver"] != "tasmota" or over.get("hidden"):
+            continue
+        if not over.get("ip") or not over.get("name"):
+            log.warning("%s: %s are driver tasmota dar nu are ip si name; o sar", LOCAL_FILE, dev_id)
+            continue
+        result.append(DeviceInfo(id=dev_id, name=over["name"], kind="plug", local_key=None, ip=over["ip"],
+                                 version=None, dps=dict(TASMOTA_DPS), scales=dict(TASMOTA_SCALES),
+                                 driver="tasmota"))
     return result
 
 
@@ -179,6 +218,8 @@ def apply_scan(data_dir: str, found: dict) -> tuple:
         if dev is None:
             unknown.append((dev_id, ip))
             continue
+        if dev.driver == "tasmota":
+            continue  # prizele Tasmota nu vorbesc Tuya: adresa lor vine doar din devices.local.json
         if dev.kind != "plug" or (dev.ip == ip and (version is None or dev.version == version)):
             continue
         updates[dev_id] = {"ip": ip, **({"version": version} if version else {})}
