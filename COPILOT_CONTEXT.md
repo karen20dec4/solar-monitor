@@ -2245,8 +2245,10 @@ Apoi merge în `main` și livrare APK pe Telegram.
   parolă în erori); `463e30a` controller (plafon 18 h Tasmota / 24 h Tuya), `driver` în `GET /plugs`, `tasmota-password`,
   Living sus demo = Tasmota; `17400ee` aplicația v3.45 (versionCode 49). **Teste: 482 casa** (381 înainte), **144 Android**.
   Aplicația: antet `… · WIFI OK · TASMOTA/TUYA`, rând unic comutator + wați + kWh, 5 programări fără derulare, inching pe un
-  rând (capturi pe emulator cu serverul demo, `note9-large`, `layout-check` ok). Livrarea APK-ului v3.45 pe Telegram urmează
-  după merge, ca de obicei; mesajul și SHA-256 se adaugă aici la livrare.
+  rând (capturi pe emulator cu serverul demo, `note9-large`, `layout-check` ok). Livrat: `SolarMonitor-v3.45.apk` (versionCode 49),
+  7535347 octeți, SHA-256 `22145f72e6012d4f4ce7b87e20d867f08c9e61312a43bf77610ef947346ef135`, mesajul 176 prin
+  @sun_tattva_access_bot (SHA verificat pe fișierul descărcat de Telegram). Pornit pe emulator (release, v3.45, date live,
+  fără crash).
 - **Punerea în funcțiune, 2026-11-10 14:02 (ora locală; serverul `casa` reconstruit 12:02Z):** copii `casa/data/state.json.bak-2026-11-10`
   și `devices.local.json.bak-2026-11-10`; `casa/data/tasmota.json` (mod 600, o singură parolă, utilizator `admin`) generat și
   `WebPassword` pus pe toate cele 4 prize (verificat: 401 fără parolă, 200 cu); `Mem1`/`Mem2` inițializate din starea serverului
