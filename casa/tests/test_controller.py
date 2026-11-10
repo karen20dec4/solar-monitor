@@ -1873,6 +1873,105 @@ class DriverDeadlineCapTest(ControllerBase):
         self.assertEqual(r.dp9, 0)                            # ramane doar OPRESTE la +20 h: nu se scrie
 
 
+class StaleFailSafeClearTest(ControllerBase):
+    """Termenul ramas in priza dupa o reconectare, cand serverul nu mai are niciun termen: se sterge (0).
+    Altfel priza s-ar opri singura la vechiul termen, cu serverul crezand ca nu exista (si ar nota
+    oprirea ca apasare de buton). Scenariu: priza pornita cu countdown OPRESTE scris, citire offline,
+    utilizatorul anuleaza countdown-ul cat e offline (scrierea e sarita), apoi priza revine."""
+
+    DEVICES = (("tuya", device), ("tasmota", tasmota_device))
+
+    @staticmethod
+    def dp9_writes(r):
+        return [x for x in r.worker.submitted if x[0] == 9]
+
+    @staticmethod
+    def drop(r):
+        """O citire offline (timeout HTTP / Wi-Fi)."""
+        r.worker.on_reading(PID, PlugReading(False, None, None, None, None, None, "timeout", 0))
+
+    def armed(self, make):
+        r = self.rig(loc(9), dev=make(), dps={"1": True})
+        r.worker.poll()
+        r.c.set_countdown(PID, "off", 120)
+        self.assertEqual(r.dp9, 7200)
+        return r
+
+    def test_cancel_while_offline_then_reconnect_clears_the_plug_countdown(self):
+        for name, make in self.DEVICES:
+            with self.subTest(driver=name):
+                r = self.armed(make)
+                self.drop(r)
+                r.c.cancel_countdown(PID)                 # offline: scrierea e sarita
+                self.assertEqual(r.dp9, 7200)
+                r.clock.advance(minutes=1)
+                r.worker.poll()                            # priza revine cu vechiul termen
+                r.c.tick()
+                self.assertEqual(r.dp9, 0)
+                self.assertEqual(self.dp9_writes(r)[-1], (9, 0))
+                self.assertTrue(r.on)
+                self.assertIsNone(r.c._rt[PID].cd_written)
+
+    def test_failed_write_then_cancel_clears_the_plug_countdown(self):
+        for name, make in self.DEVICES:
+            with self.subTest(driver=name):
+                r = self.armed(make)
+                r.driver.fail_set = 1
+                r.c.set_countdown(PID, "off", 60)         # scrierea esueaza (-> citire offline), priza ramane cu 7200
+                self.assertEqual(r.dp9, 7200)
+                r.worker.poll()                            # reconectare: cd_written se reseteaza
+                r.c.cancel_countdown(PID)                  # ritmul de reincercare al DP-ului inca ne tine
+                r.clock.advance(seconds=31)
+                r.worker.poll()
+                r.c.tick()
+                self.assertEqual(r.dp9, 0)
+
+    def test_no_deadline_and_no_plug_countdown_writes_nothing(self):
+        for name, make in self.DEVICES:
+            with self.subTest(driver=name):
+                r = self.rig(loc(9), dev=make(), dps={"1": True})
+                r.worker.poll()
+                self.drop(r)
+                r.clock.advance(minutes=1)
+                r.worker.poll()                            # reconectare, countdown_s = 0
+                r.tick_to(loc(9, 10))
+                self.assertEqual(self.dp9_writes(r), [])
+
+    def test_too_far_deadline_and_stale_plug_countdown_is_cleared(self):
+        r = self.rig(loc(18, 0), dev=tasmota_device(), dps={"1": True})
+        r.worker.poll()
+        self.event(r, "14:00", "off")                      # +20 h: peste plafonul Tasmota (18 h), nu se scrie
+        r.driver.dps["9"] = 5000                           # ramas de la o scriere veche
+        self.drop(r)
+        r.clock.advance(minutes=1)
+        r.worker.poll()
+        r.c.tick()
+        self.assertEqual(r.dp9, 0)
+
+    def test_stale_clear_is_not_repeated_every_tick(self):
+        r = self.armed(device)
+        self.drop(r)
+        r.c.cancel_countdown(PID)
+        r.clock.advance(minutes=1)
+        r.worker.poll()
+        r.driver.set_dp = lambda dp, value: None            # priza care nu primeste scrierea
+        r.tick_to(loc(9, 1, 50), step=timedelta(seconds=5), poll=True)
+        self.assertEqual(self.dp9_writes(r)[1:], [(9, 0)])  # una singura, apoi pauza
+        r.tick_to(loc(9, 3), step=timedelta(seconds=5), poll=True)
+        self.assertEqual(self.dp9_writes(r)[1:], [(9, 0), (9, 0)])
+
+    def test_server_deadline_is_not_cleared(self):
+        for name, make in self.DEVICES:
+            with self.subTest(driver=name):
+                r = self.armed(make)
+                self.drop(r)
+                r.clock.advance(minutes=1)
+                r.worker.poll()
+                r.c.tick()
+                self.assertEqual(r.dp9, 7200 - 60)         # rescris cu restul, nu sters
+                self.assertNotIn((9, 0), self.dp9_writes(r))
+
+
 class DpCountdownRealismTest(ControllerBase):
     def test_no_rewrite_loop_when_plug_counts_down_normally(self):
         r = self.rig(loc(9))

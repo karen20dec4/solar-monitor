@@ -24,6 +24,9 @@ BUILTIN_DEFAULTS = {
     "bf3897ad46cd66d32cww3j": {"ip": "192.168.1.158", "version": "3.4"},
 }
 
+# Id-urile prizelor ajung tag in InfluxDB (energia de azi, istoric): alfabet restrans, vezi influx._check_id.
+ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
 FALLBACK_DPS = {"switch": 1, "countdown": 9, "current": 18, "power": 19, "voltage": 20}
 FALLBACK_SCALES = {"power": 1, "voltage": 1, "current": 0}
 
@@ -196,6 +199,13 @@ def load_devices(data_dir: str) -> list:
         result.append(DeviceInfo(id=dev_id, name=over["name"], kind="plug", local_key=None, ip=over["ip"],
                                  version=None, dps=dict(TASMOTA_DPS), scales=dict(TASMOTA_SCALES),
                                  driver="tasmota"))
+    # Nu sarim priza (am pierde evenimentele ei), dar un id in afara alfabetului strica energia de azi
+    # (ValueError la fiecare interogare): telefonul ar arata "---" kWh pentru totdeauna.
+    for dev in result:
+        if dev.kind == "plug" and not ID_RE.fullmatch(dev.id):
+            log.warning("priza %r (%s): id-ul nu respecta %s (litere, cifre, _); energia de azi si "
+                        "istoricul nu vor merge; redenumeste cheia din %s", dev.id, dev.name, ID_RE.pattern,
+                        LOCAL_FILE)
     return result
 
 

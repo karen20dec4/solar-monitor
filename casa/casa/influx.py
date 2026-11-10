@@ -8,7 +8,6 @@ le trimite sincron la ~1 s; dupa o eroare reincearca la cel mult 10 s. Respinger
 """
 import logging
 import math
-import re
 import threading
 import time
 from collections import deque
@@ -21,7 +20,7 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 from influxdb_client.rest import ApiException
 
 from .config import Config
-from .devices import DeviceInfo
+from .devices import ID_RE, DeviceInfo
 from .plugs import PlugReading
 
 log = logging.getLogger("casa.influx")
@@ -34,7 +33,7 @@ FLUSH_EVERY_S = 1.0
 PLUG = "casa_plug"
 SENSOR = "casa_sensor"
 
-_ID = re.compile(r"^[A-Za-z0-9_]+$")
+_ID = ID_RE
 
 # interval -> (bucket logic, start Flux, fereastra de mediere)
 _RANGES = {

@@ -177,6 +177,7 @@ class _Rt:
     cd_dirty: bool = False               # priza oprita cu un DP scris: de anulat (0)
     next_dp_try: Optional[datetime] = None
     next_resync: Optional[datetime] = None
+    next_stale_clear: Optional[datetime] = None   # cel mai devreme urmatoarea stergere a unui termen strain
     off_sent_at: Optional[datetime] = None
     offline_since: Optional[datetime] = None
     # UN singur ritm de reincercare pe priza, respectat de TOATE caile automate
@@ -881,6 +882,15 @@ class Controller:
             nd = None
         if nd is None:
             if rt.cd_written is None:
+                # Serverul nu are niciun termen, dar priza poate tine unul vechi: o reconectare uita ce am
+                # scris (cd_written = None), iar un countdown anulat cat priza era offline nu a ajuns in ea.
+                # Nesters, ar opri priza singura la vechea ora, cand serverul nu mai vrea asta. Ritm propriu
+                # (o data pe minut): o priza care nu ia scrierea nu e lovita la fiecare tick.
+                rd = rt.reading
+                if (rd is not None and rd.countdown_s is not None and rd.countdown_s > 0
+                        and (rt.next_stale_clear is None or now >= rt.next_stale_clear)
+                        and self._write_dp(pid, dp, 0, now)):
+                    self._set(pid, next_stale_clear=now + RESYNC_EVERY)
                 return
             if self._write_dp(pid, dp, 0, now):
                 self._set(pid, cd_written=None)

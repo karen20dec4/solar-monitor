@@ -317,6 +317,31 @@ class TasmotaDriverTest(unittest.TestCase):
             self.assertEqual(load_devices(self.dir), [])
         self.assertEqual(len(cm.records), 2)
 
+    def test_lone_tasmota_id_outside_influx_alphabet_warns_but_stays(self):
+        self._write_local({"T-9": {"driver": "tasmota", "ip": "192.168.1.170", "name": "Boiler"}})
+        with self.assertLogs("casa.devices", level="WARNING") as cm:
+            devs = load_devices(self.dir)
+        self.assertEqual([d.id for d in devs], ["T-9"])           # nu e sarita: ar pierde evenimentele
+        self.assertEqual(len(cm.records), 1)
+        msg = cm.records[0].getMessage()
+        self.assertIn("T-9", msg)
+        self.assertIn("[A-Za-z0-9_]", msg)
+
+    def test_tasmota_override_id_outside_influx_alphabet_warns_but_stays(self):
+        save_devices(self.dir, [self._dev("P 1"), self._dev("P2")])
+        self._write_local({"P 1": {"driver": "tasmota", "ip": "192.168.1.186"}})
+        with self.assertLogs("casa.devices", level="WARNING") as cm:
+            devs = load_devices(self.dir)
+        self.assertEqual([(d.id, d.driver) for d in devs], [("P 1", "tasmota"), ("P2", "tuya")])
+        self.assertEqual(len(cm.records), 1)
+        self.assertIn("P 1", cm.records[0].getMessage())
+
+    def test_valid_ids_do_not_warn(self):
+        save_devices(self.dir, [self._dev("bf3bac46d1a367e845thx2"), self._dev("S-1", kind="sensor")])
+        self._write_local({"T_9": {"driver": "tasmota", "ip": "192.168.1.170", "name": "Boiler"}})
+        with self.assertNoLogs("casa.devices", level="WARNING"):
+            self.assertEqual(len(load_devices(self.dir)), 3)      # senzorii nu ajung in energia prizelor
+
     def test_local_tasmota_without_ip_is_skipped(self):
         save_devices(self.dir, [self._dev("P1", ip="192.168.1.204", version="3.3")])
         self._write_local({"P1": {"driver": "tasmota"}})
